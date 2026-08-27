@@ -1,0 +1,15 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#a78bfa"/>
+      <stop offset="1" stop-color="#6d28d9"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <!-- cue stick -->
+  <rect x="40" y="410" width="360" height="16" rx="8" fill="#ffffff" opacity="0.95"
+        transform="rotate(-45 40 410)"/>
+  <!-- cue ball -->
+  <circle cx="340" cy="182" r="78" fill="#ffffff"/>
+  <circle cx="366" cy="158" r="12" fill="#6d28d9"/>
+</svg>
