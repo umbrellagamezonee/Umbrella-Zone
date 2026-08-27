@@ -1,0 +1,10 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+# Client-side routing (React Router) — send every path to index.html so a
+# direct load or refresh on e.g. /sessions doesn't 404.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
