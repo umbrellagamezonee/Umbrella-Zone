@@ -23,6 +23,8 @@ import {
   Download,
   Palette,
   Check,
+  Moon,
+  Sun,
 } from "lucide-react";
 
 type Panel = "tables" | "rates" | "games" | "menu" | "store" | "trash" | "backup" | "theme" | null;
@@ -774,11 +776,42 @@ function BackupModal({ onClose }: { onClose: () => void }) {
 
 function ThemeModal({ onClose }: { onClose: () => void }) {
   const themeColor = useSettingsStore((s) => s.themeColor);
+  const themeMode = useSettingsStore((s) => s.themeMode);
   const update = useSettingsStore((s) => s.update);
 
   return (
     <Modal title="Theme" onClose={onClose}>
       <div className="space-y-5">
+        <div>
+          <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-3">
+            MODE
+          </p>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              onClick={() => update({ themeMode: "dark" })}
+              className={
+                "flex items-center justify-center gap-2 rounded-xl border py-2.5 text-sm font-medium " +
+                (themeMode === "dark"
+                  ? "border-[var(--color-primary)] bg-[var(--color-primary)]/15 text-[var(--color-primary)]"
+                  : "border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-text-dim)]")
+              }
+            >
+              <Moon size={15} /> Dark
+            </button>
+            <button
+              onClick={() => update({ themeMode: "light" })}
+              className={
+                "flex items-center justify-center gap-2 rounded-xl border py-2.5 text-sm font-medium " +
+                (themeMode === "light"
+                  ? "border-[var(--color-primary)] bg-[var(--color-primary)]/15 text-[var(--color-primary)]"
+                  : "border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-text-dim)]")
+              }
+            >
+              <Sun size={15} /> Light
+            </button>
+          </div>
+        </div>
+
         <div>
           <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-3">
             PRESETS
