@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { Bill, BillCanteenItem, BillShare, PaymentMethod } from "../types";
+import { setupSync, pushInsert, pushUpsert, pushDelete } from "../lib/cloudSync";
 
 interface ShareInput {
   label: string;
@@ -31,6 +32,84 @@ interface SettleInput {
 interface SettleShareInput {
   method: PaymentMethod;
   payerPhone?: string;
+}
+
+interface BillRow {
+  id: string;
+  table_id: string | null;
+  table_name: string | null;
+  order_id: string | null;
+  game_id: string | null;
+  game_name: string | null;
+  customer_id: string | null;
+  table_charge_minutes: number;
+  table_charge: number;
+  canteen_charge: number;
+  canteen_items: BillCanteenItem[];
+  discount: number;
+  total: number;
+  amount_paid: number;
+  amount_due: number;
+  payment_method: string | null;
+  shares: BillShare[] | null;
+  status: string;
+  created_at: string;
+  paid_at: string | null;
+  deleted_at: string | null;
+}
+
+const TABLE = "bills";
+const fromRow = (row: BillRow): Bill => ({
+  id: row.id,
+  tableId: row.table_id,
+  tableName: row.table_name,
+  orderId: row.order_id,
+  gameId: row.game_id,
+  gameName: row.game_name,
+  customerId: row.customer_id,
+  tableChargeMinutes: Number(row.table_charge_minutes),
+  tableCharge: Number(row.table_charge),
+  canteenCharge: Number(row.canteen_charge),
+  canteenItems: row.canteen_items ?? [],
+  discount: Number(row.discount),
+  total: Number(row.total),
+  amountPaid: Number(row.amount_paid),
+  amountDue: Number(row.amount_due),
+  paymentMethod: row.payment_method as PaymentMethod | null,
+  shares: row.shares,
+  status: row.status as Bill["status"],
+  createdAt: new Date(row.created_at).getTime(),
+  paidAt: row.paid_at ? new Date(row.paid_at).getTime() : null,
+  deletedAt: row.deleted_at ? new Date(row.deleted_at).getTime() : null,
+});
+const toRow = (b: Bill): BillRow => ({
+  id: b.id,
+  table_id: b.tableId,
+  table_name: b.tableName,
+  order_id: b.orderId,
+  game_id: b.gameId,
+  game_name: b.gameName,
+  customer_id: b.customerId,
+  table_charge_minutes: b.tableChargeMinutes,
+  table_charge: b.tableCharge,
+  canteen_charge: b.canteenCharge,
+  canteen_items: b.canteenItems,
+  discount: b.discount,
+  total: b.total,
+  amount_paid: b.amountPaid,
+  amount_due: b.amountDue,
+  payment_method: b.paymentMethod,
+  shares: b.shares,
+  status: b.status,
+  created_at: new Date(b.createdAt).toISOString(),
+  paid_at: b.paidAt ? new Date(b.paidAt).toISOString() : null,
+  deleted_at: b.deletedAt ? new Date(b.deletedAt).toISOString() : null,
+});
+
+function pushBill(id: string) {
+  const state = useBillsStore.getState();
+  const b = state.bills.find((x) => x.id === id) ?? state.deletedBills.find((x) => x.id === id);
+  if (b) pushUpsert(TABLE, toRow(b));
 }
 
 interface BillsState {
@@ -106,6 +185,7 @@ export const useBillsStore = create<BillsState>()(
           deletedAt: null,
         };
         set((state) => ({ bills: [bill, ...state.bills] }));
+        pushInsert(TABLE, toRow(bill));
         return bill;
       },
 
@@ -126,6 +206,7 @@ export const useBillsStore = create<BillsState>()(
             return updated;
           }),
         }));
+        if (updated) pushUpsert(TABLE, toRow(updated));
         return updated;
       },
 
@@ -164,38 +245,50 @@ export const useBillsStore = create<BillsState>()(
             return updated;
           }),
         }));
+        if (result) pushUpsert(TABLE, toRow(result.bill));
         return result;
       },
 
-      cancelBill: (id) =>
+      cancelBill: (id) => {
         set((state) => ({
           bills: state.bills.map((b) => (b.id === id ? { ...b, status: "cancelled" } : b)),
-        })),
+        }));
+        pushBill(id);
+      },
 
-      deleteBill: (id) => set((state) => ({ bills: state.bills.filter((b) => b.id !== id) })),
+      deleteBill: (id) => {
+        set((state) => ({ bills: state.bills.filter((b) => b.id !== id) }));
+        pushDelete(TABLE, id);
+      },
 
       // Moves a bill to the trash — hidden from Sessions/Reports/Home right
       // away, but recoverable from Settings → Deleted Bills until purged.
       softDeleteBill: (id) => {
         const bill = get().bills.find((b) => b.id === id);
         if (!bill) return;
+        const deleted = { ...bill, deletedAt: Date.now() };
         set((state) => ({
           bills: state.bills.filter((b) => b.id !== id),
-          deletedBills: [{ ...bill, deletedAt: Date.now() }, ...state.deletedBills],
+          deletedBills: [deleted, ...state.deletedBills],
         }));
+        pushUpsert(TABLE, toRow(deleted));
       },
 
       restoreBill: (id) => {
         const bill = get().deletedBills.find((b) => b.id === id);
         if (!bill) return;
+        const restored = { ...bill, deletedAt: null };
         set((state) => ({
           deletedBills: state.deletedBills.filter((b) => b.id !== id),
-          bills: [{ ...bill, deletedAt: null }, ...state.bills],
+          bills: [restored, ...state.bills],
         }));
+        pushUpsert(TABLE, toRow(restored));
       },
 
-      permanentlyDeleteBill: (id) =>
-        set((state) => ({ deletedBills: state.deletedBills.filter((b) => b.id !== id) })),
+      permanentlyDeleteBill: (id) => {
+        set((state) => ({ deletedBills: state.deletedBills.filter((b) => b.id !== id) }));
+        pushDelete(TABLE, id);
+      },
 
       todaysBills: () => get().bills.filter((b) => isToday(b.createdAt)),
     }),
@@ -237,4 +330,30 @@ export const useBillsStore = create<BillsState>()(
       },
     }
   )
+);
+
+setupSync<BillRow, Bill>(
+  TABLE,
+  fromRow,
+  toRow,
+  () => [...useBillsStore.getState().bills, ...useBillsStore.getState().deletedBills],
+  (allBills) => {
+    useBillsStore.setState({
+      bills: allBills.filter((b) => !b.deletedAt),
+      deletedBills: allBills.filter((b) => !!b.deletedAt),
+    });
+  },
+  (bill) =>
+    useBillsStore.setState((state) => {
+      const bills = state.bills.filter((b) => b.id !== bill.id);
+      const deletedBills = state.deletedBills.filter((b) => b.id !== bill.id);
+      return bill.deletedAt
+        ? { bills, deletedBills: [bill, ...deletedBills] }
+        : { bills: [bill, ...bills], deletedBills };
+    }),
+  (id) =>
+    useBillsStore.setState((state) => ({
+      bills: state.bills.filter((b) => b.id !== id),
+      deletedBills: state.deletedBills.filter((b) => b.id !== id),
+    }))
 );

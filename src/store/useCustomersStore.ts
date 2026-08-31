@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { Customer } from "../types";
 import { syncCreditLedger } from "../lib/reminderApi";
+import { setupSync, pushInsert, pushUpsert, pushDelete } from "../lib/cloudSync";
 
 const walkIn: Customer = {
   id: "walk-in",
@@ -13,6 +14,41 @@ const walkIn: Customer = {
   lastReminderAt: null,
   createdAt: Date.now(),
 };
+
+interface CustomerRow {
+  id: string;
+  name: string;
+  phone: string;
+  email: string;
+  is_walk_in: boolean;
+  credit_balance: number;
+  last_reminder_at: string | null;
+  created_at: string;
+}
+
+// "walk-in" is a fixed local sentinel (not a real uuid) — it's never a row
+// in the cloud table, every device just keeps its own copy of it.
+const TABLE = "customers";
+const fromRow = (row: CustomerRow): Customer => ({
+  id: row.id,
+  name: row.name,
+  phone: row.phone,
+  email: row.email,
+  isWalkIn: row.is_walk_in,
+  creditBalance: Number(row.credit_balance),
+  lastReminderAt: row.last_reminder_at ? new Date(row.last_reminder_at).getTime() : null,
+  createdAt: new Date(row.created_at).getTime(),
+});
+const toRow = (c: Customer): CustomerRow => ({
+  id: c.id,
+  name: c.name,
+  phone: c.phone,
+  email: c.email,
+  is_walk_in: c.isWalkIn,
+  credit_balance: c.creditBalance,
+  last_reminder_at: c.lastReminderAt ? new Date(c.lastReminderAt).toISOString() : null,
+  created_at: new Date(c.createdAt).toISOString(),
+});
 
 interface CustomersState {
   customers: Customer[];
@@ -40,6 +76,7 @@ export const useCustomersStore = create<CustomersState>()(
           createdAt: Date.now(),
         };
         set((state) => ({ customers: [...state.customers, customer] }));
+        pushInsert(TABLE, toRow(customer));
         return customer;
       },
 
@@ -69,18 +106,26 @@ export const useCustomersStore = create<CustomersState>()(
           ),
         }));
         const c = get().customers.find((x) => x.id === id);
-        if (c) syncCreditLedger({ customerId: c.id, name: c.name, phone: c.phone, amountDue: c.creditBalance });
+        if (c) {
+          syncCreditLedger({ customerId: c.id, name: c.name, phone: c.phone, amountDue: c.creditBalance });
+          if (c.id !== "walk-in") pushUpsert(TABLE, toRow(c));
+        }
       },
 
-      markReminded: (id) =>
+      markReminded: (id) => {
         set((state) => ({
           customers: state.customers.map((c) =>
             c.id === id ? { ...c, lastReminderAt: Date.now() } : c
           ),
-        })),
+        }));
+        const c = get().customers.find((x) => x.id === id);
+        if (c && c.id !== "walk-in") pushUpsert(TABLE, toRow(c));
+      },
 
-      removeCustomer: (id) =>
-        set((state) => ({ customers: state.customers.filter((c) => c.id !== id) })),
+      removeCustomer: (id) => {
+        set((state) => ({ customers: state.customers.filter((c) => c.id !== id) }));
+        if (id !== "walk-in") pushDelete(TABLE, id);
+      },
     }),
     {
       name: "cuebill-customers",
@@ -102,4 +147,23 @@ export const useCustomersStore = create<CustomersState>()(
       },
     }
   )
+);
+
+setupSync<CustomerRow, Customer>(
+  TABLE,
+  fromRow,
+  toRow,
+  () => useCustomersStore.getState().customers.filter((c) => c.id !== "walk-in"),
+  (customers) => useCustomersStore.setState({ customers: [walkIn, ...customers] }),
+  (customer) =>
+    useCustomersStore.setState((state) => {
+      const exists = state.customers.some((c) => c.id === customer.id);
+      return {
+        customers: exists
+          ? state.customers.map((c) => (c.id === customer.id ? customer : c))
+          : [...state.customers, customer],
+      };
+    }),
+  (id) =>
+    useCustomersStore.setState((state) => ({ customers: state.customers.filter((c) => c.id !== id) }))
 );

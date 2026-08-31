@@ -2,6 +2,45 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { CanteenOrder, OrderLineItem } from "../types";
 import { useMenuStore } from "./useMenuStore";
+import { setupSync, pushInsert, pushUpsert } from "../lib/cloudSync";
+
+interface OrderRow {
+  id: string;
+  table_id: string | null;
+  customer_id: string | null;
+  guest_name: string | null;
+  items: OrderLineItem[];
+  note: string;
+  status: string;
+  created_at: string;
+}
+
+const TABLE = "canteen_orders";
+const fromRow = (row: OrderRow): CanteenOrder => ({
+  id: row.id,
+  tableId: row.table_id,
+  customerId: row.customer_id,
+  guestName: row.guest_name,
+  items: row.items ?? [],
+  note: row.note ?? "",
+  status: row.status as CanteenOrder["status"],
+  createdAt: new Date(row.created_at).getTime(),
+});
+const toRow = (o: CanteenOrder): OrderRow => ({
+  id: o.id,
+  table_id: o.tableId,
+  customer_id: o.customerId,
+  guest_name: o.guestName,
+  items: o.items,
+  note: o.note,
+  status: o.status,
+  created_at: new Date(o.createdAt).toISOString(),
+});
+
+function pushOrder(id: string) {
+  const o = useOrdersStore.getState().orders.find((x) => x.id === id);
+  if (o) pushUpsert(TABLE, toRow(o));
+}
 
 interface OrdersState {
   orders: CanteenOrder[];
@@ -35,6 +74,7 @@ export const useOrdersStore = create<OrdersState>()(
           createdAt: Date.now(),
         };
         set((state) => ({ orders: [...state.orders, order] }));
+        pushInsert(TABLE, toRow(order));
         return order;
       },
 
@@ -58,6 +98,7 @@ export const useOrdersStore = create<OrdersState>()(
             return { ...o, items: [...o.items, { ...item, id: crypto.randomUUID() }] };
           }),
         }));
+        pushOrder(orderId);
       },
 
       changeQty: (orderId, lineItemId, qty) => {
@@ -81,6 +122,7 @@ export const useOrdersStore = create<OrdersState>()(
               : o
           ),
         }));
+        pushOrder(orderId);
       },
 
       removeItem: (orderId, lineItemId) => {
@@ -92,41 +134,52 @@ export const useOrdersStore = create<OrdersState>()(
             o.id === orderId ? { ...o, items: o.items.filter((i) => i.id !== lineItemId) } : o
           ),
         }));
+        pushOrder(orderId);
       },
 
-      setNote: (orderId, note) =>
+      setNote: (orderId, note) => {
         set((state) => ({
           orders: state.orders.map((o) => (o.id === orderId ? { ...o, note } : o)),
-        })),
+        }));
+        pushOrder(orderId);
+      },
 
-      markServed: (orderId) =>
+      markServed: (orderId) => {
         set((state) => ({
           orders: state.orders.map((o) => (o.id === orderId ? { ...o, status: "served" } : o)),
-        })),
+        }));
+        pushOrder(orderId);
+      },
 
-      markBilled: (orderId) =>
+      markBilled: (orderId) => {
         set((state) => ({
           orders: state.orders.map((o) => (o.id === orderId ? { ...o, status: "billed" } : o)),
-        })),
+        }));
+        pushOrder(orderId);
+      },
 
       // Reverts an order that was marked billed when a checkout gets cancelled
       // before payment (e.g. an accidental "Stop & Bill"). Assumes it had
       // already been served, which is true for the vast majority of orders by
       // the time checkout is reached.
-      unmarkBilled: (orderId) =>
+      unmarkBilled: (orderId) => {
         set((state) => ({
           orders: state.orders.map((o) => (o.id === orderId ? { ...o, status: "served" } : o)),
-        })),
+        }));
+        pushOrder(orderId);
+      },
 
       // Folds a standalone order (food ordered before a table was picked)
       // into a table's tab once a session starts, so it bills together
       // instead of sitting separately.
-      reassignToTable: (orderId, tableId, customerId) =>
+      reassignToTable: (orderId, tableId, customerId) => {
         set((state) => ({
           orders: state.orders.map((o) =>
             o.id === orderId ? { ...o, tableId, customerId, guestName: null } : o
           ),
-        })),
+        }));
+        pushOrder(orderId);
+      },
 
       orderTotal: (orderId) => {
         const order = get().orders.find((o) => o.id === orderId);
@@ -154,4 +207,20 @@ export const useOrdersStore = create<OrdersState>()(
       },
     }
   )
+);
+
+setupSync<OrderRow, CanteenOrder>(
+  TABLE,
+  fromRow,
+  toRow,
+  () => useOrdersStore.getState().orders,
+  (orders) => useOrdersStore.setState({ orders }),
+  (order) =>
+    useOrdersStore.setState((state) => {
+      const exists = state.orders.some((o) => o.id === order.id);
+      return {
+        orders: exists ? state.orders.map((o) => (o.id === order.id ? order : o)) : [...state.orders, order],
+      };
+    }),
+  (id) => useOrdersStore.setState((state) => ({ orders: state.orders.filter((o) => o.id !== id) }))
 );

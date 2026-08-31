@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { MenuCategory, MenuItem } from "../types";
+import { setupSync, pushInsert, pushUpsert, pushDelete } from "../lib/cloudSync";
 
 const seedCategories: MenuCategory[] = [
   { id: "cat-sandwiches", name: "Sandwiches & Kulcha" },
@@ -63,6 +64,43 @@ const seedItems: MenuItem[] = [
   item("Oreo Shake", "cat-drinks", 90),
 ];
 
+interface CategoryRow {
+  id: string;
+  name: string;
+}
+interface ItemRow {
+  id: string;
+  name: string;
+  category_id: string;
+  price: number;
+  in_stock: boolean;
+  stock_qty: number | null;
+  low_stock_threshold: number;
+}
+
+const CAT_TABLE = "menu_categories";
+const ITEM_TABLE = "menu_items";
+const catFromRow = (row: CategoryRow): MenuCategory => ({ id: row.id, name: row.name });
+const catToRow = (c: MenuCategory): CategoryRow => ({ id: c.id, name: c.name });
+const itemFromRow = (row: ItemRow): MenuItem => ({
+  id: row.id,
+  name: row.name,
+  categoryId: row.category_id,
+  price: Number(row.price),
+  inStock: row.in_stock,
+  stockQty: row.stock_qty,
+  lowStockThreshold: row.low_stock_threshold,
+});
+const itemToRow = (i: MenuItem): ItemRow => ({
+  id: i.id,
+  name: i.name,
+  category_id: i.categoryId,
+  price: i.price,
+  in_stock: i.inStock,
+  stock_qty: i.stockQty,
+  low_stock_threshold: i.lowStockThreshold,
+});
+
 interface MenuState {
   categories: MenuCategory[];
   items: MenuItem[];
@@ -77,44 +115,61 @@ interface MenuState {
 
 export const useMenuStore = create<MenuState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       categories: seedCategories,
       items: seedItems,
 
-      addCategory: (name) =>
-        set((state) => ({
-          categories: [...state.categories, { id: crypto.randomUUID(), name }],
-        })),
+      addCategory: (name) => {
+        const created: MenuCategory = { id: crypto.randomUUID(), name };
+        set((state) => ({ categories: [...state.categories, created] }));
+        pushInsert(CAT_TABLE, catToRow(created));
+      },
 
-      removeCategory: (id) =>
-        set((state) => ({ categories: state.categories.filter((c) => c.id !== id) })),
+      removeCategory: (id) => {
+        set((state) => ({ categories: state.categories.filter((c) => c.id !== id) }));
+        pushDelete(CAT_TABLE, id);
+      },
 
-      addItem: (item) =>
-        set((state) => ({ items: [...state.items, { ...item, id: crypto.randomUUID() }] })),
+      addItem: (item) => {
+        const created: MenuItem = { ...item, id: crypto.randomUUID() };
+        set((state) => ({ items: [...state.items, created] }));
+        pushInsert(ITEM_TABLE, itemToRow(created));
+      },
 
-      updateItem: (id, patch) =>
+      updateItem: (id, patch) => {
         set((state) => ({
           items: state.items.map((i) => (i.id === id ? { ...i, ...patch } : i)),
-        })),
+        }));
+        const updated = get().items.find((i) => i.id === id);
+        if (updated) pushUpsert(ITEM_TABLE, itemToRow(updated));
+      },
 
-      removeItem: (id) =>
-        set((state) => ({ items: state.items.filter((i) => i.id !== id) })),
+      removeItem: (id) => {
+        set((state) => ({ items: state.items.filter((i) => i.id !== id) }));
+        pushDelete(ITEM_TABLE, id);
+      },
 
-      deductStock: (id, qty) =>
+      deductStock: (id, qty) => {
         set((state) => ({
           items: state.items.map((i) =>
             i.id === id && i.stockQty != null
               ? { ...i, stockQty: Math.max(0, i.stockQty - qty) }
               : i
           ),
-        })),
+        }));
+        const updated = get().items.find((i) => i.id === id);
+        if (updated) pushUpsert(ITEM_TABLE, itemToRow(updated));
+      },
 
-      restock: (id, qty) =>
+      restock: (id, qty) => {
         set((state) => ({
           items: state.items.map((i) =>
             i.id === id && i.stockQty != null ? { ...i, stockQty: i.stockQty + qty } : i
           ),
-        })),
+        }));
+        const updated = get().items.find((i) => i.id === id);
+        if (updated) pushUpsert(ITEM_TABLE, itemToRow(updated));
+      },
     }),
     {
       name: "cuebill-menu",
@@ -124,4 +179,38 @@ export const useMenuStore = create<MenuState>()(
       migrate: () => ({ categories: seedCategories, items: seedItems }),
     }
   )
+);
+
+setupSync<CategoryRow, MenuCategory>(
+  CAT_TABLE,
+  catFromRow,
+  catToRow,
+  () => useMenuStore.getState().categories,
+  (categories) => useMenuStore.setState({ categories }),
+  (cat) =>
+    useMenuStore.setState((state) => {
+      const exists = state.categories.some((c) => c.id === cat.id);
+      return {
+        categories: exists
+          ? state.categories.map((c) => (c.id === cat.id ? cat : c))
+          : [...state.categories, cat],
+      };
+    }),
+  (id) => useMenuStore.setState((state) => ({ categories: state.categories.filter((c) => c.id !== id) }))
+);
+
+setupSync<ItemRow, MenuItem>(
+  ITEM_TABLE,
+  itemFromRow,
+  itemToRow,
+  () => useMenuStore.getState().items,
+  (items) => useMenuStore.setState({ items }),
+  (item) =>
+    useMenuStore.setState((state) => {
+      const exists = state.items.some((i) => i.id === item.id);
+      return {
+        items: exists ? state.items.map((i) => (i.id === item.id ? item : i)) : [...state.items, item],
+      };
+    }),
+  (id) => useMenuStore.setState((state) => ({ items: state.items.filter((i) => i.id !== id) }))
 );
