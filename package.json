@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
+    "start": "serve -s dist -l ${PORT:-3000}",
     "reminders": "npm --prefix server start"
   },
   "dependencies": {
@@ -19,6 +20,7 @@
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-router-dom": "^7.18.2",
+    "serve": "^14.2.6",
     "zustand": "^5.0.15"
   },
   "devDependencies": {

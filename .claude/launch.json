@@ -12,6 +12,12 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "preview"],
       "port": 4173
+    },
+    {
+      "name": "gamezone-railway-start",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["serve", "-s", "dist", "-l", "3210"],
+      "port": 3210
     }
   ]
 }
