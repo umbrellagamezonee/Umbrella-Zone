@@ -1,21 +1,13 @@
 import { NavLink } from "react-router-dom";
-import { Home, ListChecks, UtensilsCrossed, Users, BarChart3, Settings } from "lucide-react";
 import clsx from "clsx";
+import { navItems } from "./navItems";
 
-const items = [
-  { to: "/", label: "Home", icon: Home },
-  { to: "/sessions", label: "Sessions", icon: ListChecks },
-  { to: "/canteen", label: "Canteen", icon: UtensilsCrossed },
-  { to: "/customers", label: "Customers", icon: Users },
-  { to: "/reports", label: "Reports", icon: BarChart3 },
-  { to: "/settings", label: "Settings", icon: Settings },
-];
-
+// Phone-only — tablet landscape and desktop get SideNav instead.
 export function BottomNav() {
   return (
-    <nav className="fixed bottom-3 left-1/2 -translate-x-1/2 w-[calc(100%-1.5rem)] max-w-md">
+    <nav className="md:hidden fixed bottom-3 left-1/2 -translate-x-1/2 w-[calc(100%-1.5rem)] max-w-md">
       <div className="flex items-center justify-between rounded-full border border-[var(--color-border)] bg-[var(--color-surface)]/95 backdrop-blur px-2 py-2 shadow-lg shadow-black/40">
-        {items.map(({ to, label, icon: Icon }) => (
+        {navItems.map(({ to, label, icon: Icon }) => (
           <NavLink
             key={to}
             to={to}
