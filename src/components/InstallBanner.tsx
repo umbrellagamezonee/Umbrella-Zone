@@ -3,7 +3,13 @@ import { Card } from "./ui/Card";
 import { useInstallPrompt } from "../hooks/useInstallPrompt";
 import { Download, X, Share } from "lucide-react";
 
-const DISMISSED_KEY = "cuebill-install-banner-dismissed";
+const LAST_SHOWN_KEY = "cuebill-install-banner-last-shown";
+const SHOW_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day, not on every visit
+
+function shouldShow(): boolean {
+  const last = Number(localStorage.getItem(LAST_SHOWN_KEY) ?? 0);
+  return Date.now() - last >= SHOW_INTERVAL_MS;
+}
 
 function detectPlatform(): "ios" | "android" | "desktop" {
   const ua = navigator.userAgent;
@@ -18,23 +24,32 @@ function detectPlatform(): "ios" | "android" | "desktop" {
 // shows the two-tap instructions instead of a button.
 export function InstallBanner() {
   const { canPrompt, installed, promptInstall } = useInstallPrompt();
-  const [dismissed, setDismissed] = useState(() => localStorage.getItem(DISMISSED_KEY) === "1");
+  const [visible, setVisible] = useState(() => shouldShow());
   const [platform, setPlatform] = useState<"ios" | "android" | "desktop">("desktop");
 
   useEffect(() => {
     setPlatform(detectPlatform());
   }, []);
 
-  function dismiss() {
-    localStorage.setItem(DISMISSED_KEY, "1");
-    setDismissed(true);
-  }
-
-  if (installed || dismissed) return null;
   // Nothing useful to offer: not iOS, no APK relevant, and the browser
   // hasn't offered an install prompt (already installed elsewhere, or a
   // browser that doesn't support it at all).
-  if (platform === "desktop" && !canPrompt) return null;
+  const hasSomethingToOffer = platform !== "desktop" || canPrompt;
+  const shouldRender = visible && !installed && hasSomethingToOffer;
+
+  // Actually being shown starts the once-a-day cooldown — whether or not
+  // someone dismisses it, it won't nag again until the interval's up. Skipped
+  // when there's nothing to offer, so the check reruns next visit instead of
+  // getting stuck "seen" for a day it was never actually shown.
+  useEffect(() => {
+    if (shouldRender) localStorage.setItem(LAST_SHOWN_KEY, String(Date.now()));
+  }, [shouldRender]);
+
+  function dismiss() {
+    setVisible(false);
+  }
+
+  if (!shouldRender) return null;
 
   return (
     <Card className="relative">
