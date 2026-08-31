@@ -7,22 +7,26 @@ import { Reports } from "./pages/Reports";
 import { Settings } from "./pages/Settings";
 import { useCreditReminderWatcher } from "./hooks/useCreditReminderWatcher";
 import { LockScreen } from "./components/LockScreen";
+import { ThemeApplier } from "./components/ThemeApplier";
 
 export default function App() {
   useCreditReminderWatcher();
 
   return (
-    <LockScreen>
-      <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<Home />} />
-          <Route path="/sessions" element={<Sessions />} />
-          <Route path="/canteen" element={<Canteen />} />
-          <Route path="/customers" element={<Customers />} />
-          <Route path="/reports" element={<Reports />} />
-          <Route path="/settings" element={<Settings />} />
-        </Routes>
-      </BrowserRouter>
-    </LockScreen>
+    <>
+      <ThemeApplier />
+      <LockScreen>
+        <BrowserRouter>
+          <Routes>
+            <Route path="/" element={<Home />} />
+            <Route path="/sessions" element={<Sessions />} />
+            <Route path="/canteen" element={<Canteen />} />
+            <Route path="/customers" element={<Customers />} />
+            <Route path="/reports" element={<Reports />} />
+            <Route path="/settings" element={<Settings />} />
+          </Routes>
+        </BrowserRouter>
+      </LockScreen>
+    </>
   );
 }

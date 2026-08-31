@@ -132,4 +132,5 @@ export interface StoreSettings {
   timezone: string;
   upiId: string;
   appPassword: string; // shared PIN gating access to the whole app on this device
+  themeColor: string; // base hex color the primary/accent theme shades are derived from
 }

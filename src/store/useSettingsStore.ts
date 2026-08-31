@@ -14,12 +14,18 @@ export const useSettingsStore = create<SettingsState>()(
       timezone: "Asia/Kolkata",
       upiId: "",
       appPassword: "0000",
+      themeColor: "#8b5cf6",
       update: (patch) => set((state) => ({ ...state, ...patch })),
     }),
     {
       name: "cuebill-settings",
-      version: 2,
-      migrate: (persisted) => ({ upiId: "", appPassword: "0000", ...(persisted as object) }),
+      version: 3,
+      migrate: (persisted) => ({
+        upiId: "",
+        appPassword: "0000",
+        themeColor: "#8b5cf6",
+        ...(persisted as object),
+      }),
     }
   )
 );

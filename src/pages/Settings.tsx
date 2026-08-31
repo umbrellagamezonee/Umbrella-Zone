@@ -20,9 +20,23 @@ import {
   Plus,
   Gamepad2,
   RotateCcw,
+  Download,
+  Palette,
+  Check,
 } from "lucide-react";
 
-type Panel = "tables" | "rates" | "games" | "menu" | "store" | "trash" | null;
+type Panel = "tables" | "rates" | "games" | "menu" | "store" | "trash" | "backup" | "theme" | null;
+
+const THEME_PRESETS: { name: string; hex: string }[] = [
+  { name: "Purple", hex: "#8b5cf6" },
+  { name: "Blue", hex: "#3b82f6" },
+  { name: "Teal", hex: "#14b8a6" },
+  { name: "Green", hex: "#22c55e" },
+  { name: "Orange", hex: "#f97316" },
+  { name: "Red", hex: "#ef4444" },
+  { name: "Pink", hex: "#ec4899" },
+  { name: "Indigo", hex: "#6366f1" },
+];
 
 export function Settings() {
   const [panel, setPanel] = useState<Panel>(null);
@@ -39,6 +53,18 @@ export function Settings() {
       icon: Trash2,
       title: "Deleted Bills",
       desc: deletedCount > 0 ? `${deletedCount} waiting — restore or delete for good` : "Restore or permanently remove",
+    },
+    {
+      key: "backup",
+      icon: Download,
+      title: "Backup & Restore",
+      desc: "Save all your data to a file, or restore from one",
+    },
+    {
+      key: "theme",
+      icon: Palette,
+      title: "Theme",
+      desc: "Pick the app's color",
     },
   ];
 
@@ -80,6 +106,8 @@ export function Settings() {
       {panel === "menu" && <MenuManagementModal onClose={() => setPanel(null)} />}
       {panel === "store" && <StoreSettingsModal onClose={() => setPanel(null)} />}
       {panel === "trash" && <DeletedBillsModal onClose={() => setPanel(null)} />}
+      {panel === "backup" && <BackupModal onClose={() => setPanel(null)} />}
+      {panel === "theme" && <ThemeModal onClose={() => setPanel(null)} />}
     </AppShell>
   );
 }
@@ -634,6 +662,177 @@ function DeletedBillsModal({ onClose }: { onClose: () => void }) {
           </div>
         </Modal>
       )}
+    </Modal>
+  );
+}
+
+function BackupModal({ onClose }: { onClose: () => void }) {
+  const [pending, setPending] = useState<Record<string, string> | null>(null);
+  const [error, setError] = useState("");
+  const [restoring, setRestoring] = useState(false);
+
+  function handleExport() {
+    const backup: Record<string, string> = {};
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith("cuebill")) backup[key] = localStorage.getItem(key) ?? "";
+    }
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `cuebill-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  function handleFilePicked(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow picking the same file again later
+    if (!file) return;
+    setError("");
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const data = JSON.parse(reader.result as string) as Record<string, string>;
+        const keys = Object.keys(data).filter((k) => k.startsWith("cuebill"));
+        if (keys.length === 0) throw new Error("empty");
+        setPending(data);
+      } catch {
+        setError("Ye file valid CueBill backup nahi lagti.");
+      }
+    };
+    reader.readAsText(file);
+  }
+
+  function handleRestore() {
+    if (!pending) return;
+    setRestoring(true);
+    Object.entries(pending).forEach(([key, value]) => {
+      if (key.startsWith("cuebill")) localStorage.setItem(key, value);
+    });
+    window.location.reload();
+  }
+
+  return (
+    <Modal title="Backup & Restore" onClose={onClose}>
+      <div className="space-y-5">
+        <div>
+          <p className="text-sm text-[var(--color-text-dim)] mb-3">
+            Tables, bills, customers, orders — sab kuch ek file mein save ho jayega. PC reset ya
+            naya device use karne se pehle ye zaroor download kar lo.
+          </p>
+          <button
+            onClick={handleExport}
+            className="w-full flex items-center justify-center gap-2 rounded-xl bg-[var(--color-primary)] text-white font-semibold py-3"
+          >
+            <Download size={16} /> Download Backup
+          </button>
+        </div>
+
+        <div className="pt-4 border-t border-[var(--color-border)]">
+          <p className="text-sm text-[var(--color-text-dim)] mb-3">
+            Pehle ki backup file se data wapas laane ke liye file choose karo.{" "}
+            <span className="text-[var(--color-warning)]">Isse abhi ka data replace ho jayega.</span>
+          </p>
+          <label className="w-full flex items-center justify-center rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] font-medium py-3 cursor-pointer">
+            Choose Backup File
+            <input type="file" accept="application/json" className="hidden" onChange={handleFilePicked} />
+          </label>
+          {error && <p className="text-xs text-[var(--color-danger)] mt-2">{error}</p>}
+        </div>
+      </div>
+
+      {pending && (
+        <Modal title="Restore this backup?" onClose={() => setPending(null)}>
+          <p className="text-sm text-[var(--color-text-dim)] mb-4">
+            Is device ka current data mit jayega aur backup file wale data se replace ho jayega.
+            Restore hone ke baad app reload ho jayega.
+          </p>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              onClick={() => setPending(null)}
+              className="rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] font-medium py-2.5"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleRestore}
+              disabled={restoring}
+              className="rounded-xl bg-[var(--color-warning)]/15 text-[var(--color-warning)] font-semibold py-2.5 disabled:opacity-50"
+            >
+              {restoring ? "Restoring…" : "Restore"}
+            </button>
+          </div>
+        </Modal>
+      )}
+    </Modal>
+  );
+}
+
+function ThemeModal({ onClose }: { onClose: () => void }) {
+  const themeColor = useSettingsStore((s) => s.themeColor);
+  const update = useSettingsStore((s) => s.update);
+
+  return (
+    <Modal title="Theme" onClose={onClose}>
+      <div className="space-y-5">
+        <div>
+          <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-3">
+            PRESETS
+          </p>
+          <div className="grid grid-cols-4 gap-3">
+            {THEME_PRESETS.map((preset) => {
+              const active = preset.hex.toLowerCase() === themeColor.toLowerCase();
+              return (
+                <button
+                  key={preset.hex}
+                  onClick={() => update({ themeColor: preset.hex })}
+                  className="flex flex-col items-center gap-1.5"
+                  title={preset.name}
+                >
+                  <span
+                    className="h-11 w-11 rounded-full flex items-center justify-center border-2"
+                    style={{
+                      backgroundColor: preset.hex,
+                      borderColor: active ? "var(--color-text)" : "transparent",
+                    }}
+                  >
+                    {active && <Check size={18} className="text-white" />}
+                  </span>
+                  <span className="text-[11px] text-[var(--color-text-dim)]">{preset.name}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="pt-4 border-t border-[var(--color-border)]">
+          <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-3">
+            OR PICK YOUR OWN
+          </p>
+          <div className="flex items-center gap-3">
+            <input
+              type="color"
+              value={themeColor}
+              onChange={(e) => update({ themeColor: e.target.value })}
+              className="h-11 w-16 rounded-lg bg-transparent border border-[var(--color-border)] cursor-pointer"
+            />
+            <span className="text-sm text-[var(--color-text-dim)] uppercase">{themeColor}</span>
+          </div>
+        </div>
+
+        {themeColor.toLowerCase() !== "#8b5cf6" && (
+          <button
+            onClick={() => update({ themeColor: "#8b5cf6" })}
+            className="w-full rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] text-sm font-medium py-2.5"
+          >
+            Reset to default purple
+          </button>
+        )}
+      </div>
     </Modal>
   );
 }
