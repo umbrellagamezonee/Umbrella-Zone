@@ -15,7 +15,7 @@ import { useSettingsStore } from "../store/useSettingsStore";
 import { formatDuration, formatMoney, elapsedMinutesExact, costForElapsed } from "../lib/format";
 import { tableElapsedMs, tableRemainingMs, activeRate } from "../lib/tableTiming";
 import type { BillingTable, Bill } from "../types";
-import { Plus, Minus, Users, UserPlus } from "lucide-react";
+import { Plus, Minus, Users, UserPlus, Search } from "lucide-react";
 
 export function TableDetailModal({
   table,
@@ -44,6 +44,7 @@ export function TableDetailModal({
   const unmarkBilled = useOrdersStore((s) => s.unmarkBilled);
 
   const [discount, setDiscount] = useState(0);
+  const [itemSearch, setItemSearch] = useState("");
   const [checkoutBill, setCheckoutBill] = useState<Bill | null>(null);
   const [showSplit, setShowSplit] = useState(false);
   const [showAddPerson, setShowAddPerson] = useState(false);
@@ -179,24 +180,47 @@ export function TableDetailModal({
             <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-2">
               ADD FROM MENU
             </p>
-            <div className="grid grid-cols-2 gap-2">
-              {menuItems.map((item) => {
-                const outOfStock = item.stockQty != null && item.stockQty <= 0;
-                return (
-                  <button
-                    key={item.id}
-                    onClick={() => handleAddMenuItem(item)}
-                    disabled={outOfStock}
-                    className="text-left rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2 disabled:opacity-40"
-                  >
-                    <p className="text-sm font-medium">{item.name}</p>
-                    <p className="text-xs text-[var(--color-text-dim)]">
-                      {outOfStock ? "Out of stock" : formatMoney(item.price, currency)}
-                    </p>
-                  </button>
-                );
-              })}
+            <div className="relative mb-2">
+              <Search
+                size={15}
+                className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-text-faint)]"
+              />
+              <input
+                value={itemSearch}
+                onChange={(e) => setItemSearch(e.target.value)}
+                placeholder="Search menu..."
+                className="w-full rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] pl-9 pr-3 py-2.5 text-sm outline-none"
+              />
             </div>
+            <div className="grid grid-cols-2 gap-2">
+              {menuItems
+                .filter((item) =>
+                  !itemSearch.trim() ||
+                  item.name.toLowerCase().includes(itemSearch.trim().toLowerCase())
+                )
+                .map((item) => {
+                  const outOfStock = item.stockQty != null && item.stockQty <= 0;
+                  return (
+                    <button
+                      key={item.id}
+                      onClick={() => handleAddMenuItem(item)}
+                      disabled={outOfStock}
+                      className="text-left rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2 disabled:opacity-40"
+                    >
+                      <p className="text-sm font-medium">{item.name}</p>
+                      <p className="text-xs text-[var(--color-text-dim)]">
+                        {outOfStock ? "Out of stock" : formatMoney(item.price, currency)}
+                      </p>
+                    </button>
+                  );
+                })}
+            </div>
+            {itemSearch.trim() &&
+              !menuItems.some((i) => i.name.toLowerCase().includes(itemSearch.trim().toLowerCase())) && (
+                <p className="text-sm text-[var(--color-text-faint)] text-center py-2">
+                  No items match "{itemSearch.trim()}"
+                </p>
+              )}
           </div>
 
           {order && order.items.length > 0 && (

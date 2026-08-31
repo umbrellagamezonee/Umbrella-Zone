@@ -4,39 +4,33 @@ import type { BillingTable } from "../types";
 
 const DEFAULT_SESSION_MINUTES = 60;
 
+function seedTable(name: string, kind: string, ratePerHour: number): BillingTable {
+  return {
+    id: crypto.randomUUID(),
+    name,
+    kind,
+    ratePerHour,
+    defaultSessionMinutes: DEFAULT_SESSION_MINUTES,
+    status: "available",
+    customerId: null,
+    extraCustomerIds: [],
+    activeGameId: null,
+    sessionRatePerHour: null,
+    sessionStartedAt: null,
+    accumulatedMs: 0,
+    plannedDurationMs: null,
+    note: "",
+  };
+}
+
 const seedTables: BillingTable[] = [
-  {
-    id: crypto.randomUUID(),
-    name: "PlayStation 1",
-    kind: "PlayStation",
-    ratePerHour: 60,
-    defaultSessionMinutes: DEFAULT_SESSION_MINUTES,
-    status: "available",
-    customerId: null,
-    extraCustomerIds: [],
-    activeGameId: null,
-    sessionRatePerHour: null,
-    sessionStartedAt: null,
-    accumulatedMs: 0,
-    plannedDurationMs: null,
-    note: "",
-  },
-  {
-    id: crypto.randomUUID(),
-    name: "PlayStation 2",
-    kind: "PlayStation",
-    ratePerHour: 60,
-    defaultSessionMinutes: DEFAULT_SESSION_MINUTES,
-    status: "available",
-    customerId: null,
-    extraCustomerIds: [],
-    activeGameId: null,
-    sessionRatePerHour: null,
-    sessionStartedAt: null,
-    accumulatedMs: 0,
-    plannedDurationMs: null,
-    note: "",
-  },
+  seedTable("PS-4", "PlayStation", 120),
+  seedTable("PS-5", "PlayStation", 150),
+  seedTable("Pool 1", "Pool", 150),
+  seedTable("Pool 2", "Pool", 150),
+  seedTable("S2 1", "Snooker", 210),
+  seedTable("S2 2", "Snooker", 210),
+  seedTable("S1", "Snooker", 300),
 ];
 
 type NewTableInput = Pick<BillingTable, "name" | "kind" | "ratePerHour" | "note"> &

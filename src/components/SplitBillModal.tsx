@@ -1,7 +1,6 @@
 import { useMemo, useState } from "react";
 import { Modal } from "./ui/Modal";
 import { Card } from "./ui/Card";
-import { useMenuStore } from "../store/useMenuStore";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { formatMoney } from "../lib/format";
 import type { OrderLineItem } from "../types";
@@ -32,32 +31,26 @@ export function SplitBillModal({
   onClose: () => void;
   onConfirm: (shares: ShareOutput[]) => void;
 }) {
-  const menuItems = useMenuStore((s) => s.items);
-  const categories = useMenuStore((s) => s.categories);
   const currency = useSettingsStore((s) => s.currencySymbol);
 
+  // One row per ordered item (not grouped by category) so each dish/drink can
+  // be assigned to a different payer — e.g. one person's sandwich vs another's.
   const rows: ShareRow[] = useMemo(() => {
     const result: ShareRow[] = [];
     if (tableCharge > 0) {
       result.push({ key: "table", label: "Table charge", amount: tableCharge });
     }
-    const categorizedItemIds = new Set<string>();
-    for (const cat of categories) {
-      const catItemIds = menuItems.filter((i) => i.categoryId === cat.id).map((i) => i.id);
-      catItemIds.forEach((id) => categorizedItemIds.add(id));
-      const amount = canteenItems
-        .filter((line) => catItemIds.includes(line.menuItemId))
-        .reduce((sum, line) => sum + line.price * line.qty, 0);
-      if (amount > 0) result.push({ key: cat.id, label: cat.name, amount });
+    for (const line of canteenItems) {
+      const amount = line.price * line.qty;
+      if (amount <= 0) continue;
+      result.push({
+        key: `item-${line.id}`,
+        label: line.qty > 1 ? `${line.name} x${line.qty}` : line.name,
+        amount,
+      });
     }
-    // Items whose menu entry/category was deleted after being ordered still need
-    // to be assigned to someone — never let money silently drop out of the split.
-    const otherAmount = canteenItems
-      .filter((line) => !categorizedItemIds.has(line.menuItemId))
-      .reduce((sum, line) => sum + line.price * line.qty, 0);
-    if (otherAmount > 0) result.push({ key: "other", label: "Other items", amount: otherAmount });
     return result;
-  }, [tableCharge, canteenItems, categories, menuItems]);
+  }, [tableCharge, canteenItems]);
 
   const [payerNames, setPayerNames] = useState<Record<string, string>>({});
   const [confirmed, setConfirmed] = useState(false);
