@@ -6,6 +6,21 @@
 -- IDs are `text`, not `uuid` — the app has a few fixed non-UUID ids (e.g.
 -- the "walk-in" customer, menu category slugs like "cat-drinks") mixed in
 -- alongside real crypto.randomUUID() ids, so the column has to accept both.
+--
+-- Safe to re-run: drops and recreates everything, so running this again
+-- (e.g. after an earlier version of this script) won't error on
+-- already-exists — it'll just reset to empty and the app will reseed the
+-- cloud from whichever device opens first afterward.
+
+drop table if exists menu_items cascade;
+drop table if exists menu_categories cascade;
+drop table if exists billing_tables cascade;
+drop table if exists games cascade;
+drop table if exists customers cascade;
+drop table if exists canteen_orders cascade;
+drop table if exists bills cascade;
+drop table if exists expenses cascade;
+drop table if exists store_settings cascade;
 
 create table billing_tables (
   id text primary key,
