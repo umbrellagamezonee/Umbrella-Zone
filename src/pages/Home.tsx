@@ -2,6 +2,7 @@ import { useState } from "react";
 import { AppShell } from "../components/layout/AppShell";
 import { TableCard } from "../components/TableCard";
 import { StartSessionModal } from "../components/StartSessionModal";
+import { InstallBanner } from "../components/InstallBanner";
 import { useTablesStore } from "../store/useTablesStore";
 import { useNow } from "../lib/useNow";
 
@@ -18,6 +19,8 @@ export function Home() {
 
   return (
     <AppShell title="Home">
+      <InstallBanner />
+
       <div>
         <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-2">
           TABLES
