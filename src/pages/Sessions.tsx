@@ -23,13 +23,15 @@ import { billCollected } from "../lib/billing";
 import { tableElapsedMs, tableRemainingMs, activeRate } from "../lib/tableTiming";
 import { useNow } from "../lib/useNow";
 import type { BillingTable, Bill } from "../types";
-import { Wallet, Gamepad2, Check, CalendarDays, Trash2 } from "lucide-react";
+import { Wallet, Gamepad2, Check, CalendarDays, Trash2, Repeat } from "lucide-react";
 
 export function Sessions() {
   const tables = useTablesStore((s) => s.tables);
   const stopSession = useTablesStore((s) => s.stopSession);
+  const startSession = useTablesStore((s) => s.startSession);
   const updateTable = useTablesStore((s) => s.updateTable);
   const customers = useCustomersStore((s) => s.customers);
+  const findOrCreateCustomer = useCustomersStore((s) => s.findOrCreateCustomer);
   const games = useGamesStore((s) => s.games);
   const orders = useOrdersStore((s) => s.orders);
   const markBilled = useOrdersStore((s) => s.markBilled);
@@ -119,6 +121,25 @@ export function Sessions() {
       setQuickUndo(null);
     }
     setQuickBill(null);
+  }
+
+  // Quickly starts a fresh session on the same table with the same players
+  // as a past one — reuses each name's existing customer profile instead of
+  // making everyone type in again.
+  function handleRematch(bill: Bill) {
+    if (!bill.tableId || !bill.matchParticipants || bill.matchParticipants.length === 0) return;
+    const table = tables.find((t) => t.id === bill.tableId);
+    if (!table || table.status !== "available") return;
+    const [primaryName, ...restNames] = bill.matchParticipants;
+    const primary = findOrCreateCustomer({ name: primaryName, phone: "" });
+    const extraCustomerIds = restNames.map((name) => findOrCreateCustomer({ name, phone: "" }).id);
+    const game = bill.gameId ? games.find((g) => g.id === bill.gameId) : undefined;
+    startSession(table.id, primary.id, {
+      extraCustomerIds,
+      gameId: game?.id ?? null,
+      ratePerHour: game?.ratePerHour ?? null,
+    });
+    setDetailTableId(table.id);
   }
 
   return (
@@ -251,6 +272,12 @@ export function Sessions() {
             {dateBills.map((bill) => {
               const customer = customers.find((c) => c.id === bill.customerId);
               const canResume = bill.status === "open";
+              const rematchTable = bill.tableId ? tables.find((t) => t.id === bill.tableId) : null;
+              const canRematch =
+                !!rematchTable &&
+                rematchTable.status === "available" &&
+                !!bill.matchParticipants &&
+                bill.matchParticipants.length > 0;
               return (
                 <Card
                   key={bill.id}
@@ -287,6 +314,23 @@ export function Sessions() {
                           <p className="text-xs text-[var(--color-text-faint)]">Cancelled</p>
                         )}
                       </div>
+                      {bill.tableId && bill.matchParticipants && bill.matchParticipants.length > 0 && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleRematch(bill);
+                          }}
+                          disabled={!canRematch}
+                          title={
+                            canRematch
+                              ? "Start a rematch with the same players"
+                              : `${rematchTable?.name ?? "That table"} is busy right now`
+                          }
+                          className="h-8 w-8 flex items-center justify-center rounded-full bg-[var(--color-primary)]/10 text-[var(--color-primary)] disabled:opacity-30 shrink-0"
+                        >
+                          <Repeat size={14} />
+                        </button>
+                      )}
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
