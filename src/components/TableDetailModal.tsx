@@ -137,19 +137,30 @@ export function TableDetailModal({
       matchLosers: losers && losers.length > 0 ? losers.map((l) => l.name) : null,
     });
     if (order) markBilled(order.id);
-    // Split bills can end up partially paid, so there's nothing safe to undo
-    // once that flow starts — only offer it for the regular single-payer path.
-    if (!shares) {
-      setUndo({ tableSnapshot, orderId: order?.id ?? null, billId: bill.id });
-    }
+    // Tracked for every path, split included — cancelCheckout below only
+    // actually reverts while nothing on the bill has been paid yet.
+    setUndo({ tableSnapshot, orderId: order?.id ?? null, billId: bill.id });
     setCheckoutBill(bill);
   }
 
   function cancelCheckout() {
     if (undo) {
-      updateTable(table.id, undo.tableSnapshot);
-      if (undo.orderId) unmarkBilled(undo.orderId);
-      deleteBill(undo.billId);
+      // Re-check against the live bill (not the stale snapshot in
+      // `checkoutBill`) — a split bill can pick up a paid share any time
+      // while this screen is open, and once that's happened reverting would
+      // silently swallow money already collected. Safe to fully undo only
+      // while nothing on it has been paid yet.
+      const liveBill = useBillsStore.getState().bills.find((b) => b.id === undo.billId);
+      const anyPaid = liveBill
+        ? liveBill.shares
+          ? liveBill.shares.some((s) => s.status === "paid")
+          : liveBill.status === "paid" || liveBill.amountPaid > 0
+        : true;
+      if (!anyPaid) {
+        updateTable(table.id, undo.tableSnapshot);
+        if (undo.orderId) unmarkBilled(undo.orderId);
+        deleteBill(undo.billId);
+      }
       setUndo(null);
     }
     setCheckoutBill(null);
@@ -439,7 +450,7 @@ export function TableDetailModal({
           )}
         </div>
       ) : checkoutBill.shares ? (
-        <SplitCheckout bill={checkoutBill} onDone={onClose} />
+        <SplitCheckout bill={checkoutBill} onDone={cancelCheckout} />
       ) : (
         <Checkout
           bill={checkoutBill}

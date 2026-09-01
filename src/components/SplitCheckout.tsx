@@ -29,6 +29,7 @@ export function SplitCheckout({ bill: initialBill, onDone }: { bill: Bill; onDon
 
   const shares = bill.shares ?? [];
   const allPaid = shares.length > 0 && shares.every((s) => s.status === "paid");
+  const anyPaid = shares.some((s) => s.status === "paid");
 
   function setStep(shareId: string, step: RowStep) {
     setSteps((s) => ({ ...s, [shareId]: step }));
@@ -149,9 +150,17 @@ export function SplitCheckout({ bill: initialBill, onDone }: { bill: Bill; onDon
 
         <button
           onClick={onDone}
-          className="w-full rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] font-semibold py-3"
+          className="w-full flex items-center justify-center gap-2 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] font-semibold py-3"
         >
-          {allPaid ? "Done" : "Close (unpaid shares stay open)"}
+          {allPaid ? (
+            "Done"
+          ) : anyPaid ? (
+            "Close (remaining shares stay open)"
+          ) : (
+            <>
+              <ArrowLeft size={15} /> Back
+            </>
+          )}
         </button>
       </div>
     </Modal>
