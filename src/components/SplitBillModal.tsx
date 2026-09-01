@@ -10,6 +10,7 @@ interface ShareRow {
   key: string;
   label: string;
   amount: number;
+  personName?: string | null;
 }
 
 interface ShareOutput {
@@ -47,12 +48,17 @@ export function SplitBillModal({
         key: `item-${line.id}`,
         label: line.qty > 1 ? `${line.name} x${line.qty}` : line.name,
         amount,
+        personName: line.personName,
       });
     }
     return result;
   }, [tableCharge, canteenItems]);
 
-  const [payerNames, setPayerNames] = useState<Record<string, string>>({});
+  // Rows already tagged with who they were ordered for (via "Adding for" on
+  // the menu) start pre-filled — one less thing to type per split.
+  const [payerNames, setPayerNames] = useState<Record<string, string>>(() =>
+    Object.fromEntries(rows.filter((r) => r.personName).map((r) => [r.key, r.personName as string]))
+  );
   const [confirmed, setConfirmed] = useState(false);
 
   const allFilled = rows.length > 0 && rows.every((r) => (payerNames[r.key] ?? "").trim().length > 0);

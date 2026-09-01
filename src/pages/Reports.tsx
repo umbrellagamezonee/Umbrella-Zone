@@ -439,6 +439,9 @@ function BillDetailModal({ bill, onClose }: { bill: Bill; onClose: () => void })
                 <div key={i} className="flex items-center justify-between text-sm">
                   <span>
                     {item.name} <span className="text-[var(--color-text-faint)]">x{item.qty}</span>
+                    {item.personName && (
+                      <span className="text-[var(--color-text-faint)]"> · {item.personName}</span>
+                    )}
                   </span>
                   <span className="font-medium">{formatMoney(item.price * item.qty, currency)}</span>
                 </div>

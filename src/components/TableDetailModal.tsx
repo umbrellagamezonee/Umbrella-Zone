@@ -14,7 +14,7 @@ import { useSettingsStore } from "../store/useSettingsStore";
 import { formatDuration, formatMoney, elapsedMinutesExact, costForElapsed } from "../lib/format";
 import { tableElapsedMs, tableRemainingMs, activeRate } from "../lib/tableTiming";
 import type { BillingTable, Bill } from "../types";
-import { Plus, Minus, Users, UserPlus, Search, Frown, Pencil, Check } from "lucide-react";
+import { Plus, Minus, Users, UserPlus, Search, Frown, Pencil, Check, Pause, Play } from "lucide-react";
 
 // Splits `total` equally among `n` payers down to the paisa, handing any
 // leftover paisa to the first few payers so the shares always add back up
@@ -45,6 +45,8 @@ export function TableDetailModal({
   const findOrCreateCustomer = useCustomersStore((s) => s.findOrCreateCustomer);
   const games = useGamesStore((s) => s.games);
   const stopSession = useTablesStore((s) => s.stopSession);
+  const pauseSession = useTablesStore((s) => s.pauseSession);
+  const resumeSession = useTablesStore((s) => s.resumeSession);
   const addParticipant = useTablesStore((s) => s.addParticipant);
   const updateTable = useTablesStore((s) => s.updateTable);
   const menuItems = useMenuStore((s) => s.items);
@@ -65,6 +67,9 @@ export function TableDetailModal({
   const [showLoserPicker, setShowLoserPicker] = useState(false);
   const [selectedLoserIds, setSelectedLoserIds] = useState<string[]>([]);
   const [showEditTime, setShowEditTime] = useState(false);
+  // Which participant new canteen items get tagged to — null means "shared /
+  // no one specific". Only shown once there's more than one person here.
+  const [addForId, setAddForId] = useState<string | null>(null);
   // Snapshot taken right before a non-split Stop & Bill, so cancelling the
   // checkout before paying can put the session back exactly as it was
   // instead of leaving it stopped with nowhere to undo from.
@@ -96,7 +101,8 @@ export function TableDetailModal({
 
   function handleAddMenuItem(item: (typeof menuItems)[number]) {
     const o = ensureOrder();
-    addItem(o.id, { menuItemId: item.id, name: item.name, price: item.price, qty: 1 });
+    const forName = addForId ? participants.find((p) => p.id === addForId)?.name ?? null : null;
+    addItem(o.id, { menuItemId: item.id, name: item.name, price: item.price, qty: 1, personName: forName });
   }
 
   function handleStopAndBill(
@@ -123,7 +129,8 @@ export function TableDetailModal({
       tableChargeMinutes: minutesBilled,
       tableCharge,
       canteenCharge: canteenTotal,
-      canteenItems: order?.items.map((i) => ({ name: i.name, price: i.price, qty: i.qty })) ?? [],
+      canteenItems:
+        order?.items.map((i) => ({ name: i.name, price: i.price, qty: i.qty, personName: i.personName ?? null })) ?? [],
       discount: shares ? 0 : effectiveDiscount,
       shares,
       matchParticipants: participantNames.length > 1 ? participantNames : null,
@@ -220,11 +227,63 @@ export function TableDetailModal({
             </div>
           </Card>
 
+          {(table.status === "running" || table.status === "paused") && (
+            <button
+              onClick={() => (table.status === "running" ? pauseSession(table.id) : resumeSession(table.id))}
+              className={
+                "w-full flex items-center justify-center gap-2 rounded-xl border text-sm font-medium py-2.5 " +
+                (table.status === "running"
+                  ? "border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 text-[var(--color-warning)]"
+                  : "border-[var(--color-success)]/40 bg-[var(--color-success)]/10 text-[var(--color-success)]")
+              }
+            >
+              {table.status === "running" ? (
+                <>
+                  <Pause size={15} /> Hold this session
+                </>
+              ) : (
+                <>
+                  <Play size={15} /> Resume session
+                </>
+              )}
+            </button>
+          )}
+
           <details className="group">
             <summary className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] cursor-pointer select-none py-1">
               ADD FROM MENU
             </summary>
             <div className="mt-2">
+              {participants.length > 1 && (
+                <div className="flex flex-wrap gap-1.5 mb-2">
+                  <span className="text-xs text-[var(--color-text-faint)] self-center mr-0.5">Adding for:</span>
+                  <button
+                    onClick={() => setAddForId(null)}
+                    className={
+                      "text-xs rounded-full border px-2.5 py-1 " +
+                      (addForId === null
+                        ? "border-[var(--color-primary)] bg-[var(--color-primary)]/15 text-[var(--color-primary)]"
+                        : "border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-text-dim)]")
+                    }
+                  >
+                    Shared
+                  </button>
+                  {participants.map((p) => (
+                    <button
+                      key={p.id}
+                      onClick={() => setAddForId(p.id)}
+                      className={
+                        "text-xs rounded-full border px-2.5 py-1 " +
+                        (addForId === p.id
+                          ? "border-[var(--color-primary)] bg-[var(--color-primary)]/15 text-[var(--color-primary)]"
+                          : "border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-text-dim)]")
+                      }
+                    >
+                      {p.name}
+                    </button>
+                  ))}
+                </div>
+              )}
               <div className="relative mb-2">
                 <Search
                   size={15}
@@ -245,7 +304,12 @@ export function TableDetailModal({
                   )
                   .map((item) => {
                     const outOfStock = item.stockQty != null && item.stockQty <= 0;
-                    const qtyInOrder = order?.items.find((i) => i.menuItemId === item.id)?.qty ?? 0;
+                    // Summed across every line for this item — the same dish
+                    // can now be split into separate lines per person.
+                    const qtyInOrder =
+                      order?.items
+                        .filter((i) => i.menuItemId === item.id)
+                        .reduce((sum, i) => sum + i.qty, 0) ?? 0;
                     const added = qtyInOrder > 0;
                     return (
                       <button
@@ -298,7 +362,12 @@ export function TableDetailModal({
                   const atStockLimit = menuItem?.stockQty != null && menuItem.stockQty <= 0;
                   return (
                     <div key={line.id} className="flex items-center justify-between">
-                      <p className="text-sm">{line.name}</p>
+                      <p className="text-sm">
+                        {line.name}
+                        {line.personName && (
+                          <span className="text-[var(--color-text-faint)]"> · {line.personName}</span>
+                        )}
+                      </p>
                       <div className="flex items-center gap-2">
                         <button
                           onClick={() => changeQty(order.id, line.id, line.qty - 1)}

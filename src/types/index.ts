@@ -56,6 +56,9 @@ export interface OrderLineItem {
   name: string;
   price: number;
   qty: number;
+  // Who at the table this was ordered for — only meaningful when a table has
+  // multiple people, so the bill/receipt can show who had what.
+  personName?: string | null;
 }
 
 export interface CanteenOrder {
@@ -76,6 +79,7 @@ export interface BillCanteenItem {
   name: string;
   price: number;
   qty: number;
+  personName?: string | null;
 }
 
 export type PaymentMethod = "cash" | "upi" | "credit";

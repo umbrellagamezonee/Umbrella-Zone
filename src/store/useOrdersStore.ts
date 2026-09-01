@@ -87,7 +87,12 @@ export const useOrdersStore = create<OrdersState>()(
         set((state) => ({
           orders: state.orders.map((o) => {
             if (o.id !== orderId) return o;
-            const existing = o.items.find((i) => i.menuItemId === item.menuItemId);
+            // Only merge into an existing line when it's the same item *for
+            // the same person* — otherwise two people ordering the same dish
+            // would silently get merged onto whoever ordered first.
+            const existing = o.items.find(
+              (i) => i.menuItemId === item.menuItemId && (i.personName ?? null) === (item.personName ?? null)
+            );
             if (existing) {
               return {
                 ...o,
