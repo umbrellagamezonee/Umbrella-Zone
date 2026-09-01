@@ -19,13 +19,13 @@ import { Plus, Minus, Users, UserPlus, Search, Frown, Pencil, Check, Pause, Play
 // Splits `total` equally among `n` payers down to the paisa, handing any
 // leftover paisa to the first few payers so the shares always add back up
 // exactly (floating-point division alone can leave the sum a paisa short).
-function splitEqually(total: number, names: string[]) {
+function splitEqually(total: number, names: string[], label = "Share") {
   const n = names.length;
   const totalPaise = Math.round(total * 100);
   const base = Math.floor(totalPaise / n);
   const remainder = totalPaise - base * n;
   return names.map((name, i) => ({
-    label: "Loser share",
+    label,
     payerName: name,
     amount: (base + (i < remainder ? 1 : 0)) / 100,
   }));
@@ -418,8 +418,17 @@ export function TableDetailModal({
             onClick={() => setShowSplit(true)}
             className="w-full flex items-center justify-center gap-2 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] text-sm font-medium py-2.5"
           >
-            <Users size={15} /> Split between multiple people
+            <Users size={15} /> Split by item
           </button>
+          {participants.length > 1 && (
+            <button
+              onClick={() => handleStopAndBill(splitEqually(total, participantNames))}
+              className="w-full flex items-center justify-center gap-2 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] text-sm font-medium py-2.5"
+            >
+              <Users size={15} /> Split equally ·{" "}
+              {formatMoney(total / participantNames.length, currency)} each
+            </button>
+          )}
           {participants.length > 1 && (
             <button
               onClick={() => setShowLoserPicker(true)}
@@ -531,7 +540,7 @@ export function TableDetailModal({
                   handleStopAndBill(undefined, losers);
                 } else {
                   handleStopAndBill(
-                    splitEqually(total, losers.map((l) => l.name)),
+                    splitEqually(total, losers.map((l) => l.name), "Loser share"),
                     losers
                   );
                 }
