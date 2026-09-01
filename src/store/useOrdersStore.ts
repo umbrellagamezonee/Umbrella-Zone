@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { CanteenOrder, OrderLineItem } from "../types";
 import { useMenuStore } from "./useMenuStore";
-import { setupSync, pushInsert, pushUpsert } from "../lib/cloudSync";
+import { setupSync, pushInsert, pushUpsert, pushDeleteAll } from "../lib/cloudSync";
 
 interface OrderRow {
   id: string;
@@ -55,6 +55,7 @@ interface OrdersState {
   unmarkBilled: (orderId: string) => void;
   reassignToTable: (orderId: string, tableId: string, customerId: string | null) => void;
   orderTotal: (orderId: string) => number;
+  resetAll: () => void;
 }
 
 export const useOrdersStore = create<OrdersState>()(
@@ -185,6 +186,11 @@ export const useOrdersStore = create<OrdersState>()(
         const order = get().orders.find((o) => o.id === orderId);
         if (!order) return 0;
         return order.items.reduce((sum, i) => sum + i.price * i.qty, 0);
+      },
+
+      resetAll: () => {
+        set({ orders: [] });
+        pushDeleteAll(TABLE);
       },
     }),
     {

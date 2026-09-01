@@ -91,3 +91,15 @@ export function pushDelete(table: string, id: string) {
     .eq("id", id)
     .then(({ error }) => logError("delete", table, error));
 }
+
+// Wipes every row in a cloud table — used by Settings → Reset All Data.
+// `.neq("id", "")` is a no-op filter (no real id is ever an empty string)
+// that matches every row, since PostgREST requires *some* filter on delete.
+export function pushDeleteAll(table: string) {
+  if (!supabase) return;
+  supabase
+    .from(table)
+    .delete()
+    .neq("id", "")
+    .then(({ error }) => logError("delete all", table, error));
+}

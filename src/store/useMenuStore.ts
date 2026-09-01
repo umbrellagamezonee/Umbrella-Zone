@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { MenuCategory, MenuItem } from "../types";
-import { setupSync, pushInsert, pushUpsert, pushDelete } from "../lib/cloudSync";
+import { setupSync, pushInsert, pushUpsert, pushDelete, pushDeleteAll } from "../lib/cloudSync";
 
 const seedCategories: MenuCategory[] = [
   { id: "cat-sandwiches", name: "Sandwiches & Kulcha" },
@@ -111,6 +111,7 @@ interface MenuState {
   removeItem: (id: string) => void;
   deductStock: (id: string, qty: number) => void;
   restock: (id: string, qty: number) => void;
+  resetAll: () => void;
 }
 
 export const useMenuStore = create<MenuState>()(
@@ -169,6 +170,12 @@ export const useMenuStore = create<MenuState>()(
         }));
         const updated = get().items.find((i) => i.id === id);
         if (updated) pushUpsert(ITEM_TABLE, itemToRow(updated));
+      },
+
+      resetAll: () => {
+        set({ categories: [], items: [] });
+        pushDeleteAll(CAT_TABLE);
+        pushDeleteAll(ITEM_TABLE);
       },
     }),
     {

@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { Expense } from "../types";
-import { setupSync, pushInsert, pushDelete } from "../lib/cloudSync";
+import { setupSync, pushInsert, pushDelete, pushDeleteAll } from "../lib/cloudSync";
 
 interface ExpenseRow {
   id: string;
@@ -32,6 +32,7 @@ interface ExpensesState {
   categories: string[];
   addExpense: (data: { category: string; amount: number; note: string }) => void;
   removeExpense: (id: string) => void;
+  resetAll: () => void;
 }
 
 export const useExpensesStore = create<ExpensesState>()(
@@ -55,6 +56,11 @@ export const useExpensesStore = create<ExpensesState>()(
       removeExpense: (id) => {
         set((state) => ({ expenses: state.expenses.filter((e) => e.id !== id) }));
         pushDelete(TABLE, id);
+      },
+
+      resetAll: () => {
+        set({ expenses: [] });
+        pushDeleteAll(TABLE);
       },
     }),
     { name: "cuebill-expenses" }

@@ -6,6 +6,9 @@ import { useTablesStore } from "../store/useTablesStore";
 import { useMenuStore } from "../store/useMenuStore";
 import { useGamesStore } from "../store/useGamesStore";
 import { useBillsStore } from "../store/useBillsStore";
+import { useOrdersStore } from "../store/useOrdersStore";
+import { useCustomersStore } from "../store/useCustomersStore";
+import { useExpensesStore } from "../store/useExpensesStore";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { useAuthStore } from "../store/useAuthStore";
 import { formatMoney, formatDateTime } from "../lib/format";
@@ -25,9 +28,10 @@ import {
   Check,
   Moon,
   Sun,
+  AlertTriangle,
 } from "lucide-react";
 
-type Panel = "tables" | "rates" | "games" | "menu" | "store" | "trash" | "backup" | "theme" | null;
+type Panel = "tables" | "rates" | "games" | "menu" | "store" | "trash" | "backup" | "theme" | "danger" | null;
 
 const THEME_PRESETS: { name: string; hex: string }[] = [
   { name: "Purple", hex: "#8b5cf6" },
@@ -102,6 +106,25 @@ export function Settings() {
         </Card>
       </div>
 
+      <p className="text-xs font-semibold tracking-wide text-[var(--color-danger)] pt-2">DANGER ZONE</p>
+      <Card
+        onClick={() => setPanel("danger")}
+        className="flex items-center justify-between border-[var(--color-danger)]/30"
+      >
+        <div className="flex items-center gap-3">
+          <div className="h-9 w-9 rounded-xl bg-[var(--color-danger)]/10 flex items-center justify-center text-[var(--color-danger)]">
+            <AlertTriangle size={18} />
+          </div>
+          <div>
+            <p className="text-sm font-medium">Reset All Data</p>
+            <p className="text-xs text-[var(--color-text-dim)]">
+              Permanently erase bills, customers, orders, expenses and menu
+            </p>
+          </div>
+        </div>
+        <ChevronRight size={16} className="text-[var(--color-text-faint)]" />
+      </Card>
+
       {panel === "tables" && <TableManagementModal onClose={() => setPanel(null)} />}
       {panel === "rates" && <TableRatesModal onClose={() => setPanel(null)} />}
       {panel === "games" && <GamesRatesModal onClose={() => setPanel(null)} />}
@@ -110,6 +133,7 @@ export function Settings() {
       {panel === "trash" && <DeletedBillsModal onClose={() => setPanel(null)} />}
       {panel === "backup" && <BackupModal onClose={() => setPanel(null)} />}
       {panel === "theme" && <ThemeModal onClose={() => setPanel(null)} />}
+      {panel === "danger" && <ResetAllDataModal onClose={() => setPanel(null)} />}
     </AppShell>
   );
 }
@@ -865,6 +889,91 @@ function ThemeModal({ onClose }: { onClose: () => void }) {
             Reset to default purple
           </button>
         )}
+      </div>
+    </Modal>
+  );
+}
+
+function ResetAllDataModal({ onClose }: { onClose: () => void }) {
+  const tables = useTablesStore((s) => s.tables);
+  const stopSession = useTablesStore((s) => s.stopSession);
+  const resetBills = useBillsStore((s) => s.resetAll);
+  const resetOrders = useOrdersStore((s) => s.resetAll);
+  const resetCustomers = useCustomersStore((s) => s.resetAll);
+  const resetMenu = useMenuStore((s) => s.resetAll);
+  const resetExpenses = useExpensesStore((s) => s.resetAll);
+  const [confirmText, setConfirmText] = useState("");
+  const [done, setDone] = useState(false);
+
+  const canDelete = confirmText.trim().toUpperCase() === "DELETE";
+
+  function handleReset() {
+    if (!canDelete) return;
+    // Stop any live sessions first so no table is left pointing at a
+    // customer that's about to be wiped.
+    tables.forEach((t) => {
+      if (t.status !== "available") stopSession(t.id);
+    });
+    resetBills();
+    resetOrders();
+    resetCustomers();
+    resetMenu();
+    resetExpenses();
+    setDone(true);
+  }
+
+  if (done) {
+    return (
+      <Modal title="All data cleared" onClose={onClose}>
+        <p className="text-sm text-[var(--color-text-dim)] mb-4">
+          Bills, sessions, customers, canteen orders, expenses and the menu are all gone —
+          tables, games, and store settings are untouched. Add menu items again from Menu
+          Management whenever you're ready.
+        </p>
+        <button
+          onClick={onClose}
+          className="w-full rounded-xl bg-[var(--color-primary)] text-white font-semibold py-3"
+        >
+          Done
+        </button>
+      </Modal>
+    );
+  }
+
+  return (
+    <Modal title="Reset All Data" onClose={onClose}>
+      <div className="space-y-4">
+        <div className="rounded-xl border border-[var(--color-danger)]/40 bg-[var(--color-danger)]/10 p-3">
+          <p className="text-sm font-semibold text-[var(--color-danger)] flex items-center gap-1.5">
+            <AlertTriangle size={15} /> This can't be undone
+          </p>
+          <p className="text-xs text-[var(--color-text-dim)] mt-1.5">
+            Every bill, session history, customer, canteen order, expense and menu item — on
+            every device signed into this cafe — will be permanently deleted. Any table
+            currently running will be stopped.
+          </p>
+        </div>
+        <p className="text-xs text-[var(--color-text-dim)]">
+          Tables, games, and store settings (name, currency, password, theme) are kept.
+        </p>
+        <div>
+          <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-1.5">
+            TYPE "DELETE" TO CONFIRM
+          </p>
+          <input
+            value={confirmText}
+            onChange={(e) => setConfirmText(e.target.value)}
+            placeholder="DELETE"
+            className="w-full rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] px-3 py-2.5 text-sm outline-none"
+          />
+        </div>
+        <button
+          onClick={handleReset}
+          disabled={!canDelete}
+          className="w-full rounded-xl bg-[var(--color-danger)] disabled:opacity-40 text-white font-semibold py-3"
+        >
+          Delete everything
+        </button>
       </div>
     </Modal>
   );

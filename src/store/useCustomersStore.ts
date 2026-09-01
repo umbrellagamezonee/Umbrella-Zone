@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { Customer } from "../types";
 import { syncCreditLedger } from "../lib/reminderApi";
-import { setupSync, pushInsert, pushUpsert, pushDelete } from "../lib/cloudSync";
+import { setupSync, pushInsert, pushUpsert, pushDelete, pushDeleteAll } from "../lib/cloudSync";
 
 const walkIn: Customer = {
   id: "walk-in",
@@ -57,6 +57,7 @@ interface CustomersState {
   adjustCredit: (id: string, delta: number) => void;
   markReminded: (id: string) => void;
   removeCustomer: (id: string) => void;
+  resetAll: () => void;
 }
 
 export const useCustomersStore = create<CustomersState>()(
@@ -125,6 +126,13 @@ export const useCustomersStore = create<CustomersState>()(
       removeCustomer: (id) => {
         set((state) => ({ customers: state.customers.filter((c) => c.id !== id) }));
         if (id !== "walk-in") pushDelete(TABLE, id);
+      },
+
+      // Keeps the "walk-in" sentinel (never a real cloud row) and wipes
+      // everyone else.
+      resetAll: () => {
+        set({ customers: [walkIn] });
+        pushDeleteAll(TABLE);
       },
     }),
     {
