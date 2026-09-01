@@ -264,6 +264,12 @@ export function Sessions() {
                         {customer && !customer.isWalkIn ? customer.name : "Walk-in"} ·{" "}
                         {formatTime(bill.createdAt)}
                       </p>
+                      {bill.matchParticipants && bill.matchParticipants.length > 1 && (
+                        <p className="text-xs text-[var(--color-text-faint)] mt-0.5">
+                          {bill.matchParticipants.join(" vs ")}
+                          {bill.matchLoser && ` · ${bill.matchLoser} lost`}
+                        </p>
+                      )}
                     </div>
                     <div className="flex items-center gap-3">
                       <div className="text-right">

@@ -22,6 +22,8 @@ interface CreateBillInput {
   canteenItems?: BillCanteenItem[];
   discount: number;
   shares?: ShareInput[];
+  matchParticipants?: string[] | null;
+  matchLoser?: string | null;
 }
 
 interface SettleInput {
@@ -56,6 +58,8 @@ interface BillRow {
   created_at: string;
   paid_at: string | null;
   deleted_at: string | null;
+  match_participants: string[] | null;
+  match_loser: string | null;
 }
 
 const TABLE = "bills";
@@ -81,6 +85,8 @@ const fromRow = (row: BillRow): Bill => ({
   createdAt: new Date(row.created_at).getTime(),
   paidAt: row.paid_at ? new Date(row.paid_at).getTime() : null,
   deletedAt: row.deleted_at ? new Date(row.deleted_at).getTime() : null,
+  matchParticipants: row.match_participants ?? null,
+  matchLoser: row.match_loser ?? null,
 });
 const toRow = (b: Bill): BillRow => ({
   id: b.id,
@@ -104,6 +110,8 @@ const toRow = (b: Bill): BillRow => ({
   created_at: new Date(b.createdAt).toISOString(),
   paid_at: b.paidAt ? new Date(b.paidAt).toISOString() : null,
   deleted_at: b.deletedAt ? new Date(b.deletedAt).toISOString() : null,
+  match_participants: b.matchParticipants,
+  match_loser: b.matchLoser,
 });
 
 function pushBill(id: string) {
@@ -183,6 +191,8 @@ export const useBillsStore = create<BillsState>()(
           createdAt: Date.now(),
           paidAt: null,
           deletedAt: null,
+          matchParticipants: input.matchParticipants ?? null,
+          matchLoser: input.matchLoser ?? null,
         };
         set((state) => ({ bills: [bill, ...state.bills] }));
         pushInsert(TABLE, toRow(bill));
@@ -294,7 +304,7 @@ export const useBillsStore = create<BillsState>()(
     }),
     {
       name: "cuebill-bills",
-      version: 5,
+      version: 6,
       migrate: (persisted) => {
         const state = persisted as {
           bills?: (Partial<Bill> & { id: string; total: number })[];
@@ -322,6 +332,8 @@ export const useBillsStore = create<BillsState>()(
           createdAt: b.createdAt ?? Date.now(),
           paidAt: b.paidAt ?? null,
           deletedAt: b.deletedAt ?? null,
+          matchParticipants: b.matchParticipants ?? null,
+          matchLoser: b.matchLoser ?? null,
         });
         return {
           bills: (state.bills ?? []).map(fill),

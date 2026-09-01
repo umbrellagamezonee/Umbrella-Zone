@@ -14,7 +14,7 @@ import { useSettingsStore } from "../store/useSettingsStore";
 import { formatDuration, formatMoney, elapsedMinutesExact, costForElapsed } from "../lib/format";
 import { tableElapsedMs, tableRemainingMs, activeRate } from "../lib/tableTiming";
 import type { BillingTable, Bill } from "../types";
-import { Plus, Minus, Users, UserPlus, Search } from "lucide-react";
+import { Plus, Minus, Users, UserPlus, Search, Frown } from "lucide-react";
 
 export function TableDetailModal({
   table,
@@ -47,6 +47,7 @@ export function TableDetailModal({
   const [checkoutBill, setCheckoutBill] = useState<Bill | null>(null);
   const [showSplit, setShowSplit] = useState(false);
   const [showAddPerson, setShowAddPerson] = useState(false);
+  const [showLoserPicker, setShowLoserPicker] = useState(false);
   // Snapshot taken right before a non-split Stop & Bill, so cancelling the
   // checkout before paying can put the session back exactly as it was
   // instead of leaving it stopped with nowhere to undo from.
@@ -81,7 +82,10 @@ export function TableDetailModal({
     addItem(o.id, { menuItemId: item.id, name: item.name, price: item.price, qty: 1 });
   }
 
-  function handleStopAndBill(shares?: { label: string; payerName: string; amount: number }[]) {
+  function handleStopAndBill(
+    shares?: { label: string; payerName: string; amount: number }[],
+    loser?: { customerId: string; name: string }
+  ) {
     const tableSnapshot: Partial<BillingTable> = {
       status: table.status,
       customerId: table.customerId,
@@ -98,13 +102,15 @@ export function TableDetailModal({
       tableName: table.name,
       gameId: game?.id ?? null,
       gameName: game?.name ?? null,
-      customerId: table.customerId,
+      customerId: loser?.customerId ?? table.customerId,
       tableChargeMinutes: minutesBilled,
       tableCharge,
       canteenCharge: canteenTotal,
       canteenItems: order?.items.map((i) => ({ name: i.name, price: i.price, qty: i.qty })) ?? [],
       discount: shares ? 0 : effectiveDiscount,
       shares,
+      matchParticipants: participantNames.length > 1 ? participantNames : null,
+      matchLoser: loser?.name ?? null,
     });
     if (order) markBilled(order.id);
     // Split bills can end up partially paid, so there's nothing safe to undo
@@ -131,6 +137,17 @@ export function TableDetailModal({
     .filter((n): n is string => !!n);
   const participantNames = [customer ? customer.name : "Walk-in", ...extraNames];
   const peopleLabel = participantNames.join(", ");
+  // Same list, but paired with customer ids — needed to bill "Loser pays" to
+  // the right person rather than just the primary contact.
+  const participants: { id: string; name: string }[] = [
+    ...(table.customerId ? [{ id: table.customerId, name: customer?.name ?? "Walk-in" }] : []),
+    ...table.extraCustomerIds
+      .map((id) => {
+        const c = customers.find((x) => x.id === id);
+        return c ? { id, name: c.name } : null;
+      })
+      .filter((p): p is { id: string; name: string } => !!p),
+  ];
 
   return (
     <Modal title={table.name} onClose={checkoutBill && undo ? cancelCheckout : onClose}>
@@ -286,6 +303,14 @@ export function TableDetailModal({
           >
             <Users size={15} /> Split between multiple people
           </button>
+          {participants.length > 1 && (
+            <button
+              onClick={() => setShowLoserPicker(true)}
+              className="w-full flex items-center justify-center gap-2 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] text-sm font-medium py-2.5"
+            >
+              <Frown size={15} /> Loser pays
+            </button>
+          )}
         </div>
       ) : checkoutBill.shares ? (
         <SplitCheckout bill={checkoutBill} onDone={onClose} />
@@ -320,6 +345,31 @@ export function TableDetailModal({
             setShowAddPerson(false);
           }}
         />
+      )}
+
+      {showLoserPicker && (
+        <Modal title="Who lost?" onClose={() => setShowLoserPicker(false)}>
+          <div className="space-y-3">
+            <p className="text-xs text-[var(--color-text-faint)]">
+              Whole bill goes on their tab — everyone else played free this round.
+            </p>
+            <div className="space-y-2">
+              {participants.map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => {
+                    setShowLoserPicker(false);
+                    handleStopAndBill(undefined, { customerId: p.id, name: p.name });
+                  }}
+                  className="w-full flex items-center justify-between rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-2)] px-4 py-3 text-left"
+                >
+                  <span className="text-sm font-medium">{p.name}</span>
+                  <span className="text-xs text-[var(--color-danger)]">Pays {formatMoney(total, currency)}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </Modal>
       )}
     </Modal>
   );

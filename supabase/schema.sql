@@ -106,7 +106,9 @@ create table bills (
   status text not null default 'open',
   created_at timestamptz not null default now(),
   paid_at timestamptz,
-  deleted_at timestamptz
+  deleted_at timestamptz,
+  match_participants text[],
+  match_loser text
 );
 
 create table expenses (
