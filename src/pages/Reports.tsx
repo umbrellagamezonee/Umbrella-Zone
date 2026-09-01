@@ -293,7 +293,8 @@ export function Reports() {
               {bill.matchParticipants && bill.matchParticipants.length > 1 && (
                 <p className="text-xs text-[var(--color-text-faint)] mt-0.5">
                   {bill.matchParticipants.join(" vs ")}
-                  {bill.matchLoser && ` · ${bill.matchLoser} lost`}
+                  {bill.matchLosers && bill.matchLosers.length > 0 &&
+                    ` · ${bill.matchLosers.join(", ")} lost`}
                 </p>
               )}
             </div>
@@ -401,7 +402,8 @@ function BillDetailModal({ bill, onClose }: { bill: Bill; onClose: () => void })
             </p>
             <div className="space-y-1.5">
               {bill.matchParticipants.map((name) => {
-                const lost = bill.matchLoser === name;
+                const lost = bill.matchLosers?.includes(name) ?? false;
+                const hasLosers = (bill.matchLosers?.length ?? 0) > 0;
                 return (
                   <div key={name} className="flex items-center gap-2">
                     {lost ? (
@@ -416,7 +418,7 @@ function BillDetailModal({ bill, onClose }: { bill: Bill; onClose: () => void })
                         (lost ? "text-[var(--color-danger)]" : "text-[var(--color-text-faint)]")
                       }
                     >
-                      {lost ? "Lost · billed" : bill.matchLoser ? "Won" : ""}
+                      {lost ? "Lost · billed" : hasLosers ? "Won" : ""}
                     </span>
                   </div>
                 );

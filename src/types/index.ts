@@ -117,7 +117,7 @@ export interface Bill {
   paidAt: number | null;
   deletedAt: number | null; // set when moved to the trash (Settings → Deleted Bills); null while live
   matchParticipants: string[] | null; // everyone who played this session, snapshotted for history
-  matchLoser: string | null; // who lost, if recorded — that's who "Loser pays" billed
+  matchLosers: string[] | null; // whoever lost, if recorded — split equally when there's more than one
 }
 
 export interface Expense {

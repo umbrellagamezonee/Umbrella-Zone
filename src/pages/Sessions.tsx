@@ -267,7 +267,8 @@ export function Sessions() {
                       {bill.matchParticipants && bill.matchParticipants.length > 1 && (
                         <p className="text-xs text-[var(--color-text-faint)] mt-0.5">
                           {bill.matchParticipants.join(" vs ")}
-                          {bill.matchLoser && ` · ${bill.matchLoser} lost`}
+                          {bill.matchLosers && bill.matchLosers.length > 0 &&
+                            ` · ${bill.matchLosers.join(", ")} lost`}
                         </p>
                       )}
                     </div>

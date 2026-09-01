@@ -108,7 +108,8 @@ create table bills (
   paid_at timestamptz,
   deleted_at timestamptz,
   match_participants text[],
-  match_loser text
+  match_loser text,
+  match_losers text[]
 );
 
 create table expenses (

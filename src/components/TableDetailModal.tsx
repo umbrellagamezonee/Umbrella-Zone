@@ -14,7 +14,22 @@ import { useSettingsStore } from "../store/useSettingsStore";
 import { formatDuration, formatMoney, elapsedMinutesExact, costForElapsed } from "../lib/format";
 import { tableElapsedMs, tableRemainingMs, activeRate } from "../lib/tableTiming";
 import type { BillingTable, Bill } from "../types";
-import { Plus, Minus, Users, UserPlus, Search, Frown } from "lucide-react";
+import { Plus, Minus, Users, UserPlus, Search, Frown, Pencil, Check } from "lucide-react";
+
+// Splits `total` equally among `n` payers down to the paisa, handing any
+// leftover paisa to the first few payers so the shares always add back up
+// exactly (floating-point division alone can leave the sum a paisa short).
+function splitEqually(total: number, names: string[]) {
+  const n = names.length;
+  const totalPaise = Math.round(total * 100);
+  const base = Math.floor(totalPaise / n);
+  const remainder = totalPaise - base * n;
+  return names.map((name, i) => ({
+    label: "Loser share",
+    payerName: name,
+    amount: (base + (i < remainder ? 1 : 0)) / 100,
+  }));
+}
 
 export function TableDetailModal({
   table,
@@ -48,6 +63,8 @@ export function TableDetailModal({
   const [showSplit, setShowSplit] = useState(false);
   const [showAddPerson, setShowAddPerson] = useState(false);
   const [showLoserPicker, setShowLoserPicker] = useState(false);
+  const [selectedLoserIds, setSelectedLoserIds] = useState<string[]>([]);
+  const [showEditTime, setShowEditTime] = useState(false);
   // Snapshot taken right before a non-split Stop & Bill, so cancelling the
   // checkout before paying can put the session back exactly as it was
   // instead of leaving it stopped with nowhere to undo from.
@@ -84,7 +101,7 @@ export function TableDetailModal({
 
   function handleStopAndBill(
     shares?: { label: string; payerName: string; amount: number }[],
-    loser?: { customerId: string; name: string }
+    losers?: { customerId: string; name: string }[]
   ) {
     const tableSnapshot: Partial<BillingTable> = {
       status: table.status,
@@ -102,7 +119,7 @@ export function TableDetailModal({
       tableName: table.name,
       gameId: game?.id ?? null,
       gameName: game?.name ?? null,
-      customerId: loser?.customerId ?? table.customerId,
+      customerId: losers?.length === 1 ? losers[0].customerId : table.customerId,
       tableChargeMinutes: minutesBilled,
       tableCharge,
       canteenCharge: canteenTotal,
@@ -110,7 +127,7 @@ export function TableDetailModal({
       discount: shares ? 0 : effectiveDiscount,
       shares,
       matchParticipants: participantNames.length > 1 ? participantNames : null,
-      matchLoser: loser?.name ?? null,
+      matchLosers: losers && losers.length > 0 ? losers.map((l) => l.name) : null,
     });
     if (order) markBilled(order.id);
     // Split bills can end up partially paid, so there's nothing safe to undo
@@ -169,7 +186,18 @@ export function TableDetailModal({
                     <UserPlus size={11} />
                   </button>
                 </div>
-                <p className="text-2xl font-bold font-mono">{formatDuration(elapsed)}</p>
+                <div className="flex items-center gap-2">
+                  <p className="text-2xl font-bold font-mono">{formatDuration(elapsed)}</p>
+                  {table.status !== "available" && (
+                    <button
+                      onClick={() => setShowEditTime(true)}
+                      className="h-6 w-6 flex items-center justify-center rounded-full bg-[var(--color-surface-2)] text-[var(--color-text-dim)] shrink-0"
+                      title="Edit elapsed time"
+                    >
+                      <Pencil size={11} />
+                    </button>
+                  )}
+                </div>
                 {remaining != null && (
                   <p
                     className={
@@ -368,29 +396,160 @@ export function TableDetailModal({
       )}
 
       {showLoserPicker && (
-        <Modal title="Who lost?" onClose={() => setShowLoserPicker(false)}>
+        <Modal
+          title="Who lost?"
+          onClose={() => {
+            setShowLoserPicker(false);
+            setSelectedLoserIds([]);
+          }}
+        >
           <div className="space-y-3">
             <p className="text-xs text-[var(--color-text-faint)]">
-              Whole bill goes on their tab — everyone else played free this round.
+              Pick everyone who lost — the bill splits equally between them. Everyone else played
+              free this round.
             </p>
             <div className="space-y-2">
-              {participants.map((p) => (
-                <button
-                  key={p.id}
-                  onClick={() => {
-                    setShowLoserPicker(false);
-                    handleStopAndBill(undefined, { customerId: p.id, name: p.name });
-                  }}
-                  className="w-full flex items-center justify-between rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-2)] px-4 py-3 text-left"
-                >
-                  <span className="text-sm font-medium">{p.name}</span>
-                  <span className="text-xs text-[var(--color-danger)]">Pays {formatMoney(total, currency)}</span>
-                </button>
-              ))}
+              {participants.map((p) => {
+                const checked = selectedLoserIds.includes(p.id);
+                return (
+                  <button
+                    key={p.id}
+                    onClick={() =>
+                      setSelectedLoserIds((ids) =>
+                        checked ? ids.filter((id) => id !== p.id) : [...ids, p.id]
+                      )
+                    }
+                    className={
+                      "w-full flex items-center gap-3 rounded-xl border px-4 py-3 text-left " +
+                      (checked
+                        ? "border-[var(--color-danger)] bg-[var(--color-danger)]/10"
+                        : "border-[var(--color-border)] bg-[var(--color-surface-2)]")
+                    }
+                  >
+                    <span
+                      className={
+                        "h-5 w-5 rounded-md border flex items-center justify-center shrink-0 " +
+                        (checked
+                          ? "border-[var(--color-danger)] bg-[var(--color-danger)]"
+                          : "border-[var(--color-border)]")
+                      }
+                    >
+                      {checked && <Check size={13} className="text-white" />}
+                    </span>
+                    <span className="text-sm font-medium flex-1">{p.name}</span>
+                  </button>
+                );
+              })}
             </div>
+            {selectedLoserIds.length > 0 && (
+              <p className="text-xs text-[var(--color-text-dim)] text-center">
+                {selectedLoserIds.length === 1
+                  ? `Pays full ${formatMoney(total, currency)}`
+                  : `${selectedLoserIds.length} losers · ${formatMoney(
+                      total / selectedLoserIds.length,
+                      currency
+                    )} each`}
+              </p>
+            )}
+            <button
+              onClick={() => {
+                const losers = participants
+                  .filter((p) => selectedLoserIds.includes(p.id))
+                  .map((p) => ({ customerId: p.id, name: p.name }));
+                setShowLoserPicker(false);
+                setSelectedLoserIds([]);
+                if (losers.length <= 1) {
+                  handleStopAndBill(undefined, losers);
+                } else {
+                  handleStopAndBill(
+                    splitEqually(total, losers.map((l) => l.name)),
+                    losers
+                  );
+                }
+              }}
+              disabled={selectedLoserIds.length === 0}
+              className="w-full flex items-center justify-center gap-2 rounded-xl bg-[var(--color-danger)] disabled:opacity-40 text-white font-semibold py-3"
+            >
+              <Frown size={15} />
+              Bill {selectedLoserIds.length || ""} loser{selectedLoserIds.length === 1 ? "" : "s"}
+            </button>
           </div>
         </Modal>
       )}
+
+      {showEditTime && (
+        <EditTimeModal
+          currentMs={elapsed}
+          onClose={() => setShowEditTime(false)}
+          onSave={(newMs) => {
+            updateTable(table.id, {
+              accumulatedMs: newMs,
+              ...(table.status === "running" ? { sessionStartedAt: now } : {}),
+            });
+            setShowEditTime(false);
+          }}
+        />
+      )}
+    </Modal>
+  );
+}
+
+function EditTimeModal({
+  currentMs,
+  onClose,
+  onSave,
+}: {
+  currentMs: number;
+  onClose: () => void;
+  onSave: (ms: number) => void;
+}) {
+  const totalMinutes = Math.round(currentMs / 60000);
+  const [hours, setHours] = useState(String(Math.floor(totalMinutes / 60)));
+  const [minutes, setMinutes] = useState(String(totalMinutes % 60));
+
+  function handleSave() {
+    const h = Math.max(0, Number(hours) || 0);
+    const m = Math.max(0, Math.min(59, Number(minutes) || 0));
+    onSave((h * 60 + m) * 60000);
+  }
+
+  return (
+    <Modal title="Edit elapsed time" onClose={onClose}>
+      <div className="space-y-4">
+        <p className="text-xs text-[var(--color-text-faint)]">
+          Correct the timer if it was started late or a pause was missed — billing uses this
+          duration.
+        </p>
+        <div className="flex items-center gap-3">
+          <div className="flex-1">
+            <p className="text-xs text-[var(--color-text-dim)] mb-1">Hours</p>
+            <input
+              type="number"
+              min={0}
+              value={hours}
+              onChange={(e) => setHours(e.target.value)}
+              className="w-full rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] px-3 py-2.5 text-sm outline-none text-center"
+            />
+          </div>
+          <div className="flex-1">
+            <p className="text-xs text-[var(--color-text-dim)] mb-1">Minutes</p>
+            <input
+              type="number"
+              min={0}
+              max={59}
+              value={minutes}
+              onChange={(e) => setMinutes(e.target.value)}
+              className="w-full rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] px-3 py-2.5 text-sm outline-none text-center"
+            />
+          </div>
+        </div>
+        <button
+          onClick={handleSave}
+          className="w-full rounded-xl bg-[var(--color-primary)] text-white font-semibold py-3"
+        >
+          Save
+        </button>
+      </div>
     </Modal>
   );
 }

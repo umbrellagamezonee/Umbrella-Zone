@@ -11,13 +11,19 @@ import { Check, ArrowLeft } from "lucide-react";
 
 type RowStep = "idle" | "upi-qr";
 
-export function SplitCheckout({ bill, onDone }: { bill: Bill; onDone: () => void }) {
+export function SplitCheckout({ bill: initialBill, onDone }: { bill: Bill; onDone: () => void }) {
   const currency = useSettingsStore((s) => s.currencySymbol);
   const storeName = useSettingsStore((s) => s.storeName);
   const upiId = useSettingsStore((s) => s.upiId);
   const settleShare = useBillsStore((s) => s.settleShare);
   const findOrCreateCustomer = useCustomersStore((s) => s.findOrCreateCustomer);
   const adjustCredit = useCustomersStore((s) => s.adjustCredit);
+  // `initialBill` is a snapshot from the moment checkout opened — read the
+  // live copy from the store instead so each share flips to "paid" on
+  // screen the instant it's settled, without needing to close and reopen.
+  const bill =
+    useBillsStore((s) => s.bills.find((b) => b.id === initialBill.id) ?? s.deletedBills.find((b) => b.id === initialBill.id)) ??
+    initialBill;
 
   const [steps, setSteps] = useState<Record<string, RowStep>>({});
 

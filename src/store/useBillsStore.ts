@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { Bill, BillCanteenItem, BillShare, PaymentMethod } from "../types";
-import { setupSync, pushInsert, pushUpsert, pushDelete } from "../lib/cloudSync";
+import { setupSync, pushInsert, pushUpsert, pushDelete, pushDeleteAll } from "../lib/cloudSync";
 
 interface ShareInput {
   label: string;
@@ -23,7 +23,7 @@ interface CreateBillInput {
   discount: number;
   shares?: ShareInput[];
   matchParticipants?: string[] | null;
-  matchLoser?: string | null;
+  matchLosers?: string[] | null;
 }
 
 interface SettleInput {
@@ -59,7 +59,7 @@ interface BillRow {
   paid_at: string | null;
   deleted_at: string | null;
   match_participants: string[] | null;
-  match_loser: string | null;
+  match_losers: string[] | null;
 }
 
 const TABLE = "bills";
@@ -86,7 +86,7 @@ const fromRow = (row: BillRow): Bill => ({
   paidAt: row.paid_at ? new Date(row.paid_at).getTime() : null,
   deletedAt: row.deleted_at ? new Date(row.deleted_at).getTime() : null,
   matchParticipants: row.match_participants ?? null,
-  matchLoser: row.match_loser ?? null,
+  matchLosers: row.match_losers ?? null,
 });
 const toRow = (b: Bill): BillRow => ({
   id: b.id,
@@ -111,7 +111,7 @@ const toRow = (b: Bill): BillRow => ({
   paid_at: b.paidAt ? new Date(b.paidAt).toISOString() : null,
   deleted_at: b.deletedAt ? new Date(b.deletedAt).toISOString() : null,
   match_participants: b.matchParticipants,
-  match_loser: b.matchLoser,
+  match_losers: b.matchLosers,
 });
 
 function pushBill(id: string) {
@@ -135,6 +135,7 @@ interface BillsState {
   restoreBill: (id: string) => void;
   permanentlyDeleteBill: (id: string) => void;
   todaysBills: () => Bill[];
+  resetAll: () => void;
 }
 
 function isToday(ts: number) {
@@ -192,7 +193,7 @@ export const useBillsStore = create<BillsState>()(
           paidAt: null,
           deletedAt: null,
           matchParticipants: input.matchParticipants ?? null,
-          matchLoser: input.matchLoser ?? null,
+          matchLosers: input.matchLosers ?? null,
         };
         set((state) => ({ bills: [bill, ...state.bills] }));
         pushInsert(TABLE, toRow(bill));
@@ -301,16 +302,21 @@ export const useBillsStore = create<BillsState>()(
       },
 
       todaysBills: () => get().bills.filter((b) => isToday(b.createdAt)),
+
+      resetAll: () => {
+        set({ bills: [], deletedBills: [] });
+        pushDeleteAll(TABLE);
+      },
     }),
     {
       name: "cuebill-bills",
-      version: 6,
+      version: 7,
       migrate: (persisted) => {
         const state = persisted as {
-          bills?: (Partial<Bill> & { id: string; total: number })[];
-          deletedBills?: (Partial<Bill> & { id: string; total: number })[];
+          bills?: (Partial<Bill> & { id: string; total: number; matchLoser?: string | null })[];
+          deletedBills?: (Partial<Bill> & { id: string; total: number; matchLoser?: string | null })[];
         };
-        const fill = (b: Partial<Bill> & { id: string; total: number }): Bill => ({
+        const fill = (b: Partial<Bill> & { id: string; total: number; matchLoser?: string | null }): Bill => ({
           id: b.id,
           tableId: b.tableId ?? null,
           tableName: b.tableName ?? null,
@@ -333,7 +339,9 @@ export const useBillsStore = create<BillsState>()(
           paidAt: b.paidAt ?? null,
           deletedAt: b.deletedAt ?? null,
           matchParticipants: b.matchParticipants ?? null,
-          matchLoser: b.matchLoser ?? null,
+          // Old persisted bills only ever had a single `matchLoser` string —
+          // wrap it into the new array shape instead of losing it.
+          matchLosers: b.matchLosers ?? (b.matchLoser ? [b.matchLoser] : null),
         });
         return {
           bills: (state.bills ?? []).map(fill),
