@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { Modal } from "./ui/Modal";
 import { Card } from "./ui/Card";
-import { PhoneInput } from "./ui/PhoneInput";
 import { useBillsStore } from "../store/useBillsStore";
 import { useCustomersStore } from "../store/useCustomersStore";
 import { useSettingsStore } from "../store/useSettingsStore";
@@ -50,7 +49,6 @@ export function Checkout({ bill, onDone, onCancel, onSettled }: CheckoutProps) {
   const [payerName, setPayerName] = useState(
     billCustomer && !billCustomer.isWalkIn ? billCustomer.name : ""
   );
-  const [payerPhone, setPayerPhone] = useState("");
   const [settled, setSettled] = useState<{
     method: PaymentMethod;
     amountPaid: number;
@@ -69,15 +67,13 @@ export function Checkout({ bill, onDone, onCancel, onSettled }: CheckoutProps) {
     let creditCustomerName = billCustomer?.name ?? null;
 
     if (due > 0 && !isRegistered) {
-      if (!payerName.trim() && !payerPhone.trim()) {
-        setError("Enter a name or phone number so this balance can be tracked.");
+      if (!payerName.trim()) {
+        setError("Enter a name so this balance can be tracked.");
         return;
       }
-      // Matches an existing customer by phone (if given) or by name, so the
-      // same person's credit keeps landing on one profile instead of
-      // splintering into duplicates. Either name or phone alone is enough —
-      // findOrCreateCustomer falls back to "Guest" when name is left blank.
-      const c = findOrCreateCustomer({ name: payerName.trim(), phone: payerPhone.trim() });
+      // Matches an existing customer by name so the same person's credit
+      // keeps landing on one profile instead of splintering into duplicates.
+      const c = findOrCreateCustomer({ name: payerName.trim(), phone: "" });
       creditCustomerId = c.id;
       creditCustomerName = c.name;
     }
@@ -224,9 +220,8 @@ export function Checkout({ bill, onDone, onCancel, onSettled }: CheckoutProps) {
       {needsContact && (
         <div className="space-y-2">
           <p className="text-xs text-[var(--color-text-faint)]">
-            Only needed if you're leaving any balance unpaid — name or phone is enough, either
-            one. Same name or number reuses their existing credit profile; a phone also enables
-            reminders.
+            Only needed if you're leaving any balance unpaid. Same name reuses their existing
+            credit profile.
           </p>
           <input
             value={payerName}
@@ -234,7 +229,6 @@ export function Checkout({ bill, onDone, onCancel, onSettled }: CheckoutProps) {
             placeholder="Name"
             className="w-full rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] px-3 py-2 text-sm outline-none"
           />
-          <PhoneInput value={payerPhone} onChange={setPayerPhone} />
         </div>
       )}
 
@@ -249,8 +243,8 @@ export function Checkout({ bill, onDone, onCancel, onSettled }: CheckoutProps) {
         </button>
         <button
           onClick={() => {
-            if (needsContact && creditPortion > 0 && !payerName.trim() && !payerPhone.trim()) {
-              setError("Enter a name or phone number so this balance can be tracked.");
+            if (needsContact && creditPortion > 0 && !payerName.trim()) {
+              setError("Enter a name so this balance can be tracked.");
               return;
             }
             setError("");

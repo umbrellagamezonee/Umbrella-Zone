@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { Modal } from "./ui/Modal";
-import { PhoneInput } from "./ui/PhoneInput";
 import { useTablesStore } from "../store/useTablesStore";
 import { useGamesStore } from "../store/useGamesStore";
 import { useCustomersStore } from "../store/useCustomersStore";
@@ -13,12 +12,11 @@ import { Play, Plus, X } from "lucide-react";
 interface PersonRow {
   key: number;
   name: string;
-  phone: string;
 }
 
 let rowKeySeq = 0;
 function newRow(): PersonRow {
-  return { key: rowKeySeq++, name: "", phone: "" };
+  return { key: rowKeySeq++, name: "" };
 }
 
 // The fast path for starting a session: tap a table, type a name, go. More
@@ -51,7 +49,7 @@ export function StartSessionModal({ table, onClose }: { table: BillingTable; onC
   function handleStart() {
     const named = people.filter((p) => p.name.trim().length > 0);
     if (named.length === 0) return;
-    const customers = named.map((p) => findOrCreateCustomer({ name: p.name, phone: p.phone }));
+    const customers = named.map((p) => findOrCreateCustomer({ name: p.name, phone: "" }));
     const [primary, ...extra] = customers;
     startSession(table.id, primary.id, {
       gameId: selectedGame?.id ?? null,
@@ -120,20 +118,12 @@ export function StartSessionModal({ table, onClose }: { table: BillingTable; onC
           <Play size={16} /> Start
         </button>
 
-        <details className="pt-1">
-          <summary className="text-xs text-[var(--color-text-faint)] cursor-pointer select-none">
-            Phone / game (optional)
-          </summary>
-          <div className="space-y-2 mt-2">
-            {people.map((row) => (
-              <PhoneInput
-                key={row.key}
-                value={row.phone}
-                onChange={(v) => updatePerson(row.key, { phone: v })}
-                className={row.name.trim() ? "" : "opacity-60"}
-              />
-            ))}
-            {gamesForTable.length > 0 && (
+        {gamesForTable.length > 0 && (
+          <details className="pt-1">
+            <summary className="text-xs text-[var(--color-text-faint)] cursor-pointer select-none">
+              Game (optional)
+            </summary>
+            <div className="mt-2">
               <select
                 value={gameId}
                 onChange={(e) => setGameId(e.target.value)}
@@ -146,9 +136,9 @@ export function StartSessionModal({ table, onClose }: { table: BillingTable; onC
                   </option>
                 ))}
               </select>
-            )}
-          </div>
-        </details>
+            </div>
+          </details>
+        )}
       </div>
     </Modal>
   );

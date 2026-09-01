@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { Modal } from "./ui/Modal";
 import { Card } from "./ui/Card";
-import { PhoneInput } from "./ui/PhoneInput";
 import { useBillsStore } from "../store/useBillsStore";
 import { useCustomersStore } from "../store/useCustomersStore";
 import { useSettingsStore } from "../store/useSettingsStore";
@@ -10,7 +9,7 @@ import type { Bill, BillShare, PaymentMethod } from "../types";
 import { QRCodeSVG } from "qrcode.react";
 import { Check, ArrowLeft } from "lucide-react";
 
-type RowStep = "idle" | "upi-qr" | "credit-phone";
+type RowStep = "idle" | "upi-qr";
 
 export function SplitCheckout({ bill, onDone }: { bill: Bill; onDone: () => void }) {
   const currency = useSettingsStore((s) => s.currencySymbol);
@@ -21,7 +20,6 @@ export function SplitCheckout({ bill, onDone }: { bill: Bill; onDone: () => void
   const adjustCredit = useCustomersStore((s) => s.adjustCredit);
 
   const [steps, setSteps] = useState<Record<string, RowStep>>({});
-  const [phones, setPhones] = useState<Record<string, string>>({});
 
   const shares = bill.shares ?? [];
   const allPaid = shares.length > 0 && shares.every((s) => s.status === "paid");
@@ -30,13 +28,12 @@ export function SplitCheckout({ bill, onDone }: { bill: Bill; onDone: () => void
     setSteps((s) => ({ ...s, [shareId]: step }));
   }
 
-  function settle(share: BillShare, method: PaymentMethod, payerPhone?: string) {
-    settleShare(bill.id, share.id, { method, payerPhone });
+  function settle(share: BillShare, method: PaymentMethod) {
+    settleShare(bill.id, share.id, { method });
     if (method === "credit") {
-      // Phone is optional — matches an existing customer by phone (if given)
-      // or by the share's payer name, so the same person's credit lands on
-      // one profile instead of splintering into duplicates.
-      const customer = findOrCreateCustomer({ name: share.payerName, phone: payerPhone ?? "" });
+      // Matches an existing customer by the share's payer name, so the same
+      // person's credit lands on one profile instead of splintering.
+      const customer = findOrCreateCustomer({ name: share.payerName, phone: "" });
       adjustCredit(customer.id, share.amount);
     }
     setStep(share.id, "idle");
@@ -105,38 +102,6 @@ export function SplitCheckout({ bill, onDone }: { bill: Bill; onDone: () => void
             );
           }
 
-          if (step === "credit-phone") {
-            return (
-              <Card key={share.id}>
-                <div className="flex items-center gap-2 mb-2">
-                  <button
-                    onClick={() => setStep(share.id, "idle")}
-                    className="h-7 w-7 flex items-center justify-center rounded-full bg-[var(--color-surface-2)]"
-                  >
-                    <ArrowLeft size={12} />
-                  </button>
-                  <p className="text-xs text-[var(--color-text-dim)]">
-                    {share.label} · {share.payerName} · {formatMoney(share.amount, currency)}
-                  </p>
-                </div>
-                <p className="text-xs text-[var(--color-text-faint)] mb-2">
-                  Phone is optional — enables reminders for this balance.
-                </p>
-                <PhoneInput
-                  value={phones[share.id] ?? ""}
-                  onChange={(v) => setPhones((p) => ({ ...p, [share.id]: v }))}
-                  className="mb-2"
-                />
-                <button
-                  onClick={() => settle(share, "credit", phones[share.id]?.trim())}
-                  className="w-full rounded-xl bg-[var(--color-warning)]/15 text-[var(--color-warning)] font-semibold py-2.5 text-sm"
-                >
-                  Add to credit
-                </button>
-              </Card>
-            );
-          }
-
           return (
             <Card key={share.id}>
               <div className="flex items-center justify-between mb-2">
@@ -160,7 +125,7 @@ export function SplitCheckout({ bill, onDone }: { bill: Bill; onDone: () => void
                   UPI
                 </button>
                 <button
-                  onClick={() => setStep(share.id, "credit-phone")}
+                  onClick={() => settle(share, "credit")}
                   className="rounded-xl bg-[var(--color-warning)]/15 text-[var(--color-warning)] font-medium py-2 text-xs"
                 >
                   Credit

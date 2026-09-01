@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { Modal } from "./ui/Modal";
 import { Card } from "./ui/Card";
-import { PhoneInput } from "./ui/PhoneInput";
 import { SplitBillModal } from "./SplitBillModal";
 import { SplitCheckout } from "./SplitCheckout";
 import { Checkout } from "./Checkout";
@@ -315,8 +314,8 @@ export function TableDetailModal({
       {showAddPerson && (
         <AddPersonModal
           onClose={() => setShowAddPerson(false)}
-          onAdd={(name, phone) => {
-            const c = findOrCreateCustomer({ name, phone });
+          onAdd={(name) => {
+            const c = findOrCreateCustomer({ name, phone: "" });
             addParticipant(table.id, c.id);
             setShowAddPerson(false);
           }}
@@ -331,14 +330,13 @@ function AddPersonModal({
   onAdd,
 }: {
   onClose: () => void;
-  onAdd: (name: string, phone: string) => void;
+  onAdd: (name: string) => void;
 }) {
   const [name, setName] = useState("");
-  const [phone, setPhone] = useState("");
 
   function handleAdd() {
     if (!name.trim()) return;
-    onAdd(name.trim(), phone);
+    onAdd(name.trim());
   }
 
   return (
@@ -352,7 +350,6 @@ function AddPersonModal({
           onKeyDown={(e) => e.key === "Enter" && handleAdd()}
           className="w-full rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] px-3 py-3 text-base outline-none focus:border-[var(--color-primary)]"
         />
-        <PhoneInput value={phone} onChange={setPhone} />
         <button
           onClick={handleAdd}
           disabled={!name.trim()}
