@@ -897,6 +897,7 @@ function ThemeModal({ onClose }: { onClose: () => void }) {
 function ResetAllDataModal({ onClose }: { onClose: () => void }) {
   const tables = useTablesStore((s) => s.tables);
   const stopSession = useTablesStore((s) => s.stopSession);
+  const storeName = useSettingsStore((s) => s.storeName);
   const resetBills = useBillsStore((s) => s.resetAll);
   const resetOrders = useOrdersStore((s) => s.resetAll);
   const resetCustomers = useCustomersStore((s) => s.resetAll);
@@ -905,7 +906,10 @@ function ResetAllDataModal({ onClose }: { onClose: () => void }) {
   const [confirmText, setConfirmText] = useState("");
   const [done, setDone] = useState(false);
 
-  const canDelete = confirmText.trim().toUpperCase() === "DELETE";
+  // Typing the store's own name is a much higher bar than a generic word
+  // like "DELETE" — this is a real business's live data, shared across every
+  // device, with no undo and no trash to recover from.
+  const canDelete = confirmText.trim().toLowerCase() === storeName.trim().toLowerCase() && storeName.trim().length > 0;
 
   function handleReset() {
     if (!canDelete) return;
@@ -958,12 +962,12 @@ function ResetAllDataModal({ onClose }: { onClose: () => void }) {
         </p>
         <div>
           <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-1.5">
-            TYPE "DELETE" TO CONFIRM
+            TYPE "{storeName}" TO CONFIRM
           </p>
           <input
             value={confirmText}
             onChange={(e) => setConfirmText(e.target.value)}
-            placeholder="DELETE"
+            placeholder={storeName}
             className="w-full rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] px-3 py-2.5 text-sm outline-none"
           />
         </div>
