@@ -14,7 +14,7 @@ import { useSettingsStore } from "../store/useSettingsStore";
 import { formatDuration, formatMoney, elapsedMinutesExact, costForElapsed } from "../lib/format";
 import { tableElapsedMs, tableRemainingMs, activeRate } from "../lib/tableTiming";
 import type { BillingTable, Bill } from "../types";
-import { Plus, Minus, Users, UserPlus, Search, Frown, Pencil, Check, Pause, Play } from "lucide-react";
+import { Plus, Minus, Users, UserPlus, Search, Frown, Pencil, Check, Pause, Play, Gamepad2 } from "lucide-react";
 
 // Splits `total` equally among `n` payers down to the paisa, handing any
 // leftover paisa to the first few payers so the shares always add back up
@@ -67,6 +67,7 @@ export function TableDetailModal({
   const [showLoserPicker, setShowLoserPicker] = useState(false);
   const [selectedLoserIds, setSelectedLoserIds] = useState<string[]>([]);
   const [showEditTime, setShowEditTime] = useState(false);
+  const [showGamePicker, setShowGamePicker] = useState(false);
   // Which participant new canteen items get tagged to — null means "shared /
   // no one specific". Only shown once there's more than one person here.
   const [addForId, setAddForId] = useState<string | null>(null);
@@ -84,6 +85,7 @@ export function TableDetailModal({
 
   const rate = activeRate(table);
   const game = games.find((g) => g.id === table.activeGameId);
+  const gamesForTable = games.filter((g) => g.kind === table.kind);
   const elapsed = tableElapsedMs(table, now);
   const minutesBilled = elapsedMinutesExact(elapsed);
   const tableCharge = table.status === "available" ? 0 : costForElapsed(elapsed, rate);
@@ -203,6 +205,15 @@ export function TableDetailModal({
                   >
                     <UserPlus size={11} />
                   </button>
+                  {gamesForTable.length > 0 && (
+                    <button
+                      onClick={() => setShowGamePicker(true)}
+                      className="h-5 w-5 flex items-center justify-center rounded-full bg-[var(--color-surface-2)] text-[var(--color-primary)] shrink-0"
+                      title={game ? "Change game" : "Set a game"}
+                    >
+                      <Gamepad2 size={11} />
+                    </button>
+                  )}
                 </div>
                 <div className="flex items-center gap-2">
                   <p className="text-2xl font-bold font-mono">{formatDuration(elapsed)}</p>
@@ -579,6 +590,23 @@ export function TableDetailModal({
           }}
         />
       )}
+
+      {showGamePicker && (
+        <GamePickerModal
+          games={gamesForTable}
+          currentGameId={table.activeGameId}
+          currency={currency}
+          onClose={() => setShowGamePicker(false)}
+          onSave={(newGameId) => {
+            const newGame = gamesForTable.find((g) => g.id === newGameId) ?? null;
+            updateTable(table.id, {
+              activeGameId: newGame?.id ?? null,
+              sessionRatePerHour: newGame?.ratePerHour ?? null,
+            });
+            setShowGamePicker(false);
+          }}
+        />
+      )}
     </Modal>
   );
 }
@@ -634,6 +662,52 @@ function EditTimeModal({
         </div>
         <button
           onClick={handleSave}
+          className="w-full rounded-xl bg-[var(--color-primary)] text-white font-semibold py-3"
+        >
+          Save
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+function GamePickerModal({
+  games,
+  currentGameId,
+  currency,
+  onClose,
+  onSave,
+}: {
+  games: { id: string; name: string; ratePerHour: number }[];
+  currentGameId: string | null;
+  currency: string;
+  onClose: () => void;
+  onSave: (gameId: string) => void;
+}) {
+  const [gameId, setGameId] = useState(currentGameId ?? "");
+
+  return (
+    <Modal title="Change Game" onClose={onClose}>
+      <div className="space-y-4">
+        <p className="text-xs text-[var(--color-text-faint)]">
+          The new rate applies to this whole session, including time already played — for a
+          clean split at the old rate, Stop &amp; Bill first, then start fresh with the new game.
+        </p>
+        <select
+          value={gameId}
+          onChange={(e) => setGameId(e.target.value)}
+          autoFocus
+          className="w-full rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] px-3 py-2.5 text-sm outline-none"
+        >
+          <option value="">Default table rate</option>
+          {games.map((g) => (
+            <option key={g.id} value={g.id}>
+              {g.name} · {formatMoney(g.ratePerHour, currency)}/hr
+            </option>
+          ))}
+        </select>
+        <button
+          onClick={() => onSave(gameId)}
           className="w-full rounded-xl bg-[var(--color-primary)] text-white font-semibold py-3"
         >
           Save
