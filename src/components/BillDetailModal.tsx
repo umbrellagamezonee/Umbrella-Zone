@@ -34,14 +34,20 @@ export function BillDetailModal({ bill, onClose }: { bill: Bill; onClose: () => 
           <span
             className={
               "text-[11px] font-medium rounded-full px-2.5 py-1 shrink-0 " +
-              (bill.status === "paid"
-                ? "bg-[var(--color-success)]/15 text-[var(--color-success)]"
-                : bill.status === "cancelled"
+              (bill.status === "cancelled"
                 ? "bg-[var(--color-text-faint)]/15 text-[var(--color-text-faint)]"
+                : bill.status === "paid" && bill.amountDue === 0
+                ? "bg-[var(--color-success)]/15 text-[var(--color-success)]"
                 : "bg-[var(--color-warning)]/15 text-[var(--color-warning)]")
             }
           >
-            {bill.status === "paid" ? "Paid" : bill.status === "cancelled" ? "Cancelled" : "Open"}
+            {bill.status === "cancelled"
+              ? "Cancelled"
+              : bill.status === "open"
+              ? "Open"
+              : bill.amountDue > 0
+              ? "On credit"
+              : "Paid"}
           </span>
         </div>
 
@@ -158,7 +164,9 @@ export function BillDetailModal({ bill, onClose }: { bill: Bill; onClose: () => 
                     </span>
                     <span
                       className={
-                        s.status === "paid" ? "text-[var(--color-success)]" : "text-[var(--color-warning)]"
+                        s.status === "paid" && s.paymentMethod !== "credit"
+                          ? "text-[var(--color-success)]"
+                          : "text-[var(--color-warning)]"
                       }
                     >
                       {s.status === "paid"

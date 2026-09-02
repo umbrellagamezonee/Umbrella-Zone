@@ -82,11 +82,22 @@ export function SplitCheckout({ bill: initialBill, onDone }: { bill: Bill; onDon
           )}&am=${share.amount.toFixed(2)}&cu=INR&tn=${encodeURIComponent(share.label)}`;
 
           if (share.status === "paid") {
+            const onCredit = share.paymentMethod === "credit";
             return (
-              <Card key={share.id} className="border-[var(--color-success)]/40">
+              <Card
+                key={share.id}
+                className={onCredit ? "border-[var(--color-warning)]/40" : "border-[var(--color-success)]/40"}
+              >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <div className="h-7 w-7 rounded-full bg-[var(--color-success)]/15 text-[var(--color-success)] flex items-center justify-center">
+                    <div
+                      className={
+                        "h-7 w-7 rounded-full flex items-center justify-center " +
+                        (onCredit
+                          ? "bg-[var(--color-warning)]/15 text-[var(--color-warning)]"
+                          : "bg-[var(--color-success)]/15 text-[var(--color-success)]")
+                      }
+                    >
                       <Check size={14} />
                     </div>
                     <div>
@@ -96,8 +107,13 @@ export function SplitCheckout({ bill: initialBill, onDone }: { bill: Bill; onDon
                   </div>
                   <div className="text-right">
                     <p className="text-sm font-semibold">{formatMoney(share.amount, currency)}</p>
-                    <p className="text-xs text-[var(--color-text-faint)] capitalize">
-                      {share.paymentMethod}
+                    <p
+                      className={
+                        "text-xs capitalize " +
+                        (onCredit ? "text-[var(--color-warning)]" : "text-[var(--color-text-faint)]")
+                      }
+                    >
+                      {onCredit ? "on credit" : share.paymentMethod}
                     </p>
                   </div>
                 </div>

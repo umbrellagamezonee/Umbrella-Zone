@@ -61,7 +61,7 @@ export function Canteen() {
       tableChargeMinutes: 0,
       tableCharge: 0,
       canteenCharge: total,
-      canteenItems: order.items.map((i) => ({ name: i.name, price: i.price, qty: i.qty })),
+      canteenItems: order.items.map((i) => ({ name: i.name, price: i.price, qty: i.qty, personName: i.personName ?? null })),
       discount: 0,
     });
     // Mark billed now (not when the checkout modal closes) — otherwise

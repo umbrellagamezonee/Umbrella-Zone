@@ -284,7 +284,12 @@ export function Reports() {
                   hour: "2-digit",
                   minute: "2-digit",
                 })}{" "}
-                · {bill.status}
+                ·{" "}
+                {bill.status === "paid" && bill.amountPaid === 0
+                  ? "on credit"
+                  : bill.status === "paid"
+                  ? "paid"
+                  : bill.status}
               </p>
               {bill.matchParticipants && bill.matchParticipants.length > 1 && (
                 <p className="text-xs text-[var(--color-text-faint)] mt-0.5">
