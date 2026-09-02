@@ -3,11 +3,13 @@ import { Modal } from "./ui/Modal";
 import { Card } from "./ui/Card";
 import { useBillsStore } from "../store/useBillsStore";
 import { useCustomersStore } from "../store/useCustomersStore";
+import { useTablesStore } from "../store/useTablesStore";
+import { useGamesStore } from "../store/useGamesStore";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { formatMoney } from "../lib/format";
 import type { Bill, BillShare, PaymentMethod } from "../types";
 import { QRCodeSVG } from "qrcode.react";
-import { Check, ArrowLeft } from "lucide-react";
+import { Check, ArrowLeft, Repeat } from "lucide-react";
 
 type RowStep = "idle" | "upi-qr";
 
@@ -18,6 +20,9 @@ export function SplitCheckout({ bill: initialBill, onDone }: { bill: Bill; onDon
   const settleShare = useBillsStore((s) => s.settleShare);
   const findOrCreateCustomer = useCustomersStore((s) => s.findOrCreateCustomer);
   const adjustCredit = useCustomersStore((s) => s.adjustCredit);
+  const tables = useTablesStore((s) => s.tables);
+  const startSession = useTablesStore((s) => s.startSession);
+  const games = useGamesStore((s) => s.games);
   // `initialBill` is a snapshot from the moment checkout opened — read the
   // live copy from the store instead so each share flips to "paid" on
   // screen the instant it's settled, without needing to close and reopen.
@@ -30,6 +35,27 @@ export function SplitCheckout({ bill: initialBill, onDone }: { bill: Bill; onDon
   const shares = bill.shares ?? [];
   const allPaid = shares.length > 0 && shares.every((s) => s.status === "paid");
   const anyPaid = shares.some((s) => s.status === "paid");
+  const pendingShares = shares.filter((s) => s.status !== "paid");
+  // Once someone's paid and left, whoever's still playing can carry on on
+  // the same table — a fresh session for just them, timer back at zero,
+  // billed properly whenever they actually finish.
+  const restartTable = bill.tableId ? tables.find((t) => t.id === bill.tableId) : null;
+  const canRestart =
+    anyPaid && !allPaid && !!restartTable && restartTable.status === "available" && pendingShares.length > 0;
+
+  function handleRestartForRest() {
+    if (!restartTable || pendingShares.length === 0) return;
+    const [primaryName, ...restNames] = pendingShares.map((s) => s.payerName);
+    const primary = findOrCreateCustomer({ name: primaryName, phone: "" });
+    const extraCustomerIds = restNames.map((name) => findOrCreateCustomer({ name, phone: "" }).id);
+    const game = bill.gameId ? games.find((g) => g.id === bill.gameId) : undefined;
+    startSession(restartTable.id, primary.id, {
+      extraCustomerIds,
+      gameId: game?.id ?? null,
+      ratePerHour: game?.ratePerHour ?? null,
+    });
+    onDone();
+  }
 
   function setStep(shareId: string, step: RowStep) {
     setSteps((s) => ({ ...s, [shareId]: step }));
@@ -146,6 +172,15 @@ export function SplitCheckout({ bill: initialBill, onDone }: { bill: Bill; onDon
           <p className="text-center text-sm text-[var(--color-success)] font-medium">
             All shares settled ✓
           </p>
+        )}
+
+        {canRestart && (
+          <button
+            onClick={handleRestartForRest}
+            className="w-full flex items-center justify-center gap-2 rounded-xl bg-[var(--color-primary)] text-white font-semibold py-3"
+          >
+            <Repeat size={15} /> Restart for {pendingShares.map((s) => s.payerName).join(", ")}
+          </button>
         )}
 
         <button
