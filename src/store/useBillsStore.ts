@@ -127,6 +127,13 @@ interface BillsState {
   // them — no per-screen filtering needed.
   deletedBills: Bill[];
   createOpenBill: (input: CreateBillInput) => Bill;
+  recordCreditSettlement: (input: {
+    customerId: string;
+    customerName: string;
+    amountPaid: number;
+    discount: number;
+    method: PaymentMethod;
+  }) => Bill;
   settlePayment: (id: string, input: SettleInput) => Bill | undefined;
   settleShare: (billId: string, shareId: string, input: SettleShareInput) => { bill: Bill; share: BillShare } | undefined;
   cancelBill: (id: string) => void;
@@ -194,6 +201,43 @@ export const useBillsStore = create<BillsState>()(
           deletedAt: null,
           matchParticipants: input.matchParticipants ?? null,
           matchLosers: input.matchLosers ?? null,
+        };
+        set((state) => ({ bills: [bill, ...state.bills] }));
+        pushInsert(TABLE, toRow(bill));
+        return bill;
+      },
+
+      // A customer paying off some or all of a standing credit balance —
+      // recorded as its own already-settled bill (not tied to a table) so
+      // it counts toward the day's cash/UPI collected and shows up in that
+      // customer's own history, instead of just silently shrinking a number
+      // with no record of when or how.
+      recordCreditSettlement: (input) => {
+        const total = input.amountPaid + input.discount;
+        const bill: Bill = {
+          id: crypto.randomUUID(),
+          tableId: null,
+          tableName: "Credit settlement",
+          orderId: null,
+          gameId: null,
+          gameName: null,
+          customerId: input.customerId,
+          tableChargeMinutes: 0,
+          tableCharge: 0,
+          canteenCharge: 0,
+          canteenItems: [],
+          discount: input.discount,
+          total,
+          amountPaid: input.amountPaid,
+          amountDue: 0,
+          paymentMethod: input.method,
+          shares: null,
+          status: "paid",
+          createdAt: Date.now(),
+          paidAt: Date.now(),
+          deletedAt: null,
+          matchParticipants: null,
+          matchLosers: null,
         };
         set((state) => ({ bills: [bill, ...state.bills] }));
         pushInsert(TABLE, toRow(bill));

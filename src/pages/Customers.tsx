@@ -10,8 +10,8 @@ import { useSettingsStore } from "../store/useSettingsStore";
 import { formatMoney, formatDateTime } from "../lib/format";
 import { billCollected } from "../lib/billing";
 import { sendCreditReminder } from "../lib/reminderApi";
-import type { Customer, Bill } from "../types";
-import { Search, Footprints, BellRing, Check, ChevronRight } from "lucide-react";
+import type { Customer, Bill, PaymentMethod } from "../types";
+import { Search, Footprints, BellRing, Check, ChevronRight, Wallet } from "lucide-react";
 
 function timeAgo(ts: number | null) {
   if (ts == null) return "Never reminded";
@@ -37,6 +37,7 @@ export function Customers() {
   const [sendingId, setSendingId] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ id: string; ok: boolean } | null>(null);
   const [detailCustomer, setDetailCustomer] = useState<Customer | null>(null);
+  const [settleCustomer, setSettleCustomer] = useState<Customer | null>(null);
 
   const dueCustomers = customers.filter((c) => !c.isWalkIn && c.creditBalance > 0);
 
@@ -95,19 +96,27 @@ export function Customers() {
                     {formatMoney(c.creditBalance, currency)}
                   </span>
                 </div>
-                <button
-                  onClick={() => handleRemindNow(c.id)}
-                  disabled={sendingId === c.id}
-                  className="mt-2 w-full flex items-center justify-center gap-2 rounded-xl bg-[var(--color-warning)]/15 text-[var(--color-warning)] text-sm font-medium py-2 disabled:opacity-50"
-                >
-                  {sendingId === c.id ? (
-                    <>Sending…</>
-                  ) : (
-                    <>
-                      <BellRing size={14} /> Remind now
-                    </>
-                  )}
-                </button>
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  <button
+                    onClick={() => setSettleCustomer(c)}
+                    className="flex items-center justify-center gap-2 rounded-xl bg-[var(--color-success)]/15 text-[var(--color-success)] text-sm font-medium py-2"
+                  >
+                    <Wallet size={14} /> Settle
+                  </button>
+                  <button
+                    onClick={() => handleRemindNow(c.id)}
+                    disabled={sendingId === c.id}
+                    className="flex items-center justify-center gap-2 rounded-xl bg-[var(--color-warning)]/15 text-[var(--color-warning)] text-sm font-medium py-2 disabled:opacity-50"
+                  >
+                    {sendingId === c.id ? (
+                      <>Sending…</>
+                    ) : (
+                      <>
+                        <BellRing size={14} /> Remind
+                      </>
+                    )}
+                  </button>
+                </div>
                 {notice?.id === c.id && (
                   <p
                     className={
@@ -192,6 +201,10 @@ export function Customers() {
         <CustomerDetailModal customer={detailCustomer} onClose={() => setDetailCustomer(null)} />
       )}
 
+      {settleCustomer && (
+        <SettleCreditModal customer={settleCustomer} onClose={() => setSettleCustomer(null)} />
+      )}
+
       {showAdd && (
         <Modal title="Add customer" onClose={() => setShowAdd(false)}>
           <div className="space-y-3">
@@ -225,7 +238,7 @@ export function Customers() {
 // (tapping into one) exactly what was ordered and who they played — so the
 // answer to "when did they last come in, what do they usually order" is one
 // tap away instead of scrolling through Reports guessing at names.
-function CustomerDetailModal({ customer, onClose }: { customer: Customer; onClose: () => void }) {
+function CustomerDetailModal({ customer: initialCustomer, onClose }: { customer: Customer; onClose: () => void }) {
   const bills = useBillsStore((s) => s.bills);
   // Deleted bills too — a credit balance doesn't get reversed when the bill
   // that created it is trashed, so leaving those out would hide exactly the
@@ -233,6 +246,12 @@ function CustomerDetailModal({ customer, onClose }: { customer: Customer; onClos
   const deletedBills = useBillsStore((s) => s.deletedBills);
   const currency = useSettingsStore((s) => s.currencySymbol);
   const [detailBill, setDetailBill] = useState<Bill | null>(null);
+  const [showSettle, setShowSettle] = useState(false);
+  // Read live off the store — settling a payment from right here should
+  // update the balance on screen immediately, not just after closing and
+  // reopening this modal.
+  const customer =
+    useCustomersStore((s) => s.customers.find((c) => c.id === initialCustomer.id)) ?? initialCustomer;
 
   const matchesCustomer = (b: Bill) =>
     b.customerId === customer.id ||
@@ -278,6 +297,12 @@ function CustomerDetailModal({ customer, onClose }: { customer: Customer; onClos
                 traced back further than that.
               </p>
             )}
+            <button
+              onClick={() => setShowSettle(true)}
+              className="mt-3 w-full flex items-center justify-center gap-2 rounded-xl bg-[var(--color-success)]/15 text-[var(--color-success)] text-sm font-medium py-2.5"
+            >
+              <Wallet size={14} /> Settle payment
+            </button>
           </Card>
         )}
 
@@ -340,6 +365,147 @@ function CustomerDetailModal({ customer, onClose }: { customer: Customer; onClos
       </div>
 
       {detailBill && <BillDetailModal bill={detailBill} onClose={() => setDetailBill(null)} />}
+      {showSettle && <SettleCreditModal customer={customer} onClose={() => setShowSettle(false)} />}
+    </Modal>
+  );
+}
+
+// Collects a credit payment (cash/UPI), with an optional discount to write
+// off part of what's owed — recorded as its own settled bill so it counts
+// toward the day's collection, not just a number quietly shrinking.
+function SettleCreditModal({ customer, onClose }: { customer: Customer; onClose: () => void }) {
+  const currency = useSettingsStore((s) => s.currencySymbol);
+  const recordCreditSettlement = useBillsStore((s) => s.recordCreditSettlement);
+  const adjustCredit = useCustomersStore((s) => s.adjustCredit);
+
+  const [discountInput, setDiscountInput] = useState("0");
+  const [amountInput, setAmountInput] = useState(customer.creditBalance.toFixed(2));
+  const [settled, setSettled] = useState<{ method: PaymentMethod; amountPaid: number; discount: number } | null>(
+    null
+  );
+
+  const discount = Math.min(Math.max(0, Number(discountInput) || 0), customer.creditBalance);
+  const amountPaid = Math.min(Math.max(0, Number(amountInput) || 0), customer.creditBalance - discount);
+  const remaining = Math.max(0, customer.creditBalance - amountPaid - discount);
+  const canSettle = amountPaid > 0 || discount > 0;
+
+  function handleSettle(method: PaymentMethod) {
+    if (!canSettle) return;
+    recordCreditSettlement({
+      customerId: customer.id,
+      customerName: customer.name,
+      amountPaid,
+      discount,
+      method,
+    });
+    adjustCredit(customer.id, -(amountPaid + discount));
+    setSettled({ method, amountPaid, discount });
+  }
+
+  if (settled) {
+    return (
+      <Modal title={customer.name} onClose={onClose}>
+        <div className="space-y-4 py-4 text-center">
+          <div className="mx-auto h-16 w-16 rounded-full bg-[var(--color-success)]/15 text-[var(--color-success)] flex items-center justify-center">
+            <Check size={32} />
+          </div>
+          <div>
+            {settled.amountPaid > 0 && (
+              <p className="text-2xl font-bold">{formatMoney(settled.amountPaid, currency)}</p>
+            )}
+            {settled.amountPaid > 0 && (
+              <p className="text-sm text-[var(--color-text-dim)] mt-1">
+                Received via {settled.method === "upi" ? "UPI" : "Cash"}
+              </p>
+            )}
+            {settled.discount > 0 && (
+              <p className="text-sm text-[var(--color-warning)] mt-2">
+                {formatMoney(settled.discount, currency)} written off
+              </p>
+            )}
+            <p className="text-sm text-[var(--color-text-dim)] mt-2">
+              {remaining > 0
+                ? `${formatMoney(remaining, currency)} still due`
+                : "Credit fully cleared"}
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            className="w-full rounded-xl bg-[var(--color-primary)] text-white font-semibold py-3"
+          >
+            Done
+          </button>
+        </div>
+      </Modal>
+    );
+  }
+
+  return (
+    <Modal title={`Settle · ${customer.name}`} onClose={onClose}>
+      <div className="space-y-4">
+        <Card>
+          <div className="flex justify-between text-sm">
+            <span className="text-[var(--color-text-dim)]">Total due</span>
+            <span className="font-semibold">{formatMoney(customer.creditBalance, currency)}</span>
+          </div>
+        </Card>
+
+        <div className="flex items-center justify-between">
+          <span className="text-sm text-[var(--color-text-dim)]">Discount</span>
+          <input
+            type="number"
+            min={0}
+            max={customer.creditBalance}
+            value={discountInput}
+            onChange={(e) => {
+              const raw = e.target.value;
+              setDiscountInput(raw);
+              // Keep "Receiving now" visually honest — raising the discount
+              // shouldn't leave a stale amount sitting there that adds up to
+              // more than what's actually owed.
+              const newDiscount = Math.min(Math.max(0, Number(raw) || 0), customer.creditBalance);
+              const maxAmount = customer.creditBalance - newDiscount;
+              setAmountInput((prev) => ((Number(prev) || 0) > maxAmount ? maxAmount.toFixed(2) : prev));
+            }}
+            className="w-24 text-right bg-[var(--color-surface-2)] rounded-lg px-2 py-1.5 text-sm outline-none"
+          />
+        </div>
+
+        <div className="flex items-center justify-between">
+          <span className="text-sm text-[var(--color-text-dim)]">Receiving now</span>
+          <input
+            type="number"
+            min={0}
+            max={customer.creditBalance - discount}
+            value={amountInput}
+            onChange={(e) => setAmountInput(e.target.value)}
+            className="w-24 text-right bg-[var(--color-surface-2)] rounded-lg px-2 py-1.5 text-sm outline-none"
+          />
+        </div>
+
+        <p className="text-xs text-[var(--color-text-faint)] -mt-2">
+          {remaining > 0
+            ? `${formatMoney(remaining, currency)} will still be due after this.`
+            : "This clears their credit completely."}
+        </p>
+
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            onClick={() => handleSettle("cash")}
+            disabled={!canSettle}
+            className="rounded-xl bg-[var(--color-success)]/15 text-[var(--color-success)] font-semibold py-3 text-sm disabled:opacity-40"
+          >
+            Cash
+          </button>
+          <button
+            onClick={() => handleSettle("upi")}
+            disabled={!canSettle}
+            className="rounded-xl bg-[var(--color-primary)]/15 text-[var(--color-primary)] font-semibold py-3 text-sm disabled:opacity-40"
+          >
+            UPI
+          </button>
+        </div>
+      </div>
     </Modal>
   );
 }
