@@ -7,7 +7,7 @@ import { useSettingsStore } from "../store/useSettingsStore";
 import { formatMoney } from "../lib/format";
 import type { Bill, PaymentMethod } from "../types";
 import { QRCodeSVG } from "qrcode.react";
-import { Check, ArrowLeft, Users, Frown } from "lucide-react";
+import { Check, ArrowLeft, Users, Frown, Repeat } from "lucide-react";
 
 type CheckoutStep = "select" | "upi-qr" | "success";
 
@@ -15,6 +15,9 @@ interface SwitchOptions {
   onSplitByItem: () => void;
   onSplitEqually: () => void;
   onLoserPays: () => void;
+  // Saves this bill as-is (into history, to settle whenever) and starts a
+  // fresh session on the same table for the same players right away.
+  onRestart: () => void;
 }
 
 interface CheckoutProps {
@@ -185,7 +188,7 @@ export function Checkout({ bill, onDone, onCancel, onSettled, switchOptions }: C
           <p className="text-xs text-[var(--color-text-faint)] mb-1.5">
             Changed your mind? Switch to a different way of billing this:
           </p>
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-2 gap-2">
             <button
               onClick={switchOptions.onSplitByItem}
               className="flex flex-col items-center justify-center gap-1 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[11px] font-medium py-2.5"
@@ -203,6 +206,12 @@ export function Checkout({ bill, onDone, onCancel, onSettled, switchOptions }: C
               className="flex flex-col items-center justify-center gap-1 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[11px] font-medium py-2.5"
             >
               <Frown size={14} /> Loser pays
+            </button>
+            <button
+              onClick={switchOptions.onRestart}
+              className="flex flex-col items-center justify-center gap-1 rounded-xl bg-[var(--color-primary)]/10 border border-[var(--color-primary)]/40 text-[var(--color-primary)] text-[11px] font-medium py-2.5"
+            >
+              <Repeat size={14} /> Restart
             </button>
           </div>
         </div>

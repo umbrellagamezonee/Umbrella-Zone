@@ -3,11 +3,15 @@ import { AppShell } from "../components/layout/AppShell";
 import { Card } from "../components/ui/Card";
 import { Modal } from "../components/ui/Modal";
 import { PhoneInput } from "../components/ui/PhoneInput";
+import { BillDetailModal } from "../components/BillDetailModal";
 import { useCustomersStore } from "../store/useCustomersStore";
+import { useBillsStore } from "../store/useBillsStore";
 import { useSettingsStore } from "../store/useSettingsStore";
-import { formatMoney } from "../lib/format";
+import { formatMoney, formatDateTime } from "../lib/format";
+import { billCollected } from "../lib/billing";
 import { sendCreditReminder } from "../lib/reminderApi";
-import { Search, Footprints, BellRing, Check } from "lucide-react";
+import type { Customer, Bill } from "../types";
+import { Search, Footprints, BellRing, Check, ChevronRight } from "lucide-react";
 
 function timeAgo(ts: number | null) {
   if (ts == null) return "Never reminded";
@@ -32,6 +36,7 @@ export function Customers() {
   const [email, setEmail] = useState("");
   const [sendingId, setSendingId] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ id: string; ok: boolean } | null>(null);
+  const [detailCustomer, setDetailCustomer] = useState<Customer | null>(null);
 
   const dueCustomers = customers.filter((c) => !c.isWalkIn && c.creditBalance > 0);
 
@@ -147,7 +152,11 @@ export function Customers() {
 
       <div className="space-y-2">
         {filtered.map((c) => (
-          <Card key={c.id} className="flex items-center justify-between">
+          <Card
+            key={c.id}
+            onClick={c.isWalkIn ? undefined : () => setDetailCustomer(c)}
+            className="flex items-center justify-between"
+          >
             <div className="flex items-center gap-3">
               <div className="h-10 w-10 rounded-full bg-[var(--color-surface-2)] flex items-center justify-center">
                 {c.isWalkIn ? (
@@ -165,16 +174,23 @@ export function Customers() {
                 </p>
               </div>
             </div>
-            {c.creditBalance > 0 ? (
-              <span className="text-xs font-semibold text-[var(--color-warning)]">
-                {formatMoney(c.creditBalance, currency)} due
-              </span>
-            ) : (
-              !c.isWalkIn && <Check size={16} className="text-[var(--color-text-faint)]" />
-            )}
+            <div className="flex items-center gap-1.5">
+              {c.creditBalance > 0 ? (
+                <span className="text-xs font-semibold text-[var(--color-warning)]">
+                  {formatMoney(c.creditBalance, currency)} due
+                </span>
+              ) : (
+                !c.isWalkIn && <Check size={16} className="text-[var(--color-text-faint)]" />
+              )}
+              {!c.isWalkIn && <ChevronRight size={16} className="text-[var(--color-text-faint)]" />}
+            </div>
           </Card>
         ))}
       </div>
+
+      {detailCustomer && (
+        <CustomerDetailModal customer={detailCustomer} onClose={() => setDetailCustomer(null)} />
+      )}
 
       {showAdd && (
         <Modal title="Add customer" onClose={() => setShowAdd(false)}>
@@ -202,5 +218,103 @@ export function Customers() {
         </Modal>
       )}
     </AppShell>
+  );
+}
+
+// Everything this one customer has done — every visit, what it cost, and
+// (tapping into one) exactly what was ordered and who they played — so the
+// answer to "when did they last come in, what do they usually order" is one
+// tap away instead of scrolling through Reports guessing at names.
+function CustomerDetailModal({ customer, onClose }: { customer: Customer; onClose: () => void }) {
+  const bills = useBillsStore((s) => s.bills);
+  const currency = useSettingsStore((s) => s.currencySymbol);
+  const [detailBill, setDetailBill] = useState<Bill | null>(null);
+
+  const customerBills = bills
+    .filter(
+      (b) =>
+        b.customerId === customer.id ||
+        b.matchParticipants?.includes(customer.name) ||
+        b.shares?.some((s) => s.payerName === customer.name)
+    )
+    .sort((a, b) => b.createdAt - a.createdAt);
+
+  const totalSpent = customerBills.reduce((sum, b) => sum + billCollected(b), 0);
+
+  return (
+    <Modal title={customer.name} onClose={onClose}>
+      <div className="space-y-4">
+        <div className="grid grid-cols-2 gap-3">
+          <Card>
+            <p className="text-xs text-[var(--color-text-dim)]">VISITS</p>
+            <p className="text-xl font-bold mt-1">{customerBills.length}</p>
+          </Card>
+          <Card>
+            <p className="text-xs text-[var(--color-text-dim)]">TOTAL SPENT</p>
+            <p className="text-xl font-bold text-[var(--color-success)] mt-1">
+              {formatMoney(totalSpent, currency)}
+            </p>
+          </Card>
+        </div>
+
+        {customer.creditBalance > 0 && (
+          <Card className="border-[var(--color-warning)]/40">
+            <p className="text-xs text-[var(--color-text-dim)]">CREDIT DUE</p>
+            <p className="text-lg font-bold text-[var(--color-warning)] mt-1">
+              {formatMoney(customer.creditBalance, currency)}
+            </p>
+          </Card>
+        )}
+
+        <div>
+          <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-2">
+            HISTORY
+          </p>
+          {customerBills.length === 0 ? (
+            <p className="text-sm text-[var(--color-text-faint)] text-center py-6">
+              No sessions yet.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {customerBills.map((b) => (
+                <Card
+                  key={b.id}
+                  onClick={() => setDetailBill(b)}
+                  className={b.status === "cancelled" ? "opacity-50" : ""}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div>
+                      <p className="text-sm font-medium">{b.tableName ?? "Canteen order"}</p>
+                      <p className="text-xs text-[var(--color-text-dim)]">{formatDateTime(b.createdAt)}</p>
+                      {b.canteenItems.length > 0 && (
+                        <p className="text-xs text-[var(--color-text-faint)] mt-0.5">
+                          {b.canteenItems.map((i) => i.name).join(", ")}
+                        </p>
+                      )}
+                    </div>
+                    <div className="text-right shrink-0">
+                      <p className="text-sm font-semibold">{formatMoney(b.total, currency)}</p>
+                      {b.status === "paid" && (
+                        <p className="text-xs text-[var(--color-success)] flex items-center gap-1 justify-end">
+                          <Check size={11} /> Paid
+                        </p>
+                      )}
+                      {b.status === "open" && (
+                        <p className="text-xs text-[var(--color-warning)]">Open</p>
+                      )}
+                      {b.status === "cancelled" && (
+                        <p className="text-xs text-[var(--color-text-faint)]">Cancelled</p>
+                      )}
+                    </div>
+                  </div>
+                </Card>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {detailBill && <BillDetailModal bill={detailBill} onClose={() => setDetailBill(null)} />}
+    </Modal>
   );
 }

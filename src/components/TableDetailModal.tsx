@@ -14,7 +14,7 @@ import { useSettingsStore } from "../store/useSettingsStore";
 import { formatDuration, formatMoney, elapsedMinutesExact, costForElapsed } from "../lib/format";
 import { tableElapsedMs, tableRemainingMs, activeRate } from "../lib/tableTiming";
 import type { BillingTable, Bill } from "../types";
-import { Plus, Minus, Users, UserPlus, Search, Frown, Pencil, Check, Pause, Play, Gamepad2 } from "lucide-react";
+import { Plus, Minus, UserPlus, Search, Frown, Pencil, Check, Pause, Play, Gamepad2 } from "lucide-react";
 
 // Splits `total` equally among `n` payers down to the paisa, handing any
 // leftover paisa to the first few payers so the shares always add back up
@@ -45,6 +45,7 @@ export function TableDetailModal({
   const findOrCreateCustomer = useCustomersStore((s) => s.findOrCreateCustomer);
   const games = useGamesStore((s) => s.games);
   const stopSession = useTablesStore((s) => s.stopSession);
+  const startSession = useTablesStore((s) => s.startSession);
   const pauseSession = useTablesStore((s) => s.pauseSession);
   const resumeSession = useTablesStore((s) => s.resumeSession);
   const addParticipant = useTablesStore((s) => s.addParticipant);
@@ -472,29 +473,6 @@ export function TableDetailModal({
           >
             Stop & Bill · {formatMoney(total, currency)}
           </button>
-          <button
-            onClick={() => setShowSplit(true)}
-            className="w-full flex items-center justify-center gap-2 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] text-sm font-medium py-2.5"
-          >
-            <Users size={15} /> Split by item
-          </button>
-          {participants.length > 1 && (
-            <button
-              onClick={() => handleStopAndBill(splitEqually(total, participantNames))}
-              className="w-full flex items-center justify-center gap-2 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] text-sm font-medium py-2.5"
-            >
-              <Users size={15} /> Split equally ·{" "}
-              {formatMoney(total / participantNames.length, currency)} each
-            </button>
-          )}
-          {participants.length > 1 && (
-            <button
-              onClick={() => setShowLoserPicker(true)}
-              className="w-full flex items-center justify-center gap-2 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] text-sm font-medium py-2.5"
-            >
-              <Frown size={15} /> Loser pays
-            </button>
-          )}
         </div>
       ) : checkoutBill.shares ? (
         <SplitCheckout bill={checkoutBill} onDone={cancelCheckout} />
@@ -518,6 +496,27 @@ export function TableDetailModal({
                       })
                     );
                     setShowLoserPicker(true);
+                  },
+                  onRestart: () => {
+                    // Leaves this bill exactly as it is — still saved,
+                    // still shows up in Home/Reports to settle whenever —
+                    // and starts a fresh session right away with the same
+                    // players, same game.
+                    const [primaryName, ...restNames] = checkoutBill.matchParticipants!;
+                    const primary = findOrCreateCustomer({ name: primaryName, phone: "" });
+                    const extraCustomerIds = restNames.map(
+                      (name) => findOrCreateCustomer({ name, phone: "" }).id
+                    );
+                    const restartGame = checkoutBill.gameId
+                      ? games.find((g) => g.id === checkoutBill.gameId)
+                      : undefined;
+                    startSession(checkoutBill.tableId!, primary.id, {
+                      extraCustomerIds,
+                      gameId: restartGame?.id ?? null,
+                      ratePerHour: restartGame?.ratePerHour ?? null,
+                    });
+                    setUndo(null);
+                    setCheckoutBill(null);
                   },
                 }
               : undefined
