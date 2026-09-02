@@ -1,10 +1,11 @@
-import { Home, ListChecks, UtensilsCrossed, Users, BarChart3, Settings } from "lucide-react";
+import { Home, UtensilsCrossed, Users, BarChart3, Settings } from "lucide-react";
 
 // Shared between BottomNav (phone) and SideNav (tablet landscape / desktop)
 // so the two never drift out of sync.
+// "Sessions" used to be its own tab — its tables/active/history view now
+// lives on Home instead, so there's one less place to check.
 export const navItems = [
   { to: "/", label: "Home", icon: Home },
-  { to: "/sessions", label: "Sessions", icon: ListChecks },
   { to: "/canteen", label: "Canteen", icon: UtensilsCrossed },
   { to: "/customers", label: "Customers", icon: Users },
   { to: "/reports", label: "Reports", icon: BarChart3 },

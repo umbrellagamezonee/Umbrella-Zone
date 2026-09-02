@@ -1,5 +1,9 @@
 export function formatMoney(amount: number, symbol = "₹") {
-  return `${symbol}${amount.toFixed(2)}`;
+  // Whole-rupee amounts (the common case for canteen items, round rates,
+  // etc.) print clean — "₹150" not "₹150.00". Anything with real paise
+  // still shows two decimals so nothing gets silently rounded away.
+  const rounded = Math.round((amount + Number.EPSILON) * 100) / 100;
+  return Number.isInteger(rounded) ? `${symbol}${rounded}` : `${symbol}${rounded.toFixed(2)}`;
 }
 
 export function formatDuration(ms: number) {

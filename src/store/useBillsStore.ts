@@ -123,7 +123,7 @@ function pushBill(id: string) {
 interface BillsState {
   bills: Bill[];
   // Soft-deleted bills, kept separately so every existing screen that reads
-  // `bills` (Sessions, Reports, Home, Canteen) automatically stops seeing
+  // `bills` (Home, Reports, Canteen) automatically stops seeing
   // them — no per-screen filtering needed.
   deletedBills: Bill[];
   createOpenBill: (input: CreateBillInput) => Bill;
@@ -272,7 +272,7 @@ export const useBillsStore = create<BillsState>()(
         pushDelete(TABLE, id);
       },
 
-      // Moves a bill to the trash — hidden from Sessions/Reports/Home right
+      // Moves a bill to the trash — hidden from Home/Reports right
       // away, but recoverable from Settings → Deleted Bills until purged.
       softDeleteBill: (id) => {
         const bill = get().bills.find((b) => b.id === id);

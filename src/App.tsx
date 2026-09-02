@@ -1,6 +1,5 @@
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { Home } from "./pages/Home";
-import { Sessions } from "./pages/Sessions";
 import { Canteen } from "./pages/Canteen";
 import { Customers } from "./pages/Customers";
 import { Reports } from "./pages/Reports";
@@ -19,7 +18,9 @@ export default function App() {
         <BrowserRouter>
           <Routes>
             <Route path="/" element={<Home />} />
-            <Route path="/sessions" element={<Sessions />} />
+            {/* Sessions was merged into Home — keep the old path working for
+                anyone with a bookmark or home-screen shortcut pointed at it. */}
+            <Route path="/sessions" element={<Home />} />
             <Route path="/canteen" element={<Canteen />} />
             <Route path="/customers" element={<Customers />} />
             <Route path="/reports" element={<Reports />} />

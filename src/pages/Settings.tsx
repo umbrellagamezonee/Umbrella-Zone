@@ -29,9 +29,21 @@ import {
   Moon,
   Sun,
   AlertTriangle,
+  FileSpreadsheet,
 } from "lucide-react";
 
-type Panel = "tables" | "rates" | "games" | "menu" | "store" | "trash" | "backup" | "theme" | "danger" | null;
+type Panel =
+  | "tables"
+  | "rates"
+  | "games"
+  | "menu"
+  | "store"
+  | "trash"
+  | "backup"
+  | "export"
+  | "theme"
+  | "danger"
+  | null;
 
 const THEME_PRESETS: { name: string; hex: string }[] = [
   { name: "Purple", hex: "#8b5cf6" },
@@ -65,6 +77,12 @@ export function Settings() {
       icon: Download,
       title: "Backup & Restore",
       desc: "Save all your data to a file, or restore from one",
+    },
+    {
+      key: "export",
+      icon: FileSpreadsheet,
+      title: "Export Data (Excel)",
+      desc: "Download everything as a spreadsheet to open and check",
     },
     {
       key: "theme",
@@ -132,6 +150,7 @@ export function Settings() {
       {panel === "store" && <StoreSettingsModal onClose={() => setPanel(null)} />}
       {panel === "trash" && <DeletedBillsModal onClose={() => setPanel(null)} />}
       {panel === "backup" && <BackupModal onClose={() => setPanel(null)} />}
+      {panel === "export" && <ExportExcelModal onClose={() => setPanel(null)} />}
       {panel === "theme" && <ThemeModal onClose={() => setPanel(null)} />}
       {panel === "danger" && <ResetAllDataModal onClose={() => setPanel(null)} />}
     </AppShell>
@@ -628,7 +647,7 @@ function DeletedBillsModal({ onClose }: { onClose: () => void }) {
     <Modal title="Deleted Bills" onClose={onClose}>
       {sorted.length === 0 ? (
         <p className="text-sm text-[var(--color-text-faint)] text-center py-8">
-          Nothing here. Bills you delete from Sessions show up in this list first.
+          Nothing here. Bills you delete from Home show up in this list first.
         </p>
       ) : (
         <div className="space-y-2">
@@ -794,6 +813,122 @@ function BackupModal({ onClose }: { onClose: () => void }) {
           </div>
         </Modal>
       )}
+    </Modal>
+  );
+}
+
+function ExportExcelModal({ onClose }: { onClose: () => void }) {
+  const bills = useBillsStore((s) => s.bills);
+  const customers = useCustomersStore((s) => s.customers);
+  const expenses = useExpensesStore((s) => s.expenses);
+  const items = useMenuStore((s) => s.items);
+  const categories = useMenuStore((s) => s.categories);
+  const currency = useSettingsStore((s) => s.currencySymbol);
+  const [working, setWorking] = useState(false);
+
+  async function handleExport() {
+    setWorking(true);
+    try {
+      // Loaded on demand — this library is only needed the moment someone
+      // actually taps the button, so it never adds to the app's normal
+      // load time.
+      const XLSX = await import("xlsx");
+      const wb = XLSX.utils.book_new();
+
+      const billRows = [...bills]
+        .sort((a, b) => a.createdAt - b.createdAt)
+        .map((b) => {
+          const customer = customers.find((c) => c.id === b.customerId);
+          return {
+            Date: new Date(b.createdAt).toLocaleDateString(),
+            "Started At": b.tableId
+              ? new Date(b.createdAt - b.tableChargeMinutes * 60000).toLocaleTimeString()
+              : "",
+            "Ended At": new Date(b.createdAt).toLocaleTimeString(),
+            Table: b.tableName ?? "",
+            Game: b.gameName ?? "",
+            Customer: customer && !customer.isWalkIn ? customer.name : "Walk-in",
+            "Who Played": (b.matchParticipants ?? []).join(", "),
+            "Who Lost": (b.matchLosers ?? []).join(", "),
+            "Table Charge": b.tableCharge,
+            "Canteen Charge": b.canteenCharge,
+            Discount: b.discount,
+            Total: b.total,
+            Status: b.status,
+            "Payment Method": b.paymentMethod ?? "",
+            "Amount Paid": b.amountPaid,
+            "Amount on Credit": b.amountDue,
+          };
+        });
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(billRows), "Bills");
+
+      const itemRows = [...bills]
+        .sort((a, b) => a.createdAt - b.createdAt)
+        .flatMap((b) =>
+          b.canteenItems.map((item) => ({
+            Date: new Date(b.createdAt).toLocaleDateString(),
+            Table: b.tableName ?? "",
+            Item: item.name,
+            Qty: item.qty,
+            Price: item.price,
+            Amount: item.price * item.qty,
+            "Ordered For": item.personName ?? "",
+          }))
+        );
+      if (itemRows.length > 0) {
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(itemRows), "Canteen Items");
+      }
+
+      const customerRows = customers
+        .filter((c) => !c.isWalkIn)
+        .map((c) => ({
+          Name: c.name,
+          Phone: c.phone,
+          "Credit Balance": c.creditBalance,
+          "Added On": new Date(c.createdAt).toLocaleDateString(),
+        }));
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(customerRows), "Customers");
+
+      const expenseRows = [...expenses]
+        .sort((a, b) => a.createdAt - b.createdAt)
+        .map((e) => ({
+          Date: new Date(e.createdAt).toLocaleDateString(),
+          Category: e.category,
+          Amount: e.amount,
+          Note: e.note,
+        }));
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(expenseRows), "Expenses");
+
+      const menuRows = items.map((i) => ({
+        Item: i.name,
+        Category: categories.find((c) => c.id === i.categoryId)?.name ?? "",
+        Price: i.price,
+        Stock: i.stockQty ?? "not tracked",
+      }));
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(menuRows), "Menu");
+
+      XLSX.writeFile(wb, `cuebill-data-${new Date().toISOString().slice(0, 10)}.xlsx`);
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  return (
+    <Modal title="Export Data (Excel)" onClose={onClose}>
+      <div className="space-y-4">
+        <p className="text-sm text-[var(--color-text-dim)]">
+          Ek Excel file (.xlsx) mein sab kuch — Bills, Canteen Items, Customers, Expenses, aur
+          Menu — alag-alag sheets mein. Isse tum Excel/Google Sheets mein khol kar dekh, filter,
+          ya print kar sakte ho. Amounts {currency} mein hain.
+        </p>
+        <button
+          onClick={handleExport}
+          disabled={working}
+          className="w-full flex items-center justify-center gap-2 rounded-xl bg-[var(--color-primary)] disabled:opacity-60 text-white font-semibold py-3"
+        >
+          <FileSpreadsheet size={16} /> {working ? "Preparing…" : "Download Excel File"}
+        </button>
+      </div>
     </Modal>
   );
 }
