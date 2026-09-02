@@ -66,6 +66,13 @@ export function TableDetailModal({
   const [showAddPerson, setShowAddPerson] = useState(false);
   const [showLoserPicker, setShowLoserPicker] = useState(false);
   const [selectedLoserIds, setSelectedLoserIds] = useState<string[]>([]);
+  // Set only when Loser pays is opened from the checkout screen's "switch"
+  // options — at that point the table's already stopped (customerId/
+  // extraCustomerIds cleared), so `participants` below is empty and this
+  // stands in instead, resolved from the bill's own matchParticipants.
+  const [switchParticipants, setSwitchParticipants] = useState<{ id: string; name: string }[] | null>(
+    null
+  );
   const [showEditTime, setShowEditTime] = useState(false);
   const [showGamePicker, setShowGamePicker] = useState(false);
   // Which participant new canteen items get tagged to — null means "shared /
@@ -166,6 +173,35 @@ export function TableDetailModal({
       setUndo(null);
     }
     setCheckoutBill(null);
+  }
+
+  // Converts the bill already sitting on the checkout screen into a
+  // different shape (split by item / equally / loser pays) — the table's
+  // already stopped by this point, so this reuses the existing bill's own
+  // snapshotted amounts rather than re-deriving from the (now zeroed) table.
+  function switchBillType(
+    shares?: { label: string; payerName: string; amount: number }[],
+    losers?: { customerId: string; name: string }[]
+  ) {
+    if (!checkoutBill) return;
+    deleteBill(checkoutBill.id);
+    const newBill = createOpenBill({
+      tableId: checkoutBill.tableId,
+      tableName: checkoutBill.tableName,
+      gameId: checkoutBill.gameId,
+      gameName: checkoutBill.gameName,
+      customerId: losers?.length === 1 ? losers[0].customerId : checkoutBill.customerId,
+      tableChargeMinutes: checkoutBill.tableChargeMinutes,
+      tableCharge: checkoutBill.tableCharge,
+      canteenCharge: checkoutBill.canteenCharge,
+      canteenItems: checkoutBill.canteenItems,
+      discount: shares ? 0 : checkoutBill.discount,
+      shares,
+      matchParticipants: checkoutBill.matchParticipants,
+      matchLosers: losers && losers.length > 0 ? losers.map((l) => l.name) : null,
+    });
+    setUndo((u) => (u ? { ...u, billId: newBill.id } : u));
+    setCheckoutBill(newBill);
   }
 
   const customer = customers.find((c) => c.id === table.customerId);
@@ -468,18 +504,37 @@ export function TableDetailModal({
           onDone={onClose}
           onCancel={undo ? cancelCheckout : undefined}
           onSettled={() => setUndo(null)}
+          switchOptions={
+            undo && checkoutBill.matchParticipants && checkoutBill.matchParticipants.length > 1
+              ? {
+                  onSplitByItem: () => setShowSplit(true),
+                  onSplitEqually: () =>
+                    switchBillType(splitEqually(checkoutBill.total, checkoutBill.matchParticipants!)),
+                  onLoserPays: () => {
+                    setSwitchParticipants(
+                      checkoutBill.matchParticipants!.map((name) => {
+                        const c = findOrCreateCustomer({ name, phone: "" });
+                        return { id: c.id, name: c.name };
+                      })
+                    );
+                    setShowLoserPicker(true);
+                  },
+                }
+              : undefined
+          }
         />
       )}
 
       {showSplit && (
         <SplitBillModal
-          tableCharge={tableCharge}
-          canteenItems={order?.items ?? []}
-          participantNames={participantNames}
+          tableCharge={checkoutBill ? checkoutBill.tableCharge : tableCharge}
+          canteenItems={checkoutBill ? checkoutBill.canteenItems : order?.items ?? []}
+          participantNames={checkoutBill ? checkoutBill.matchParticipants ?? [] : participantNames}
           onClose={() => setShowSplit(false)}
           onConfirm={(shares) => {
             setShowSplit(false);
-            handleStopAndBill(shares);
+            if (checkoutBill) switchBillType(shares);
+            else handleStopAndBill(shares);
           }}
         />
       )}
@@ -501,6 +556,7 @@ export function TableDetailModal({
           onClose={() => {
             setShowLoserPicker(false);
             setSelectedLoserIds([]);
+            setSwitchParticipants(null);
           }}
         >
           <div className="space-y-3">
@@ -509,7 +565,7 @@ export function TableDetailModal({
               free this round.
             </p>
             <div className="space-y-2">
-              {participants.map((p) => {
+              {(switchParticipants ?? participants).map((p) => {
                 const checked = selectedLoserIds.includes(p.id);
                 return (
                   <button
@@ -544,27 +600,29 @@ export function TableDetailModal({
             {selectedLoserIds.length > 0 && (
               <p className="text-xs text-[var(--color-text-dim)] text-center">
                 {selectedLoserIds.length === 1
-                  ? `Pays full ${formatMoney(total, currency)}`
+                  ? `Pays full ${formatMoney(checkoutBill ? checkoutBill.total : total, currency)}`
                   : `${selectedLoserIds.length} losers · ${formatMoney(
-                      total / selectedLoserIds.length,
+                      (checkoutBill ? checkoutBill.total : total) / selectedLoserIds.length,
                       currency
                     )} each`}
               </p>
             )}
             <button
               onClick={() => {
-                const losers = participants
+                const losers = (switchParticipants ?? participants)
                   .filter((p) => selectedLoserIds.includes(p.id))
                   .map((p) => ({ customerId: p.id, name: p.name }));
                 setShowLoserPicker(false);
                 setSelectedLoserIds([]);
+                setSwitchParticipants(null);
+                const billTotal = checkoutBill ? checkoutBill.total : total;
                 if (losers.length <= 1) {
-                  handleStopAndBill(undefined, losers);
+                  if (checkoutBill) switchBillType(undefined, losers);
+                  else handleStopAndBill(undefined, losers);
                 } else {
-                  handleStopAndBill(
-                    splitEqually(total, losers.map((l) => l.name), "Loser share"),
-                    losers
-                  );
+                  const shares = splitEqually(billTotal, losers.map((l) => l.name), "Loser share");
+                  if (checkoutBill) switchBillType(shares, losers);
+                  else handleStopAndBill(shares, losers);
                 }
               }}
               disabled={selectedLoserIds.length === 0}

@@ -7,9 +7,15 @@ import { useSettingsStore } from "../store/useSettingsStore";
 import { formatMoney } from "../lib/format";
 import type { Bill, PaymentMethod } from "../types";
 import { QRCodeSVG } from "qrcode.react";
-import { Check, ArrowLeft } from "lucide-react";
+import { Check, ArrowLeft, Users, Frown } from "lucide-react";
 
 type CheckoutStep = "select" | "upi-qr" | "success";
+
+interface SwitchOptions {
+  onSplitByItem: () => void;
+  onSplitEqually: () => void;
+  onLoserPays: () => void;
+}
 
 interface CheckoutProps {
   bill: Bill;
@@ -22,17 +28,27 @@ interface CheckoutProps {
   // callers use it to drop any pending "undo" so a later close never reverts
   // a bill that's actually been paid.
   onSettled?: () => void;
+  // Present only alongside onCancel, for a multi-person table — lets this
+  // screen switch to a different billing method before anything's been paid,
+  // instead of forcing a trip back to the table detail view first.
+  switchOptions?: SwitchOptions;
 }
 
-export function CheckoutModal({ bill, onDone, onCancel, onSettled }: CheckoutProps) {
+export function CheckoutModal({ bill, onDone, onCancel, onSettled, switchOptions }: CheckoutProps) {
   return (
     <Modal title={bill.tableName ?? "Checkout"} onClose={onCancel ?? onDone}>
-      <Checkout bill={bill} onDone={onDone} onCancel={onCancel} onSettled={onSettled} />
+      <Checkout
+        bill={bill}
+        onDone={onDone}
+        onCancel={onCancel}
+        onSettled={onSettled}
+        switchOptions={switchOptions}
+      />
     </Modal>
   );
 }
 
-export function Checkout({ bill, onDone, onCancel, onSettled }: CheckoutProps) {
+export function Checkout({ bill, onDone, onCancel, onSettled, switchOptions }: CheckoutProps) {
   const currency = useSettingsStore((s) => s.currencySymbol);
   const storeName = useSettingsStore((s) => s.storeName);
   const upiId = useSettingsStore((s) => s.upiId);
@@ -163,6 +179,35 @@ export function Checkout({ bill, onDone, onCancel, onSettled }: CheckoutProps) {
           <ArrowLeft size={14} /> Back
         </button>
       )}
+
+      {switchOptions && (
+        <div>
+          <p className="text-xs text-[var(--color-text-faint)] mb-1.5">
+            Changed your mind? Switch to a different way of billing this:
+          </p>
+          <div className="grid grid-cols-3 gap-2">
+            <button
+              onClick={switchOptions.onSplitByItem}
+              className="flex flex-col items-center justify-center gap-1 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[11px] font-medium py-2.5"
+            >
+              <Users size={14} /> Split by item
+            </button>
+            <button
+              onClick={switchOptions.onSplitEqually}
+              className="flex flex-col items-center justify-center gap-1 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[11px] font-medium py-2.5"
+            >
+              <Users size={14} /> Split equally
+            </button>
+            <button
+              onClick={switchOptions.onLoserPays}
+              className="flex flex-col items-center justify-center gap-1 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[11px] font-medium py-2.5"
+            >
+              <Frown size={14} /> Loser pays
+            </button>
+          </div>
+        </div>
+      )}
+
       <Card>
         {bill.tableCharge > 0 && (
           <div className="flex justify-between text-sm py-1">

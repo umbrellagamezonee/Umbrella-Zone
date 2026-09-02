@@ -3,8 +3,17 @@ import { Modal } from "./ui/Modal";
 import { Card } from "./ui/Card";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { formatMoney } from "../lib/format";
-import type { OrderLineItem } from "../types";
 import { Lock } from "lucide-react";
+
+// Deliberately narrower than OrderLineItem/BillCanteenItem — accepts either
+// (a live order's items, or a bill's already-settled canteenItems snapshot),
+// since this only ever reads name/price/qty/personName off of it.
+interface SplitLineItem {
+  name: string;
+  price: number;
+  qty: number;
+  personName?: string | null;
+}
 
 interface ShareRow {
   key: string;
@@ -27,7 +36,7 @@ export function SplitBillModal({
   onConfirm,
 }: {
   tableCharge: number;
-  canteenItems: OrderLineItem[];
+  canteenItems: SplitLineItem[];
   participantNames?: string[];
   onClose: () => void;
   onConfirm: (shares: ShareOutput[]) => void;
@@ -41,16 +50,16 @@ export function SplitBillModal({
     if (tableCharge > 0) {
       result.push({ key: "table", label: "Table charge", amount: tableCharge });
     }
-    for (const line of canteenItems) {
+    canteenItems.forEach((line, i) => {
       const amount = line.price * line.qty;
-      if (amount <= 0) continue;
+      if (amount <= 0) return;
       result.push({
-        key: `item-${line.id}`,
+        key: `item-${i}-${line.name}`,
         label: line.qty > 1 ? `${line.name} x${line.qty}` : line.name,
         amount,
         personName: line.personName,
       });
-    }
+    });
     return result;
   }, [tableCharge, canteenItems]);
 
