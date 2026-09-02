@@ -179,9 +179,14 @@ export function Home() {
                     <div className="flex items-center gap-3">
                       <div className="text-right">
                         <p className="text-sm font-semibold">{formatMoney(bill.total, currency)}</p>
-                        {bill.status === "paid" && (
+                        {bill.status === "paid" && bill.amountPaid > 0 && (
                           <p className="text-xs text-[var(--color-success)] flex items-center gap-1 justify-end">
                             <Check size={11} /> Paid
+                          </p>
+                        )}
+                        {bill.amountDue > 0 && (
+                          <p className="text-xs text-[var(--color-warning)]">
+                            {formatMoney(bill.amountDue, currency)} on credit
                           </p>
                         )}
                         {bill.status === "open" && (

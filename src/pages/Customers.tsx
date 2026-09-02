@@ -227,17 +227,22 @@ export function Customers() {
 // tap away instead of scrolling through Reports guessing at names.
 function CustomerDetailModal({ customer, onClose }: { customer: Customer; onClose: () => void }) {
   const bills = useBillsStore((s) => s.bills);
+  // Deleted bills too — a credit balance doesn't get reversed when the bill
+  // that created it is trashed, so leaving those out would hide exactly the
+  // history someone's most likely trying to track down.
+  const deletedBills = useBillsStore((s) => s.deletedBills);
   const currency = useSettingsStore((s) => s.currencySymbol);
   const [detailBill, setDetailBill] = useState<Bill | null>(null);
 
-  const customerBills = bills
-    .filter(
-      (b) =>
-        b.customerId === customer.id ||
-        b.matchParticipants?.includes(customer.name) ||
-        b.shares?.some((s) => s.payerName === customer.name)
-    )
+  const matchesCustomer = (b: Bill) =>
+    b.customerId === customer.id ||
+    b.matchParticipants?.includes(customer.name) ||
+    b.shares?.some((s) => s.payerName === customer.name);
+
+  const customerBills = [...bills, ...deletedBills]
+    .filter(matchesCustomer)
     .sort((a, b) => b.createdAt - a.createdAt);
+  const deletedCount = customerBills.filter((b) => b.deletedAt).length;
 
   const totalSpent = customerBills.reduce((sum, b) => sum + billCollected(b), 0);
 
@@ -247,7 +252,9 @@ function CustomerDetailModal({ customer, onClose }: { customer: Customer; onClos
         <div className="grid grid-cols-2 gap-3">
           <Card>
             <p className="text-xs text-[var(--color-text-dim)]">VISITS</p>
-            <p className="text-xl font-bold mt-1">{customerBills.length}</p>
+            <p className="text-xl font-bold mt-1">
+              {customerBills.length - deletedCount}
+            </p>
           </Card>
           <Card>
             <p className="text-xs text-[var(--color-text-dim)]">TOTAL SPENT</p>
@@ -263,6 +270,14 @@ function CustomerDetailModal({ customer, onClose }: { customer: Customer; onClos
             <p className="text-lg font-bold text-[var(--color-warning)] mt-1">
               {formatMoney(customer.creditBalance, currency)}
             </p>
+            {deletedCount > 0 && (
+              <p className="text-xs text-[var(--color-text-faint)] mt-1">
+                {deletedCount} bill{deletedCount > 1 ? "s" : ""} below {deletedCount > 1 ? "were" : "was"}{" "}
+                deleted — check them for what added to this. Older credit changes with no bill left
+                at all (permanently deleted, or from before this device tracked history) can't be
+                traced back further than that.
+              </p>
+            )}
           </Card>
         )}
 
@@ -280,11 +295,16 @@ function CustomerDetailModal({ customer, onClose }: { customer: Customer; onClos
                 <Card
                   key={b.id}
                   onClick={() => setDetailBill(b)}
-                  className={b.status === "cancelled" ? "opacity-50" : ""}
+                  className={b.status === "cancelled" || b.deletedAt ? "opacity-50" : ""}
                 >
                   <div className="flex items-center justify-between gap-2">
                     <div>
-                      <p className="text-sm font-medium">{b.tableName ?? "Canteen order"}</p>
+                      <p className="text-sm font-medium">
+                        {b.tableName ?? "Canteen order"}
+                        {b.deletedAt && (
+                          <span className="text-[var(--color-danger)] font-normal"> · Deleted</span>
+                        )}
+                      </p>
                       <p className="text-xs text-[var(--color-text-dim)]">{formatDateTime(b.createdAt)}</p>
                       {b.canteenItems.length > 0 && (
                         <p className="text-xs text-[var(--color-text-faint)] mt-0.5">
@@ -294,9 +314,14 @@ function CustomerDetailModal({ customer, onClose }: { customer: Customer; onClos
                     </div>
                     <div className="text-right shrink-0">
                       <p className="text-sm font-semibold">{formatMoney(b.total, currency)}</p>
-                      {b.status === "paid" && (
+                      {b.status === "paid" && b.amountPaid > 0 && (
                         <p className="text-xs text-[var(--color-success)] flex items-center gap-1 justify-end">
                           <Check size={11} /> Paid
+                        </p>
+                      )}
+                      {b.amountDue > 0 && (
+                        <p className="text-xs text-[var(--color-warning)]">
+                          {formatMoney(b.amountDue, currency)} on credit
                         </p>
                       )}
                       {b.status === "open" && (

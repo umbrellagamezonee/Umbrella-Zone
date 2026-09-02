@@ -19,8 +19,12 @@ export function elapsedMinutesExact(ms: number) {
   return ms / 60000;
 }
 
+// Rounded to the nearest whole rupee — per-minute billing otherwise leaves
+// odd paisa (₹29.18, ₹17.43) that doesn't match how a cash till actually
+// runs here. Canteen prices are already whole rupees, so this keeps every
+// table charge — and therefore every bill total built from it — clean too.
 export function costForElapsed(ms: number, ratePerHour: number) {
-  return (ms / 3600000) * ratePerHour;
+  return Math.round((ms / 3600000) * ratePerHour);
 }
 
 export function isToday(ts: number) {
