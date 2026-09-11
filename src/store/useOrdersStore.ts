@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { CanteenOrder, OrderLineItem } from "../types";
 import { useMenuStore } from "./useMenuStore";
-import { setupSync, pushInsert, pushUpsert, pushDeleteAll } from "../lib/cloudSync";
+import { setupSync, pushInsert, pushUpsert, pushDelete, pushDeleteAll } from "../lib/cloudSync";
 
 interface OrderRow {
   id: string;
@@ -55,6 +55,11 @@ interface OrdersState {
   unmarkBilled: (orderId: string) => void;
   reassignToTable: (orderId: string, tableId: string, customerId: string | null) => void;
   orderTotal: (orderId: string) => number;
+  // Removes the order ticket itself — safe any time, since a bill already
+  // made from it keeps its own snapshot of what was ordered and isn't
+  // affected. Mainly for clearing out an order stuck showing "Billed" with
+  // no bill behind it (e.g. that bill was later deleted from Home/Reports).
+  removeOrder: (orderId: string) => void;
   resetAll: () => void;
 }
 
@@ -191,6 +196,11 @@ export const useOrdersStore = create<OrdersState>()(
         const order = get().orders.find((o) => o.id === orderId);
         if (!order) return 0;
         return order.items.reduce((sum, i) => sum + i.price * i.qty, 0);
+      },
+
+      removeOrder: (orderId) => {
+        set((state) => ({ orders: state.orders.filter((o) => o.id !== orderId) }));
+        pushDelete(TABLE, orderId);
       },
 
       resetAll: () => {

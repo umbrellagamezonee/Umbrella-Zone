@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { Bill, BillCanteenItem, BillShare, PaymentMethod } from "../types";
 import { setupSync, pushInsert, pushUpsert, pushDelete, pushDeleteAll } from "../lib/cloudSync";
+import { useOrdersStore } from "./useOrdersStore";
 
 interface ShareInput {
   label: string;
@@ -137,6 +138,10 @@ interface BillsState {
   settlePayment: (id: string, input: SettleInput) => Bill | undefined;
   settleShare: (billId: string, shareId: string, input: SettleShareInput) => { bill: Bill; share: BillShare } | undefined;
   cancelBill: (id: string) => void;
+  // Moves every bill referencing customer `fromId` (or their old name in a
+  // match/share snapshot) onto `toId`/`toName` — used when two duplicate
+  // customer profiles are merged into one.
+  reassignCustomer: (fromId: string, fromName: string, toId: string, toName: string) => void;
   deleteBill: (id: string) => void;
   softDeleteBill: (id: string) => void;
   restoreBill: (id: string) => void;
@@ -311,6 +316,51 @@ export const useBillsStore = create<BillsState>()(
         pushBill(id);
       },
 
+      reassignCustomer: (fromId, fromName, toId, toName) => {
+        const swapName = (n: string) => (n === fromName ? toName : n);
+        // After the swap the merged person can appear twice in a match they
+        // played with their own duplicate — collapse those back to one entry.
+        const swapList = (list: string[] | null) => {
+          if (!list) return null;
+          const seen = new Set<string>();
+          const out: string[] = [];
+          for (const n of list.map(swapName)) {
+            if (seen.has(n)) continue;
+            seen.add(n);
+            out.push(n);
+          }
+          return out;
+        };
+        const rewrite = (b: Bill): Bill | null => {
+          const hitId = b.customerId === fromId;
+          const hitParticipants = b.matchParticipants?.includes(fromName) ?? false;
+          const hitLosers = b.matchLosers?.includes(fromName) ?? false;
+          const hitShares = b.shares?.some((s) => s.payerName === fromName) ?? false;
+          if (!hitId && !hitParticipants && !hitLosers && !hitShares) return null;
+          return {
+            ...b,
+            customerId: hitId ? toId : b.customerId,
+            matchParticipants: swapList(b.matchParticipants),
+            matchLosers: swapList(b.matchLosers),
+            shares: b.shares?.map((s) => ({ ...s, payerName: swapName(s.payerName) })) ?? null,
+          };
+        };
+        const touched: Bill[] = [];
+        set((state) => ({
+          bills: state.bills.map((b) => {
+            const next = rewrite(b);
+            if (next) touched.push(next);
+            return next ?? b;
+          }),
+          deletedBills: state.deletedBills.map((b) => {
+            const next = rewrite(b);
+            if (next) touched.push(next);
+            return next ?? b;
+          }),
+        }));
+        for (const b of touched) pushUpsert(TABLE, toRow(b));
+      },
+
       deleteBill: (id) => {
         set((state) => ({ bills: state.bills.filter((b) => b.id !== id) }));
         pushDelete(TABLE, id);
@@ -327,6 +377,10 @@ export const useBillsStore = create<BillsState>()(
           deletedBills: [deleted, ...state.deletedBills],
         }));
         pushUpsert(TABLE, toRow(deleted));
+        // Otherwise the canteen order this came from is stuck showing
+        // "Billed" forever with no bill behind it to open — put it back to
+        // "served" so it's visible/editable/deletable from Canteen again.
+        if (bill.orderId) useOrdersStore.getState().unmarkBilled(bill.orderId);
       },
 
       restoreBill: (id) => {
@@ -338,6 +392,7 @@ export const useBillsStore = create<BillsState>()(
           bills: [restored, ...state.bills],
         }));
         pushUpsert(TABLE, toRow(restored));
+        if (bill.orderId) useOrdersStore.getState().markBilled(bill.orderId);
       },
 
       permanentlyDeleteBill: (id) => {

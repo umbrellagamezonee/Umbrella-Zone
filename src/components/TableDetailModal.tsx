@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { Modal } from "./ui/Modal";
 import { Card } from "./ui/Card";
-import { SplitBillModal } from "./SplitBillModal";
 import { SplitCheckout } from "./SplitCheckout";
 import { Checkout } from "./Checkout";
+import { CustomerNameInput } from "./ui/CustomerNameInput";
 import { useTablesStore } from "../store/useTablesStore";
 import { useCustomersStore } from "../store/useCustomersStore";
 import { useOrdersStore } from "../store/useOrdersStore";
@@ -14,7 +14,7 @@ import { useSettingsStore } from "../store/useSettingsStore";
 import { formatDuration, formatMoney, elapsedMinutesExact, costForElapsed } from "../lib/format";
 import { tableElapsedMs, tableRemainingMs, activeRate } from "../lib/tableTiming";
 import type { BillingTable, Bill } from "../types";
-import { Plus, Minus, UserPlus, Search, Frown, Pencil, Check, Pause, Play, Gamepad2 } from "lucide-react";
+import { Plus, Minus, UserPlus, Search, Pencil, Check, Pause, Play, Gamepad2 } from "lucide-react";
 
 // Splits `total` equally among `n` payers down to the paisa, handing any
 // leftover paisa to the first few payers so the shares always add back up
@@ -63,17 +63,12 @@ export function TableDetailModal({
   const [discount, setDiscount] = useState(0);
   const [itemSearch, setItemSearch] = useState("");
   const [checkoutBill, setCheckoutBill] = useState<Bill | null>(null);
-  const [showSplit, setShowSplit] = useState(false);
   const [showAddPerson, setShowAddPerson] = useState(false);
-  const [showLoserPicker, setShowLoserPicker] = useState(false);
-  const [selectedLoserIds, setSelectedLoserIds] = useState<string[]>([]);
-  // Set only when Loser pays is opened from the checkout screen's "switch"
-  // options — at that point the table's already stopped (customerId/
-  // extraCustomerIds cleared), so `participants` below is empty and this
-  // stands in instead, resolved from the bill's own matchParticipants.
-  const [switchParticipants, setSwitchParticipants] = useState<{ id: string; name: string }[] | null>(
-    null
-  );
+  // Who's actually paying this bill — asked before Stop & Bill whenever more
+  // than one person is at the table. Starts with everyone ticked (equal
+  // split); untick anyone who isn't paying their own way.
+  const [showPayerPicker, setShowPayerPicker] = useState(false);
+  const [selectedPayerIds, setSelectedPayerIds] = useState<string[]>([]);
   const [showEditTime, setShowEditTime] = useState(false);
   const [showGamePicker, setShowGamePicker] = useState(false);
   // Which participant new canteen items get tagged to — null means "shared /
@@ -115,10 +110,11 @@ export function TableDetailModal({
     addItem(o.id, { menuItemId: item.id, name: item.name, price: item.price, qty: 1, personName: forName });
   }
 
-  function handleStopAndBill(
-    shares?: { label: string; payerName: string; amount: number }[],
-    losers?: { customerId: string; name: string }[]
-  ) {
+  // `payers` is who actually owes this bill — everyone at the table when
+  // nobody's picked out specially (equal split), or a chosen few (the rest
+  // played free this round). One payer bills straight to their account; two
+  // or more split the total equally between just them.
+  function handleStopAndBill(payers: { id: string; name: string }[]) {
     const tableSnapshot: Partial<BillingTable> = {
       status: table.status,
       customerId: table.customerId,
@@ -129,13 +125,17 @@ export function TableDetailModal({
       accumulatedMs: table.accumulatedMs,
       plannedDurationMs: table.plannedDurationMs,
     };
+    const shares = payers.length > 1 ? splitEqually(total, payers.map((p) => p.name)) : undefined;
+    // A strict subset paying (not everyone) is the "someone else played
+    // free" case — worth recording as who lost, same as before.
+    const partial = payers.length > 0 && payers.length < participants.length;
     stopSession(table.id);
     const bill = createOpenBill({
       tableId: table.id,
       tableName: table.name,
       gameId: game?.id ?? null,
       gameName: game?.name ?? null,
-      customerId: losers?.length === 1 ? losers[0].customerId : table.customerId,
+      customerId: payers.length === 1 ? payers[0].id : table.customerId,
       tableChargeMinutes: minutesBilled,
       tableCharge,
       canteenCharge: canteenTotal,
@@ -144,7 +144,7 @@ export function TableDetailModal({
       discount: shares ? 0 : effectiveDiscount,
       shares,
       matchParticipants: participantNames.length > 1 ? participantNames : null,
-      matchLosers: losers && losers.length > 0 ? losers.map((l) => l.name) : null,
+      matchLosers: partial ? payers.map((p) => p.name) : null,
     });
     if (order) markBilled(order.id);
     // Tracked for every path, split included — cancelCheckout below only
@@ -176,33 +176,22 @@ export function TableDetailModal({
     setCheckoutBill(null);
   }
 
-  // Converts the bill already sitting on the checkout screen into a
-  // different shape (split by item / equally / loser pays) — the table's
-  // already stopped by this point, so this reuses the existing bill's own
-  // snapshotted amounts rather than re-deriving from the (now zeroed) table.
-  function switchBillType(
-    shares?: { label: string; payerName: string; amount: number }[],
-    losers?: { customerId: string; name: string }[]
-  ) {
-    if (!checkoutBill) return;
-    deleteBill(checkoutBill.id);
-    const newBill = createOpenBill({
-      tableId: checkoutBill.tableId,
-      tableName: checkoutBill.tableName,
-      gameId: checkoutBill.gameId,
-      gameName: checkoutBill.gameName,
-      customerId: losers?.length === 1 ? losers[0].customerId : checkoutBill.customerId,
-      tableChargeMinutes: checkoutBill.tableChargeMinutes,
-      tableCharge: checkoutBill.tableCharge,
-      canteenCharge: checkoutBill.canteenCharge,
-      canteenItems: checkoutBill.canteenItems,
-      discount: shares ? 0 : checkoutBill.discount,
-      shares,
-      matchParticipants: checkoutBill.matchParticipants,
-      matchLosers: losers && losers.length > 0 ? losers.map((l) => l.name) : null,
+  // Offered once the bill is settled: leaves it exactly as paid (still shows
+  // up in Home/Reports/that customer's history) and starts a fresh session
+  // right away for the same players, same game, timer back at zero.
+  function doRestart() {
+    if (!checkoutBill?.tableId || !checkoutBill.matchParticipants?.length) return;
+    const [primaryName, ...restNames] = checkoutBill.matchParticipants;
+    const primary = findOrCreateCustomer({ name: primaryName, phone: "" });
+    const extraCustomerIds = restNames.map((name) => findOrCreateCustomer({ name, phone: "" }).id);
+    const restartGame = checkoutBill.gameId ? games.find((g) => g.id === checkoutBill.gameId) : undefined;
+    startSession(checkoutBill.tableId, primary.id, {
+      extraCustomerIds,
+      gameId: restartGame?.id ?? null,
+      ratePerHour: restartGame?.ratePerHour ?? null,
     });
-    setUndo((u) => (u ? { ...u, billId: newBill.id } : u));
-    setCheckoutBill(newBill);
+    setUndo(null);
+    setCheckoutBill(null);
   }
 
   const customer = customers.find((c) => c.id === table.customerId);
@@ -468,7 +457,14 @@ export function TableDetailModal({
           </div>
 
           <button
-            onClick={() => handleStopAndBill()}
+            onClick={() => {
+              if (participants.length > 1) {
+                setSelectedPayerIds(participants.map((p) => p.id));
+                setShowPayerPicker(true);
+              } else {
+                handleStopAndBill(participants);
+              }
+            }}
             className="w-full rounded-xl bg-[var(--color-primary)] text-white font-semibold py-3"
           >
             Stop & Bill · {formatMoney(total, currency)}
@@ -482,59 +478,11 @@ export function TableDetailModal({
           onDone={onClose}
           onCancel={undo ? cancelCheckout : undefined}
           onSettled={() => setUndo(null)}
-          switchOptions={
-            undo && checkoutBill.matchParticipants && checkoutBill.matchParticipants.length > 1
-              ? {
-                  onSplitByItem: () => setShowSplit(true),
-                  onSplitEqually: () =>
-                    switchBillType(splitEqually(checkoutBill.total, checkoutBill.matchParticipants!)),
-                  onLoserPays: () => {
-                    setSwitchParticipants(
-                      checkoutBill.matchParticipants!.map((name) => {
-                        const c = findOrCreateCustomer({ name, phone: "" });
-                        return { id: c.id, name: c.name };
-                      })
-                    );
-                    setShowLoserPicker(true);
-                  },
-                  onRestart: () => {
-                    // Leaves this bill exactly as it is — still saved,
-                    // still shows up in Home/Reports to settle whenever —
-                    // and starts a fresh session right away with the same
-                    // players, same game.
-                    const [primaryName, ...restNames] = checkoutBill.matchParticipants!;
-                    const primary = findOrCreateCustomer({ name: primaryName, phone: "" });
-                    const extraCustomerIds = restNames.map(
-                      (name) => findOrCreateCustomer({ name, phone: "" }).id
-                    );
-                    const restartGame = checkoutBill.gameId
-                      ? games.find((g) => g.id === checkoutBill.gameId)
-                      : undefined;
-                    startSession(checkoutBill.tableId!, primary.id, {
-                      extraCustomerIds,
-                      gameId: restartGame?.id ?? null,
-                      ratePerHour: restartGame?.ratePerHour ?? null,
-                    });
-                    setUndo(null);
-                    setCheckoutBill(null);
-                  },
-                }
+          onRestart={
+            checkoutBill.matchParticipants && checkoutBill.matchParticipants.length > 1
+              ? doRestart
               : undefined
           }
-        />
-      )}
-
-      {showSplit && (
-        <SplitBillModal
-          tableCharge={checkoutBill ? checkoutBill.tableCharge : tableCharge}
-          canteenItems={checkoutBill ? checkoutBill.canteenItems : order?.items ?? []}
-          participantNames={checkoutBill ? checkoutBill.matchParticipants ?? [] : participantNames}
-          onClose={() => setShowSplit(false)}
-          onConfirm={(shares) => {
-            setShowSplit(false);
-            if (checkoutBill) switchBillType(shares);
-            else handleStopAndBill(shares);
-          }}
         />
       )}
 
@@ -549,35 +497,34 @@ export function TableDetailModal({
         />
       )}
 
-      {showLoserPicker && (
+      {showPayerPicker && (
         <Modal
-          title="Who lost?"
+          title="Who's paying?"
           onClose={() => {
-            setShowLoserPicker(false);
-            setSelectedLoserIds([]);
-            setSwitchParticipants(null);
+            setShowPayerPicker(false);
+            setSelectedPayerIds([]);
           }}
         >
           <div className="space-y-3">
             <p className="text-xs text-[var(--color-text-faint)]">
-              Pick everyone who lost — the bill splits equally between them. Everyone else played
-              free this round.
+              Tick everyone who's paying their own way — the bill splits equally between just
+              them. Untick anyone who played free this round (someone else covers their share).
             </p>
             <div className="space-y-2">
-              {(switchParticipants ?? participants).map((p) => {
-                const checked = selectedLoserIds.includes(p.id);
+              {participants.map((p) => {
+                const checked = selectedPayerIds.includes(p.id);
                 return (
                   <button
                     key={p.id}
                     onClick={() =>
-                      setSelectedLoserIds((ids) =>
+                      setSelectedPayerIds((ids) =>
                         checked ? ids.filter((id) => id !== p.id) : [...ids, p.id]
                       )
                     }
                     className={
                       "w-full flex items-center gap-3 rounded-xl border px-4 py-3 text-left " +
                       (checked
-                        ? "border-[var(--color-danger)] bg-[var(--color-danger)]/10"
+                        ? "border-[var(--color-primary)] bg-[var(--color-primary)]/10"
                         : "border-[var(--color-border)] bg-[var(--color-surface-2)]")
                     }
                   >
@@ -585,7 +532,7 @@ export function TableDetailModal({
                       className={
                         "h-5 w-5 rounded-md border flex items-center justify-center shrink-0 " +
                         (checked
-                          ? "border-[var(--color-danger)] bg-[var(--color-danger)]"
+                          ? "border-[var(--color-primary)] bg-[var(--color-primary)]"
                           : "border-[var(--color-border)]")
                       }
                     >
@@ -596,39 +543,28 @@ export function TableDetailModal({
                 );
               })}
             </div>
-            {selectedLoserIds.length > 0 && (
+            {selectedPayerIds.length > 0 && (
               <p className="text-xs text-[var(--color-text-dim)] text-center">
-                {selectedLoserIds.length === 1
-                  ? `Pays full ${formatMoney(checkoutBill ? checkoutBill.total : total, currency)}`
-                  : `${selectedLoserIds.length} losers · ${formatMoney(
-                      (checkoutBill ? checkoutBill.total : total) / selectedLoserIds.length,
+                {selectedPayerIds.length === 1
+                  ? `Pays the full ${formatMoney(total, currency)}`
+                  : `${selectedPayerIds.length} people · ${formatMoney(
+                      total / selectedPayerIds.length,
                       currency
                     )} each`}
               </p>
             )}
             <button
               onClick={() => {
-                const losers = (switchParticipants ?? participants)
-                  .filter((p) => selectedLoserIds.includes(p.id))
-                  .map((p) => ({ customerId: p.id, name: p.name }));
-                setShowLoserPicker(false);
-                setSelectedLoserIds([]);
-                setSwitchParticipants(null);
-                const billTotal = checkoutBill ? checkoutBill.total : total;
-                if (losers.length <= 1) {
-                  if (checkoutBill) switchBillType(undefined, losers);
-                  else handleStopAndBill(undefined, losers);
-                } else {
-                  const shares = splitEqually(billTotal, losers.map((l) => l.name), "Loser share");
-                  if (checkoutBill) switchBillType(shares, losers);
-                  else handleStopAndBill(shares, losers);
-                }
+                const payers = participants.filter((p) => selectedPayerIds.includes(p.id));
+                setShowPayerPicker(false);
+                setSelectedPayerIds([]);
+                handleStopAndBill(payers);
               }}
-              disabled={selectedLoserIds.length === 0}
-              className="w-full flex items-center justify-center gap-2 rounded-xl bg-[var(--color-danger)] disabled:opacity-40 text-white font-semibold py-3"
+              disabled={selectedPayerIds.length === 0}
+              className="w-full flex items-center justify-center gap-2 rounded-xl bg-[var(--color-primary)] disabled:opacity-40 text-white font-semibold py-3"
             >
-              <Frown size={15} />
-              Bill {selectedLoserIds.length || ""} loser{selectedLoserIds.length === 1 ? "" : "s"}
+              <Check size={15} />
+              Bill {selectedPayerIds.length || ""} {selectedPayerIds.length === 1 ? "person" : "people"}
             </button>
           </div>
         </Modal>
@@ -791,14 +727,7 @@ function AddPersonModal({
   return (
     <Modal title="Add person" onClose={onClose}>
       <div className="space-y-3">
-        <input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="Name"
-          autoFocus
-          onKeyDown={(e) => e.key === "Enter" && handleAdd()}
-          className="w-full rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] px-3 py-3 text-base outline-none focus:border-[var(--color-primary)]"
-        />
+        <CustomerNameInput value={name} onChange={setName} placeholder="Name" autoFocus onEnter={handleAdd} />
         <button
           onClick={handleAdd}
           disabled={!name.trim()}

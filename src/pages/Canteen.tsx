@@ -3,6 +3,8 @@ import { AppShell } from "../components/layout/AppShell";
 import { Card } from "../components/ui/Card";
 import { Modal } from "../components/ui/Modal";
 import { CheckoutModal } from "../components/Checkout";
+import { BillDetailModal } from "../components/BillDetailModal";
+import { CustomerNameInput } from "../components/ui/CustomerNameInput";
 import { useOrdersStore } from "../store/useOrdersStore";
 import { useMenuStore } from "../store/useMenuStore";
 import { useCustomersStore } from "../store/useCustomersStore";
@@ -23,12 +25,14 @@ import {
   UtensilsCrossed,
   Wallet,
   CalendarDays,
+  Trash2,
 } from "lucide-react";
 
 export function Canteen() {
   const orders = useOrdersStore((s) => s.orders);
   const markServed = useOrdersStore((s) => s.markServed);
   const markBilled = useOrdersStore((s) => s.markBilled);
+  const removeOrder = useOrdersStore((s) => s.removeOrder);
   const bills = useBillsStore((s) => s.bills);
   const createOpenBill = useBillsStore((s) => s.createOpenBill);
   const customers = useCustomersStore((s) => s.customers);
@@ -41,6 +45,7 @@ export function Canteen() {
   const [showCategories, setShowCategories] = useState(false);
   const [editOrder, setEditOrder] = useState<CanteenOrder | null>(null);
   const [checkoutBill, setCheckoutBill] = useState<Bill | null>(null);
+  const [detailBill, setDetailBill] = useState<Bill | null>(null);
 
   const isToday = selectedDate === toDateInputValue(Date.now());
 
@@ -206,15 +211,15 @@ export function Canteen() {
             const total = order.items.reduce((sum, i) => sum + i.price * i.qty, 0);
             const label = orderLabel(order);
             const billed = order.status === "billed";
-            const unpaidBill = billed
-              ? bills.find((b) => b.orderId === order.id && b.status === "open")
-              : undefined;
+            const orderBill = billed ? bills.find((b) => b.orderId === order.id) : undefined;
+            const unpaidBill = orderBill && orderBill.status === "open" ? orderBill : undefined;
             return (
               <Card
                 key={order.id}
                 onClick={() => {
                   if (unpaidBill) setCheckoutBill(unpaidBill);
                   else if (!billed) setEditOrder(order);
+                  else if (orderBill) setDetailBill(orderBill);
                 }}
                 className={billed && !unpaidBill ? "opacity-60" : ""}
               >
@@ -257,43 +262,51 @@ export function Canteen() {
                 )}
                 <div className="flex items-center justify-between mt-3">
                   <p className="text-sm font-semibold">{formatMoney(total, currency)}</p>
-                  {!billed && (
-                    <div className="flex items-center gap-2">
-                      {order.status === "pending" && (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            markServed(order.id);
-                          }}
-                          className="flex items-center gap-1.5 rounded-full bg-[var(--color-success)]/15 text-[var(--color-success)] text-sm font-medium px-3 py-1.5"
-                        >
-                          <Check size={14} /> Served
-                        </button>
-                      )}
-                      {!order.tableId && (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleCheckout(order);
-                          }}
-                          className="flex items-center gap-1.5 rounded-full bg-[var(--color-primary)] text-white text-sm font-medium px-3 py-1.5"
-                        >
-                          <Wallet size={14} /> Bill
-                        </button>
-                      )}
-                    </div>
-                  )}
-                  {unpaidBill && (
+                  <div className="flex items-center gap-2">
+                    {!billed && order.status === "pending" && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          markServed(order.id);
+                        }}
+                        className="flex items-center gap-1.5 rounded-full bg-[var(--color-success)]/15 text-[var(--color-success)] text-sm font-medium px-3 py-1.5"
+                      >
+                        <Check size={14} /> Served
+                      </button>
+                    )}
+                    {!billed && !order.tableId && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleCheckout(order);
+                        }}
+                        className="flex items-center gap-1.5 rounded-full bg-[var(--color-primary)] text-white text-sm font-medium px-3 py-1.5"
+                      >
+                        <Wallet size={14} /> Bill
+                      </button>
+                    )}
+                    {unpaidBill && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setCheckoutBill(unpaidBill);
+                        }}
+                        className="flex items-center gap-1.5 rounded-full bg-[var(--color-primary)] text-white text-sm font-medium px-3 py-1.5"
+                      >
+                        <Wallet size={14} /> Settle
+                      </button>
+                    )}
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
-                        setCheckoutBill(unpaidBill);
+                        removeOrder(order.id);
                       }}
-                      className="flex items-center gap-1.5 rounded-full bg-[var(--color-primary)] text-white text-sm font-medium px-3 py-1.5"
+                      title="Delete this order"
+                      className="h-8 w-8 flex items-center justify-center rounded-full bg-[var(--color-danger)]/10 text-[var(--color-danger)] shrink-0"
                     >
-                      <Wallet size={14} /> Settle
+                      <Trash2 size={14} />
                     </button>
-                  )}
+                  </div>
                 </div>
                 {order.tableId && !billed && (
                   <p className="text-xs text-[var(--color-text-faint)] mt-1">
@@ -317,6 +330,7 @@ export function Canteen() {
       {showCategories && <CategoriesModal onClose={() => setShowCategories(false)} />}
       {editOrder && <OrderEditModal order={editOrder} onClose={() => setEditOrder(null)} />}
       {checkoutBill && <CheckoutModal bill={checkoutBill} onDone={() => setCheckoutBill(null)} />}
+      {detailBill && <BillDetailModal bill={detailBill} onClose={() => setDetailBill(null)} />}
     </AppShell>
   );
 }
@@ -493,13 +507,12 @@ function CategoriesModal({ onClose }: { onClose: () => void }) {
 function NewOrderModal({ onClose }: { onClose: () => void }) {
   const menuItems = useMenuStore((s) => s.items);
   const categories = useMenuStore((s) => s.categories);
-  const customers = useCustomersStore((s) => s.customers);
+  const findOrCreateCustomer = useCustomersStore((s) => s.findOrCreateCustomer);
   const createOrder = useOrdersStore((s) => s.createOrder);
   const addItem = useOrdersStore((s) => s.addItem);
   const currency = useSettingsStore((s) => s.currencySymbol);
 
-  const [customerId, setCustomerId] = useState("walk-in");
-  const [guestName, setGuestName] = useState("");
+  const [name, setName] = useState("");
   const [note, setNote] = useState("");
   const [cart, setCart] = useState<Record<string, number>>({});
   const [itemSearch, setItemSearch] = useState("");
@@ -513,7 +526,10 @@ function NewOrderModal({ onClose }: { onClose: () => void }) {
   function handleSave() {
     const items = menuItems.filter((i) => (cart[i.id] ?? 0) > 0);
     if (items.length === 0) return;
-    const order = createOrder(null, customerId, customerId === "walk-in" ? guestName.trim() || null : null);
+    // A typed name attaches the order (and its bill) to that customer's
+    // profile — same rule as starting a table session. Blank = walk-in.
+    const customerId = name.trim() ? findOrCreateCustomer({ name: name.trim(), phone: "" }).id : "walk-in";
+    const order = createOrder(null, customerId, null);
     items.forEach((item) => {
       addItem(order.id, {
         menuItemId: item.id,
@@ -531,34 +547,14 @@ function NewOrderModal({ onClose }: { onClose: () => void }) {
       <div className="space-y-4">
         <div>
           <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-1.5">
-            CUSTOMER
+            CUSTOMER NAME
           </p>
-          <select
-            value={customerId}
-            onChange={(e) => setCustomerId(e.target.value)}
-            className="w-full rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] px-3 py-2.5 text-sm outline-none"
-          >
-            {customers.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
+          <CustomerNameInput
+            value={name}
+            onChange={setName}
+            placeholder="Name — leave blank for walk-in"
+          />
         </div>
-
-        {customerId === "walk-in" && (
-          <div>
-            <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-1.5">
-              NAME (OPTIONAL)
-            </p>
-            <input
-              value={guestName}
-              onChange={(e) => setGuestName(e.target.value)}
-              placeholder="e.g. Rahul — shows up on the canteen list"
-              className="w-full rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] px-3 py-2.5 text-sm outline-none"
-            />
-          </div>
-        )}
 
         <div className="relative">
           <Search

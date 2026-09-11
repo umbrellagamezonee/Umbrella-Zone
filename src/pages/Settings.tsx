@@ -2,7 +2,7 @@ import { useState } from "react";
 import { AppShell } from "../components/layout/AppShell";
 import { Card } from "../components/ui/Card";
 import { Modal } from "../components/ui/Modal";
-import { useTablesStore } from "../store/useTablesStore";
+import { useTablesStore, orderedTables } from "../store/useTablesStore";
 import { useMenuStore } from "../store/useMenuStore";
 import { useGamesStore } from "../store/useGamesStore";
 import { useBillsStore } from "../store/useBillsStore";
@@ -19,6 +19,8 @@ import {
   Store,
   Users,
   ChevronRight,
+  ChevronUp,
+  ChevronDown,
   Trash2,
   Plus,
   Gamepad2,
@@ -134,9 +136,9 @@ export function Settings() {
             <AlertTriangle size={18} />
           </div>
           <div>
-            <p className="text-sm font-medium">Reset All Data</p>
+            <p className="text-sm font-medium">Reset Data</p>
             <p className="text-xs text-[var(--color-text-dim)]">
-              Permanently erase bills, customers, orders, expenses and menu
+              Erase bills, customers, orders and expenses — menu is kept
             </p>
           </div>
         </div>
@@ -161,9 +163,12 @@ function TableManagementModal({ onClose }: { onClose: () => void }) {
   const tables = useTablesStore((s) => s.tables);
   const addTable = useTablesStore((s) => s.addTable);
   const removeTable = useTablesStore((s) => s.removeTable);
+  const moveTable = useTablesStore((s) => s.moveTable);
   const [name, setName] = useState("");
   const [kind, setKind] = useState("PlayStation");
   const [rate, setRate] = useState("60");
+
+  const ordered = orderedTables(tables);
 
   function handleAdd() {
     if (!name.trim()) return;
@@ -173,20 +178,42 @@ function TableManagementModal({ onClose }: { onClose: () => void }) {
 
   return (
     <Modal title="Table Management" onClose={onClose}>
+      <p className="text-xs text-[var(--color-text-dim)] mb-2">
+        Use the arrows to set the order tables appear in — on this screen and on Home.
+      </p>
       <div className="space-y-2 mb-4">
-        {tables.map((t) => (
-          <Card key={t.id} className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium">{t.name}</p>
+        {ordered.map((t, i) => (
+          <Card key={t.id} className="flex items-center justify-between gap-2">
+            <div className="min-w-0">
+              <p className="text-sm font-medium truncate">{t.name}</p>
               <p className="text-xs text-[var(--color-text-dim)]">{t.kind}</p>
             </div>
-            <button
-              onClick={() => removeTable(t.id)}
-              disabled={t.status !== "available"}
-              className="h-8 w-8 flex items-center justify-center rounded-full bg-[var(--color-danger)]/10 text-[var(--color-danger)] disabled:opacity-30"
-            >
-              <Trash2 size={14} />
-            </button>
+            <div className="flex items-center gap-1 shrink-0">
+              <button
+                onClick={() => moveTable(t.id, "up")}
+                disabled={i === 0}
+                aria-label="Move up"
+                className="h-8 w-8 flex items-center justify-center rounded-full bg-[var(--color-surface-2)] text-[var(--color-text-dim)] disabled:opacity-25"
+              >
+                <ChevronUp size={15} />
+              </button>
+              <button
+                onClick={() => moveTable(t.id, "down")}
+                disabled={i === ordered.length - 1}
+                aria-label="Move down"
+                className="h-8 w-8 flex items-center justify-center rounded-full bg-[var(--color-surface-2)] text-[var(--color-text-dim)] disabled:opacity-25"
+              >
+                <ChevronDown size={15} />
+              </button>
+              <button
+                onClick={() => removeTable(t.id)}
+                disabled={t.status !== "available"}
+                aria-label="Delete table"
+                className="h-8 w-8 flex items-center justify-center rounded-full bg-[var(--color-danger)]/10 text-[var(--color-danger)] disabled:opacity-30"
+              >
+                <Trash2 size={14} />
+              </button>
+            </div>
           </Card>
         ))}
       </div>
@@ -399,6 +426,7 @@ function MenuManagementModal({ onClose }: { onClose: () => void }) {
 
   const [name, setName] = useState("");
   const [price, setPrice] = useState("");
+  const [costPrice, setCostPrice] = useState("");
   const [stock, setStock] = useState("");
   const [categoryId, setCategoryId] = useState(categories[0]?.id ?? "");
   const [newCategory, setNewCategory] = useState("");
@@ -408,6 +436,7 @@ function MenuManagementModal({ onClose }: { onClose: () => void }) {
     addItem({
       name: name.trim(),
       price: Math.max(0, Number(price) || 0),
+      costPrice: costPrice.trim() === "" ? null : Math.max(0, Number(costPrice) || 0),
       categoryId,
       inStock: true,
       stockQty: stock.trim() === "" ? null : Math.max(0, Number(stock) || 0),
@@ -415,6 +444,7 @@ function MenuManagementModal({ onClose }: { onClose: () => void }) {
     });
     setName("");
     setPrice("");
+    setCostPrice("");
     setStock("");
   }
 
@@ -430,6 +460,7 @@ function MenuManagementModal({ onClose }: { onClose: () => void }) {
         {items.map((item) => {
           const cat = categories.find((c) => c.id === item.categoryId);
           const low = item.stockQty != null && item.stockQty <= item.lowStockThreshold;
+          const margin = item.costPrice != null ? item.price - item.costPrice : null;
           return (
             <Card key={item.id}>
               <div className="flex items-center justify-between">
@@ -437,6 +468,9 @@ function MenuManagementModal({ onClose }: { onClose: () => void }) {
                   <p className="text-sm font-medium">{item.name}</p>
                   <p className="text-xs text-[var(--color-text-dim)]">
                     {cat?.name} · {formatMoney(item.price, currency)}
+                    {margin != null && (
+                      <span className="text-[var(--color-success)]"> · +{formatMoney(margin, currency)} margin</span>
+                    )}
                   </p>
                 </div>
                 <button
@@ -447,6 +481,21 @@ function MenuManagementModal({ onClose }: { onClose: () => void }) {
                 </button>
               </div>
               <div className="flex items-center justify-between mt-2 pt-2 border-t border-[var(--color-border)]">
+                <span className="text-xs text-[var(--color-text-dim)]">Cost price</span>
+                <input
+                  type="number"
+                  min={0}
+                  value={item.costPrice ?? ""}
+                  placeholder="—"
+                  onChange={(e) =>
+                    updateItem(item.id, {
+                      costPrice: e.target.value === "" ? null : Math.max(0, Number(e.target.value) || 0),
+                    })
+                  }
+                  className="w-16 bg-[var(--color-surface-2)] rounded-lg px-2 py-1 text-sm outline-none text-right"
+                />
+              </div>
+              <div className="flex items-center justify-between mt-1.5">
                 <span className={"text-xs " + (low ? "text-[var(--color-danger)] font-medium" : "text-[var(--color-text-dim)]")}>
                   {item.stockQty == null ? "Stock not tracked" : `${item.stockQty} in stock${low ? " · low!" : ""}`}
                 </span>
@@ -495,6 +544,16 @@ function MenuManagementModal({ onClose }: { onClose: () => void }) {
             onChange={(e) => setPrice(e.target.value)}
             placeholder="Price"
             className="w-20 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] px-3 py-2.5 text-sm outline-none"
+          />
+        </div>
+        <div className="flex gap-2">
+          <input
+            type="number"
+            min={0}
+            value={costPrice}
+            onChange={(e) => setCostPrice(e.target.value)}
+            placeholder="Cost price (optional)"
+            className="flex-1 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] px-3 py-2.5 text-sm outline-none"
           />
           <input
             type="number"
@@ -1036,7 +1095,6 @@ function ResetAllDataModal({ onClose }: { onClose: () => void }) {
   const resetBills = useBillsStore((s) => s.resetAll);
   const resetOrders = useOrdersStore((s) => s.resetAll);
   const resetCustomers = useCustomersStore((s) => s.resetAll);
-  const resetMenu = useMenuStore((s) => s.resetAll);
   const resetExpenses = useExpensesStore((s) => s.resetAll);
   const [confirmText, setConfirmText] = useState("");
   const [done, setDone] = useState(false);
@@ -1056,18 +1114,16 @@ function ResetAllDataModal({ onClose }: { onClose: () => void }) {
     resetBills();
     resetOrders();
     resetCustomers();
-    resetMenu();
     resetExpenses();
     setDone(true);
   }
 
   if (done) {
     return (
-      <Modal title="All data cleared" onClose={onClose}>
+      <Modal title="Data cleared" onClose={onClose}>
         <p className="text-sm text-[var(--color-text-dim)] mb-4">
-          Bills, sessions, customers, canteen orders, expenses and the menu are all gone —
-          tables, games, and store settings are untouched. Add menu items again from Menu
-          Management whenever you're ready.
+          Bills, sessions, customers, canteen orders and expenses are gone. Your menu, tables,
+          games and store settings are untouched — you're ready to start fresh.
         </p>
         <button
           onClick={onClose}
@@ -1080,20 +1136,21 @@ function ResetAllDataModal({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <Modal title="Reset All Data" onClose={onClose}>
+    <Modal title="Reset Data" onClose={onClose}>
       <div className="space-y-4">
         <div className="rounded-xl border border-[var(--color-danger)]/40 bg-[var(--color-danger)]/10 p-3">
           <p className="text-sm font-semibold text-[var(--color-danger)] flex items-center gap-1.5">
             <AlertTriangle size={15} /> This can't be undone
           </p>
           <p className="text-xs text-[var(--color-text-dim)] mt-1.5">
-            Every bill, session history, customer, canteen order, expense and menu item — on
-            every device signed into this cafe — will be permanently deleted. Any table
-            currently running will be stopped.
+            Every bill, session history, customer, canteen order and expense — on every device
+            signed into this cafe — will be permanently deleted. Any table currently running
+            will be stopped.
           </p>
         </div>
         <p className="text-xs text-[var(--color-text-dim)]">
-          Tables, games, and store settings (name, currency, password, theme) are kept.
+          Your menu, tables, games, and store settings (name, currency, password, theme) are
+          kept.
         </p>
         <div>
           <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-1.5">

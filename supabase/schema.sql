@@ -69,6 +69,7 @@ create table menu_items (
   name text not null,
   category_id text not null references menu_categories(id) on delete cascade,
   price numeric not null default 0,
+  cost_price numeric,
   in_stock boolean not null default true,
   stock_qty int,
   low_stock_threshold int not null default 5

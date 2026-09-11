@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Modal } from "./ui/Modal";
+import { CustomerNameInput } from "./ui/CustomerNameInput";
 import { useTablesStore } from "../store/useTablesStore";
 import { useGamesStore } from "../store/useGamesStore";
 import { useCustomersStore } from "../store/useCustomersStore";
@@ -82,19 +83,20 @@ export function StartSessionModal({ table, onClose }: { table: BillingTable; onC
 
         <div className="space-y-2">
           {people.map((row, i) => (
-            <div key={row.key} className="flex items-center gap-2">
-              <input
-                value={row.name}
-                onChange={(e) => updatePerson(row.key, { name: e.target.value })}
-                placeholder={i === 0 ? "Name" : "Another name"}
-                autoFocus={i === 0}
-                onKeyDown={(e) => e.key === "Enter" && handleStart()}
-                className="flex-1 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] px-3 py-3 text-base outline-none focus:border-[var(--color-primary)]"
-              />
+            <div key={row.key} className="flex items-start gap-2">
+              <div className="flex-1">
+                <CustomerNameInput
+                  value={row.name}
+                  onChange={(name) => updatePerson(row.key, { name })}
+                  placeholder={i === 0 ? "Name" : "Another name"}
+                  autoFocus={i === 0}
+                  onEnter={handleStart}
+                />
+              </div>
               {people.length > 1 && (
                 <button
                   onClick={() => removePerson(row.key)}
-                  className="h-9 w-9 flex items-center justify-center rounded-full bg-[var(--color-surface-2)] text-[var(--color-text-dim)] shrink-0"
+                  className="h-11 w-9 flex items-center justify-center rounded-full bg-[var(--color-surface-2)] text-[var(--color-text-dim)] shrink-0"
                 >
                   <X size={14} />
                 </button>

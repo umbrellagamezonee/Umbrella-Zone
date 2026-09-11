@@ -7,11 +7,12 @@ import { BillDetailModal } from "../components/BillDetailModal";
 import { useCustomersStore } from "../store/useCustomersStore";
 import { useBillsStore } from "../store/useBillsStore";
 import { useSettingsStore } from "../store/useSettingsStore";
-import { formatMoney, formatDateTime } from "../lib/format";
+import { formatMoney, formatTime, toDateInputValue } from "../lib/format";
 import { billCollected } from "../lib/billing";
 import { sendCreditReminder } from "../lib/reminderApi";
+import { customerLabel, findCustomerByName, normalizeName } from "../lib/customerName";
 import type { Customer, Bill, PaymentMethod } from "../types";
-import { Search, Footprints, BellRing, Check, ChevronRight, Wallet } from "lucide-react";
+import { Search, Footprints, BellRing, Check, ChevronRight, Wallet, Users } from "lucide-react";
 
 function timeAgo(ts: number | null) {
   if (ts == null) return "Never reminded";
@@ -50,7 +51,14 @@ export function Customers() {
 
   function handleAdd() {
     if (!name.trim()) return;
-    addCustomer({ name: name.trim(), phone, email });
+    // Don't stack a second profile on a name that's already here — open the
+    // existing one instead.
+    const existing = findCustomerByName(customers, name);
+    if (existing) {
+      setDetailCustomer(existing);
+    } else {
+      addCustomer({ name: name.trim(), phone, email });
+    }
     setName("");
     setPhone("");
     setEmail("");
@@ -87,7 +95,7 @@ export function Customers() {
               <Card key={c.id} className="border-[var(--color-warning)]/40">
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-sm font-medium">{c.name}</p>
+                    <p className="text-sm font-medium">{customerLabel(c, customers)}</p>
                     <p className="text-xs text-[var(--color-text-dim)]">
                       {c.phone || "No phone"} · {timeAgo(c.lastReminderAt)}
                     </p>
@@ -177,7 +185,7 @@ export function Customers() {
                 )}
               </div>
               <div>
-                <p className="text-sm font-medium">{c.name}</p>
+                <p className="text-sm font-medium">{customerLabel(c, customers)}</p>
                 <p className="text-xs text-[var(--color-text-dim)]">
                   {c.phone || (c.isWalkIn ? "System" : "No phone")}
                 </p>
@@ -234,46 +242,80 @@ export function Customers() {
   );
 }
 
-// Everything this one customer has done — every visit, what it cost, and
-// (tapping into one) exactly what was ordered and who they played — so the
-// answer to "when did they last come in, what do they usually order" is one
-// tap away instead of scrolling through Reports guessing at names.
+// Everything this one customer has done, grouped by day — each day shows how
+// many matches they played, what they spent and what they ate, with every
+// session tappable for the full breakdown. Answers "how often do they come in,
+// what do they usually order" at a glance instead of scrolling through Reports.
 function CustomerDetailModal({ customer: initialCustomer, onClose }: { customer: Customer; onClose: () => void }) {
   const bills = useBillsStore((s) => s.bills);
   // Deleted bills too — a credit balance doesn't get reversed when the bill
   // that created it is trashed, so leaving those out would hide exactly the
   // history someone's most likely trying to track down.
   const deletedBills = useBillsStore((s) => s.deletedBills);
+  const reassignCustomer = useBillsStore((s) => s.reassignCustomer);
   const currency = useSettingsStore((s) => s.currencySymbol);
+  const allCustomers = useCustomersStore((s) => s.customers);
+  const mergeCustomer = useCustomersStore((s) => s.mergeCustomer);
   const [detailBill, setDetailBill] = useState<Bill | null>(null);
   const [showSettle, setShowSettle] = useState(false);
+  const [mergeTarget, setMergeTarget] = useState<Customer | null>(null);
   // Read live off the store — settling a payment from right here should
   // update the balance on screen immediately, not just after closing and
   // reopening this modal.
   const customer =
     useCustomersStore((s) => s.customers.find((c) => c.id === initialCustomer.id)) ?? initialCustomer;
 
+  const nameKey = normalizeName(customer.name);
   const matchesCustomer = (b: Bill) =>
     b.customerId === customer.id ||
-    b.matchParticipants?.includes(customer.name) ||
-    b.shares?.some((s) => s.payerName === customer.name);
+    b.matchParticipants?.some((n) => normalizeName(n) === nameKey) ||
+    b.shares?.some((s) => normalizeName(s.payerName) === nameKey);
+
+  // Other real customers this one could be merged into — same-name profiles
+  // first, since those are the accidental duplicates worth cleaning up.
+  const mergeCandidates = allCustomers
+    .filter((c) => !c.isWalkIn && c.id !== customer.id)
+    .sort(
+      (a, b) =>
+        (normalizeName(b.name) === nameKey ? 1 : 0) - (normalizeName(a.name) === nameKey ? 1 : 0) ||
+        a.name.localeCompare(b.name)
+    );
+
+  function confirmMerge(target: Customer) {
+    reassignCustomer(customer.id, customer.name, target.id, target.name);
+    mergeCustomer(customer.id, target.id);
+    setMergeTarget(null);
+    onClose();
+  }
 
   const customerBills = [...bills, ...deletedBills]
     .filter(matchesCustomer)
     .sort((a, b) => b.createdAt - a.createdAt);
   const deletedCount = customerBills.filter((b) => b.deletedAt).length;
 
+  // A "match" is one table session that actually counted — canteen-only bills,
+  // credit settlements, cancellations and trashed sessions don't.
+  const isMatch = (b: Bill) => !!b.tableId && !b.deletedAt && b.status !== "cancelled";
+  const totalMatches = customerBills.filter(isMatch).length;
   const totalSpent = customerBills.reduce((sum, b) => sum + billCollected(b), 0);
 
+  // Newest day first; bills within each day stay newest-first (customerBills
+  // is already sorted that way).
+  const dayGroups: [string, Bill[]][] = [];
+  for (const b of customerBills) {
+    const key = toDateInputValue(b.createdAt);
+    const existing = dayGroups.find(([k]) => k === key);
+    if (existing) existing[1].push(b);
+    else dayGroups.push([key, [b]]);
+  }
+
   return (
-    <Modal title={customer.name} onClose={onClose}>
+    <Modal title={customerLabel(customer, allCustomers)} onClose={onClose}>
       <div className="space-y-4">
         <div className="grid grid-cols-2 gap-3">
           <Card>
-            <p className="text-xs text-[var(--color-text-dim)]">VISITS</p>
-            <p className="text-xl font-bold mt-1">
-              {customerBills.length - deletedCount}
-            </p>
+            <p className="text-xs text-[var(--color-text-dim)]">MATCHES</p>
+            <p className="text-xl font-bold mt-1">{totalMatches}</p>
           </Card>
           <Card>
             <p className="text-xs text-[var(--color-text-dim)]">TOTAL SPENT</p>
@@ -310,63 +352,208 @@ function CustomerDetailModal({ customer: initialCustomer, onClose }: { customer:
           <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-2">
             HISTORY
           </p>
-          {customerBills.length === 0 ? (
+          {dayGroups.length === 0 ? (
             <p className="text-sm text-[var(--color-text-faint)] text-center py-6">
               No sessions yet.
             </p>
           ) : (
             <div className="space-y-2">
-              {customerBills.map((b) => (
-                <Card
-                  key={b.id}
-                  onClick={() => setDetailBill(b)}
-                  className={b.status === "cancelled" || b.deletedAt ? "opacity-50" : ""}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <div>
-                      <p className="text-sm font-medium">
-                        {b.tableName ?? "Canteen order"}
-                        {b.deletedAt && (
-                          <span className="text-[var(--color-danger)] font-normal"> · Deleted</span>
-                        )}
-                      </p>
-                      <p className="text-xs text-[var(--color-text-dim)]">{formatDateTime(b.createdAt)}</p>
-                      {b.canteenItems.length > 0 && (
-                        <p className="text-xs text-[var(--color-text-faint)] mt-0.5">
-                          {b.canteenItems.map((i) => i.name).join(", ")}
-                        </p>
-                      )}
-                    </div>
-                    <div className="text-right shrink-0">
-                      <p className="text-sm font-semibold">{formatMoney(b.total, currency)}</p>
-                      {b.status === "paid" && b.amountPaid > 0 && (
-                        <p className="text-xs text-[var(--color-success)] flex items-center gap-1 justify-end">
-                          <Check size={11} /> Paid
-                        </p>
-                      )}
-                      {b.amountDue > 0 && (
-                        <p className="text-xs text-[var(--color-warning)]">
-                          {formatMoney(b.amountDue, currency)} on credit
-                        </p>
-                      )}
-                      {b.status === "open" && (
-                        <p className="text-xs text-[var(--color-warning)]">Open</p>
-                      )}
-                      {b.status === "cancelled" && (
-                        <p className="text-xs text-[var(--color-text-faint)]">Cancelled</p>
-                      )}
-                    </div>
-                  </div>
-                </Card>
+              {dayGroups.map(([dateKey, dayBills], i) => (
+                <DayGroup
+                  key={dateKey}
+                  dateKey={dateKey}
+                  dayBills={dayBills}
+                  currency={currency}
+                  defaultOpen={i === 0}
+                  onOpenBill={setDetailBill}
+                />
               ))}
             </div>
           )}
         </div>
+
+        {mergeCandidates.length > 0 && (
+          <details className="rounded-xl bg-[var(--color-surface-2)] overflow-hidden">
+            <summary className="flex items-center gap-2 px-3 py-2.5 cursor-pointer select-none list-none text-xs font-semibold tracking-wide text-[var(--color-text-dim)]">
+              <Users size={13} /> SAME PERSON AS SOMEONE ELSE?
+            </summary>
+            <div className="px-3 pb-3 space-y-2">
+              <p className="text-xs text-[var(--color-text-faint)]">
+                Pick who this is really the same as — every match, bill and credit balance moves
+                onto them and this duplicate is removed. Can't be undone.
+              </p>
+              {mergeCandidates.slice(0, 8).map((c) => (
+                <button
+                  key={c.id}
+                  onClick={() => setMergeTarget(c)}
+                  className="w-full flex items-center justify-between gap-2 rounded-xl bg-[var(--color-surface)] border border-[var(--color-border)] px-3 py-2.5 text-left"
+                >
+                  <span className="text-sm">{customerLabel(c, allCustomers)}</span>
+                  {c.creditBalance > 0 && (
+                    <span className="text-xs text-[var(--color-warning)] shrink-0">
+                      {formatMoney(c.creditBalance, currency)} due
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          </details>
+        )}
       </div>
 
       {detailBill && <BillDetailModal bill={detailBill} onClose={() => setDetailBill(null)} />}
       {showSettle && <SettleCreditModal customer={customer} onClose={() => setShowSettle(false)} />}
+      {mergeTarget && (
+        <Modal title="Merge customers" onClose={() => setMergeTarget(null)}>
+          <div className="space-y-4">
+            <p className="text-sm">
+              Move everything from <span className="font-semibold">{customerLabel(customer, allCustomers)}</span>{" "}
+              into <span className="font-semibold">{customerLabel(mergeTarget, allCustomers)}</span>?
+            </p>
+            <p className="text-xs text-[var(--color-text-faint)]">
+              All their sessions and bills get re-tagged, and{" "}
+              {formatMoney(customer.creditBalance, currency)} credit is added to{" "}
+              {customerLabel(mergeTarget, allCustomers)}. This customer is then deleted. This can't be
+              undone.
+            </p>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                onClick={() => setMergeTarget(null)}
+                className="rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] font-semibold py-3 text-sm"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => confirmMerge(mergeTarget)}
+                className="rounded-xl bg-[var(--color-danger)] text-white font-semibold py-3 text-sm"
+              >
+                Merge
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </Modal>
+  );
+}
+
+// One collapsible day inside a customer's history: a header with the match
+// count and what they spent, then the food they had that day and every
+// session, each tappable for the full bill.
+function DayGroup({
+  dateKey,
+  dayBills,
+  currency,
+  defaultOpen,
+  onOpenBill,
+}: {
+  dateKey: string;
+  dayBills: Bill[];
+  currency: string;
+  defaultOpen: boolean;
+  onOpenBill: (b: Bill) => void;
+}) {
+  const todayKey = toDateInputValue(Date.now());
+  const yesterdayKey = toDateInputValue(Date.now() - 86_400_000);
+  const label =
+    dateKey === todayKey
+      ? "Today"
+      : dateKey === yesterdayKey
+        ? "Yesterday"
+        : new Date(`${dateKey}T00:00:00`).toLocaleDateString([], {
+            weekday: "short",
+            day: "numeric",
+            month: "short",
+          });
+
+  const counted = dayBills.filter((b) => !b.deletedAt && b.status !== "cancelled");
+  const matches = counted.filter((b) => b.tableId).length;
+  const daySpent = dayBills.reduce((sum, b) => sum + billCollected(b), 0);
+
+  // What they ate that day, rolled up across every session (qty summed).
+  const food = new Map<string, number>();
+  for (const b of counted) {
+    for (const item of b.canteenItems) food.set(item.name, (food.get(item.name) ?? 0) + item.qty);
+  }
+  const foodList = [...food.entries()];
+
+  return (
+    <details open={defaultOpen} className="rounded-xl bg-[var(--color-surface-2)] overflow-hidden">
+      <summary className="flex items-center justify-between gap-2 px-3 py-2.5 cursor-pointer select-none list-none">
+        <span className="flex items-center gap-2">
+          <span className="text-sm font-semibold">{label}</span>
+          <span className="text-xs rounded-full bg-[var(--color-primary)]/15 text-[var(--color-primary)] px-2 py-0.5">
+            {matches} {matches === 1 ? "match" : "matches"}
+          </span>
+        </span>
+        <span className="text-sm font-semibold">{formatMoney(daySpent, currency)}</span>
+      </summary>
+      <div className="px-3 pb-3 space-y-2">
+        {foodList.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {foodList.map(([name, qty]) => (
+              <span
+                key={name}
+                className="text-xs rounded-full bg-[var(--color-surface)] border border-[var(--color-border)] px-2 py-0.5 text-[var(--color-text-dim)]"
+              >
+                {name}
+                {qty > 1 ? ` ×${qty}` : ""}
+              </span>
+            ))}
+          </div>
+        )}
+        {dayBills.map((b) => (
+          <Card
+            key={b.id}
+            onClick={() => onOpenBill(b)}
+            className={b.status === "cancelled" || b.deletedAt ? "opacity-50" : ""}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <p className="text-sm font-medium">
+                  {b.tableName ?? "Canteen order"}
+                  {b.deletedAt && (
+                    <span className="text-[var(--color-danger)] font-normal"> · Deleted</span>
+                  )}
+                </p>
+                <p className="text-xs text-[var(--color-text-dim)]">{formatTime(b.createdAt)}</p>
+                {b.matchParticipants && b.matchParticipants.length > 1 && (
+                  <p className="text-xs text-[var(--color-text-faint)] mt-0.5">
+                    {b.matchParticipants.join(" vs ")}
+                    {b.matchLosers && b.matchLosers.length > 0 &&
+                      ` · ${b.matchLosers.join(", ")} lost`}
+                  </p>
+                )}
+                {b.canteenItems.length > 0 && (
+                  <p className="text-xs text-[var(--color-text-faint)] mt-0.5">
+                    {b.canteenItems.map((i) => i.name).join(", ")}
+                  </p>
+                )}
+              </div>
+              <div className="text-right shrink-0">
+                <p className="text-sm font-semibold">{formatMoney(b.total, currency)}</p>
+                {b.status === "paid" && b.amountPaid > 0 && (
+                  <p className="text-xs text-[var(--color-success)] flex items-center gap-1 justify-end">
+                    <Check size={11} /> Paid
+                  </p>
+                )}
+                {b.amountDue > 0 && (
+                  <p className="text-xs text-[var(--color-warning)]">
+                    {formatMoney(b.amountDue, currency)} on credit
+                  </p>
+                )}
+                {b.status === "open" && (
+                  <p className="text-xs text-[var(--color-warning)]">Open</p>
+                )}
+                {b.status === "cancelled" && (
+                  <p className="text-xs text-[var(--color-text-faint)]">Cancelled</p>
+                )}
+              </div>
+            </div>
+          </Card>
+        ))}
+      </div>
+    </details>
   );
 }
 

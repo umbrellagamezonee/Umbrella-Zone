@@ -10,8 +10,11 @@ import { useMenuStore } from "../store/useMenuStore";
 import { useGamesStore } from "../store/useGamesStore";
 import { useTablesStore } from "../store/useTablesStore";
 import { useSettingsStore } from "../store/useSettingsStore";
-import { formatMoney, isToday, isThisMonth, toDateInputValue } from "../lib/format";
+import { formatMoney, formatTime, isToday, isThisMonth, toDateInputValue } from "../lib/format";
 import { billMoney, billCollected, billRemaining } from "../lib/billing";
+import { billPersonName, billPlace } from "../lib/billLabel";
+import { useCustomersStore } from "../store/useCustomersStore";
+import { orderedTables } from "../store/useTablesStore";
 import { BillDetailModal } from "../components/BillDetailModal";
 import type { Bill } from "../types";
 import {
@@ -23,11 +26,14 @@ import {
   SlidersHorizontal,
   Bed,
   CalendarDays,
+  LayoutGrid,
+  FileSpreadsheet,
 } from "lucide-react";
 
 export function Reports() {
   const bills = useBillsStore((s) => s.bills);
   const tables = useTablesStore((s) => s.tables);
+  const customers = useCustomersStore((s) => s.customers);
   const todaysBills = useMemo(() => bills.filter((b) => isToday(b.createdAt)), [bills]);
   const monthBills = useMemo(() => bills.filter((b) => isThisMonth(b.createdAt)), [bills]);
   const expenses = useExpensesStore((s) => s.expenses);
@@ -39,6 +45,7 @@ export function Reports() {
   const [showCafeReport, setShowCafeReport] = useState(false);
   const [showGalla, setShowGalla] = useState(false);
   const [showInsights, setShowInsights] = useState(false);
+  const [showTableReport, setShowTableReport] = useState(false);
   const [checkDate, setCheckDate] = useState(() => toDateInputValue(Date.now()));
   const [detailBill, setDetailBill] = useState<Bill | null>(null);
 
@@ -91,9 +98,14 @@ export function Reports() {
   const openBillsTotal = openBills.reduce((sum, b) => sum + billRemaining(b), 0);
   const activeCount = running + paused;
 
-  const filteredBills = todaysBills.filter((b) =>
-    (b.tableName ?? "").toLowerCase().includes(search.toLowerCase())
-  );
+  const filteredBills = todaysBills.filter((b) => {
+    const q = search.toLowerCase();
+    return (
+      (b.tableName ?? "").toLowerCase().includes(q) ||
+      billPersonName(b, customers.find((c) => c.id === b.customerId)).toLowerCase().includes(q) ||
+      (b.matchParticipants ?? []).some((n) => n.toLowerCase().includes(q))
+    );
+  });
 
   return (
     <AppShell title="Reports">
@@ -208,6 +220,16 @@ export function Reports() {
         </Card>
       </div>
 
+      <Card onClick={() => setShowTableReport(true)}>
+        <div className="flex items-center gap-2 text-[var(--color-primary)]">
+          <LayoutGrid size={16} />
+          <p className="text-sm font-semibold">Table Report</p>
+        </div>
+        <p className="text-xs text-[var(--color-text-faint)] mt-1">
+          Pick a table, see every session that day — start, end, who played, paid or credit
+        </p>
+      </Card>
+
       <Card>
         <p className="text-xs text-[var(--color-text-dim)]">FILTERS APPLIED</p>
         <p className="text-sm mt-0.5">Today · All statuses · All payments</p>
@@ -278,8 +300,11 @@ export function Reports() {
         {filteredBills.map((bill) => (
           <Card key={bill.id} onClick={() => setDetailBill(bill)} className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium">{bill.tableName ?? "Canteen order"}</p>
+              <p className="text-sm font-medium">
+                {billPersonName(bill, customers.find((c) => c.id === bill.customerId))}
+              </p>
               <p className="text-xs text-[var(--color-text-dim)]">
+                {billPlace(bill)} ·{" "}
                 {new Date(bill.createdAt).toLocaleTimeString([], {
                   hour: "2-digit",
                   minute: "2-digit",
@@ -331,8 +356,137 @@ export function Reports() {
       {showCafeReport && <CafeReportModal onClose={() => setShowCafeReport(false)} />}
       {showGalla && <GallaSummaryModal onClose={() => setShowGalla(false)} />}
       {showInsights && <InsightsModal onClose={() => setShowInsights(false)} />}
+      {showTableReport && <TableReportModal onClose={() => setShowTableReport(false)} />}
       {detailBill && <BillDetailModal bill={detailBill} onClose={() => setDetailBill(null)} />}
     </AppShell>
+  );
+}
+
+// One table's whole day, time-wise: every session that ran on it, who played,
+// when it started and ended, how much it came to, and whether it was paid or
+// left on credit — so "kitna kamaya is table ne aaj" is one screen, not a
+// scroll through every bill of the day.
+function TableReportModal({ onClose }: { onClose: () => void }) {
+  const bills = useBillsStore((s) => s.bills);
+  const tables = useTablesStore((s) => s.tables);
+  const customers = useCustomersStore((s) => s.customers);
+  const currency = useSettingsStore((s) => s.currencySymbol);
+  const [detailBill, setDetailBill] = useState<Bill | null>(null);
+
+  const ordered = useMemo(() => orderedTables(tables), [tables]);
+  const [tableId, setTableId] = useState(ordered[0]?.id ?? "");
+  const [date, setDate] = useState(() => toDateInputValue(Date.now()));
+
+  const dayBills = useMemo(
+    () =>
+      bills
+        .filter((b) => b.tableId === tableId && toDateInputValue(b.createdAt) === date)
+        .sort((a, b) => a.createdAt - b.createdAt),
+    [bills, tableId, date]
+  );
+  const dayTotal = dayBills
+    .filter((b) => b.status !== "cancelled")
+    .reduce((sum, b) => sum + b.total, 0);
+
+  return (
+    <Modal title="Table Report" onClose={onClose}>
+      <div className="space-y-3">
+        <div className="flex gap-2">
+          <select
+            value={tableId}
+            onChange={(e) => setTableId(e.target.value)}
+            className="flex-1 min-w-0 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] px-3 py-2.5 text-sm outline-none"
+          >
+            {ordered.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+              </option>
+            ))}
+          </select>
+          <input
+            type="date"
+            value={date}
+            max={toDateInputValue(Date.now())}
+            onChange={(e) => setDate(e.target.value)}
+            className="rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] px-3 py-2.5 text-sm outline-none"
+          />
+        </div>
+
+        {dayBills.length === 0 ? (
+          <p className="text-sm text-[var(--color-text-faint)] text-center py-8">
+            No sessions on this table for this day.
+          </p>
+        ) : (
+          <>
+            <div className="overflow-x-auto -mx-1 px-1">
+              <table className="w-full text-xs border-collapse">
+                <thead>
+                  <tr className="text-left text-[var(--color-text-faint)]">
+                    <th className="font-medium py-1.5 pr-2 whitespace-nowrap">Start</th>
+                    <th className="font-medium py-1.5 pr-2 whitespace-nowrap">End</th>
+                    <th className="font-medium py-1.5 pr-2">Players</th>
+                    <th className="font-medium py-1.5 pr-2 text-right whitespace-nowrap">Amount</th>
+                    <th className="font-medium py-1.5 pl-2 whitespace-nowrap">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {dayBills.map((b) => {
+                    const durationMs = b.tableChargeMinutes * 60000;
+                    const start = b.createdAt - durationMs;
+                    const customer = customers.find((c) => c.id === b.customerId);
+                    const who = b.matchParticipants?.join(" vs ") ?? billPersonName(b, customer);
+                    const status =
+                      b.status === "cancelled"
+                        ? "Cancelled"
+                        : b.status === "open"
+                          ? "Open"
+                          : b.amountDue > 0
+                            ? "Credit"
+                            : "Paid";
+                    return (
+                      <tr
+                        key={b.id}
+                        onClick={() => setDetailBill(b)}
+                        className={
+                          "border-t border-[var(--color-border)] cursor-pointer" +
+                          (b.status === "cancelled" ? " opacity-50" : "")
+                        }
+                      >
+                        <td className="py-2 pr-2 whitespace-nowrap">{formatTime(start)}</td>
+                        <td className="py-2 pr-2 whitespace-nowrap">{formatTime(b.createdAt)}</td>
+                        <td className="py-2 pr-2">{who}</td>
+                        <td className="py-2 pr-2 text-right font-medium whitespace-nowrap">
+                          {formatMoney(b.total, currency)}
+                        </td>
+                        <td
+                          className={
+                            "py-2 pl-2 whitespace-nowrap " +
+                            (status === "Paid"
+                              ? "text-[var(--color-success)]"
+                              : status === "Credit"
+                                ? "text-[var(--color-warning)]"
+                                : "text-[var(--color-text-faint)]")
+                          }
+                        >
+                          {status}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <div className="flex justify-between text-sm font-semibold pt-2 border-t border-[var(--color-border)]">
+              <span>
+                Total · {dayBills.length} session{dayBills.length > 1 ? "s" : ""}
+              </span>
+              <span>{formatMoney(dayTotal, currency)}</span>
+            </div>
+          </>
+        )}
+      </div>
+      {detailBill && <BillDetailModal bill={detailBill} onClose={() => setDetailBill(null)} />}
+    </Modal>
   );
 }
 
@@ -551,64 +705,194 @@ function InsightsModal({ onClose }: { onClose: () => void }) {
 function CafeReportModal({ onClose }: { onClose: () => void }) {
   const orders = useOrdersStore((s) => s.orders);
   const items = useMenuStore((s) => s.items);
+  const categories = useMenuStore((s) => s.categories);
   const currency = useSettingsStore((s) => s.currencySymbol);
+  const storeName = useSettingsStore((s) => s.storeName);
+  const [period, setPeriod] = useState<"today" | "month">("today");
+  const [working, setWorking] = useState(false);
 
   const rows = useMemo(() => {
     return items.map((item) => {
       let todayQty = 0;
+      let todayRevenue = 0;
       let monthQty = 0;
       let monthRevenue = 0;
       for (const order of orders) {
         const line = order.items.find((i) => i.menuItemId === item.id);
         if (!line) continue;
-        if (isToday(order.createdAt)) todayQty += line.qty;
+        if (isToday(order.createdAt)) {
+          todayQty += line.qty;
+          todayRevenue += line.qty * line.price;
+        }
         if (isThisMonth(order.createdAt)) {
           monthQty += line.qty;
           monthRevenue += line.qty * line.price;
         }
       }
-      return { item, todayQty, monthQty, monthRevenue };
+      // What's left right now, and — worked backwards from that — roughly how
+      // much there was to start the period, assuming nothing but sales moved
+      // the number (a restock partway through the period would throw this
+      // off, since there's no separate purchase log to account for it).
+      const remaining = item.stockQty;
+      const used = period === "today" ? todayQty : monthQty;
+      const revenue = period === "today" ? todayRevenue : monthRevenue;
+      const opening = remaining != null ? remaining + used : null;
+      const valueRemaining = remaining != null ? remaining * item.price : null;
+      // Real profit — only when a cost price has actually been entered for
+      // this item (Settings → Menu Management). Otherwise there's nothing to
+      // subtract from revenue, so profit stays unknown rather than a guess.
+      const costUsed = item.costPrice != null ? used * item.costPrice : null;
+      const profit = item.costPrice != null ? revenue - costUsed! : null;
+      const valueRemainingAtCost =
+        remaining != null && item.costPrice != null ? remaining * item.costPrice : null;
+      return {
+        item,
+        todayQty,
+        monthQty,
+        monthRevenue,
+        opening,
+        used,
+        remaining,
+        revenue,
+        valueRemaining,
+        costUsed,
+        profit,
+        valueRemainingAtCost,
+      };
     });
-  }, [items, orders]);
+  }, [items, orders, period]);
 
   const lowStock = items.filter((i) => i.stockQty != null && i.stockQty <= i.lowStockThreshold);
 
+  async function handleDownload() {
+    setWorking(true);
+    try {
+      // Loaded on demand, same as the full data export in Settings — this
+      // library only costs anything the moment someone actually taps download.
+      const XLSX = await import("xlsx");
+      const wb = XLSX.utils.book_new();
+      const periodLabel = period === "today" ? "Today" : "This Month";
+      const stockRows = rows.map(
+        ({ item, opening, used, remaining, revenue, valueRemaining, costUsed, profit, valueRemainingAtCost }) => ({
+          Item: item.name,
+          Category: categories.find((c) => c.id === item.categoryId)?.name ?? "",
+          "Price/unit": item.price,
+          "Cost/unit": item.costPrice ?? "not set",
+          Tracked: item.stockQty != null ? "Yes" : "No",
+          [`Opening (${periodLabel})`]: opening ?? "not tracked",
+          [`Used/Sold (${periodLabel})`]: used,
+          "Remaining now": remaining ?? "not tracked",
+          [`Revenue (${periodLabel})`]: revenue,
+          [`Cost of goods used (${periodLabel})`]: costUsed ?? "not set",
+          [`Profit (${periodLabel})`]: profit ?? "not set",
+          "Value remaining (at price)": valueRemaining ?? "not tracked",
+          "Value remaining (at cost)": valueRemainingAtCost ?? "not set",
+          "Low stock?": item.stockQty != null && item.stockQty <= item.lowStockThreshold ? "Yes" : "No",
+        })
+      );
+      const sheet = XLSX.utils.json_to_sheet(stockRows);
+      XLSX.utils.book_append_sheet(wb, sheet, "Stock");
+      XLSX.writeFile(
+        wb,
+        `${storeName.replace(/[^a-z0-9]+/gi, "-") || "cuebill"}-stock-${period}-${new Date()
+          .toISOString()
+          .slice(0, 10)}.xlsx`
+      );
+    } finally {
+      setWorking(false);
+    }
+  }
+
   return (
     <Modal title="Cafe Report" onClose={onClose}>
-      {lowStock.length > 0 && (
-        <Card className="border-[var(--color-danger)]/40 mb-3">
-          <p className="text-xs font-semibold text-[var(--color-danger)] mb-1">LOW STOCK</p>
-          <p className="text-sm text-[var(--color-text-dim)]">
-            {lowStock.map((i) => `${i.name} (${i.stockQty})`).join(", ")}
-          </p>
-        </Card>
-      )}
-
-      <div className="space-y-2">
-        {rows.map(({ item, todayQty, monthQty, monthRevenue }) => (
-          <Card key={item.id}>
-            <div className="flex items-center justify-between">
-              <p className="text-sm font-medium">{item.name}</p>
-              <span className="text-xs text-[var(--color-text-dim)]">
-                {item.stockQty == null ? "not tracked" : `${item.stockQty} in stock`}
-              </span>
-            </div>
-            <div className="grid grid-cols-3 gap-2 mt-2 pt-2 border-t border-[var(--color-border)] text-center">
-              <div>
-                <p className="text-xs text-[var(--color-text-faint)]">Today</p>
-                <p className="text-sm font-semibold">{todayQty}</p>
-              </div>
-              <div>
-                <p className="text-xs text-[var(--color-text-faint)]">This month</p>
-                <p className="text-sm font-semibold">{monthQty}</p>
-              </div>
-              <div>
-                <p className="text-xs text-[var(--color-text-faint)]">Revenue</p>
-                <p className="text-sm font-semibold">{formatMoney(monthRevenue, currency)}</p>
-              </div>
-            </div>
+      <div className="space-y-4">
+        {lowStock.length > 0 && (
+          <Card className="border-[var(--color-danger)]/40">
+            <p className="text-xs font-semibold text-[var(--color-danger)] mb-1">LOW STOCK</p>
+            <p className="text-sm text-[var(--color-text-dim)]">
+              {lowStock.map((i) => `${i.name} (${i.stockQty})`).join(", ")}
+            </p>
           </Card>
-        ))}
+        )}
+
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)]">
+              STOCK REPORT
+            </p>
+            <div className="flex rounded-lg bg-[var(--color-surface-2)] p-0.5">
+              <button
+                onClick={() => setPeriod("today")}
+                className={
+                  "px-2.5 py-1 text-xs font-medium rounded-md " +
+                  (period === "today" ? "bg-[var(--color-primary)] text-white" : "text-[var(--color-text-dim)]")
+                }
+              >
+                Today
+              </button>
+              <button
+                onClick={() => setPeriod("month")}
+                className={
+                  "px-2.5 py-1 text-xs font-medium rounded-md " +
+                  (period === "month" ? "bg-[var(--color-primary)] text-white" : "text-[var(--color-text-dim)]")
+                }
+              >
+                This month
+              </button>
+            </div>
+          </div>
+          <p className="text-xs text-[var(--color-text-faint)] -mt-1 mb-2">
+            Profit shows only for items with a cost price set (Settings → Menu Management). For
+            the rest, "Value" is just worth-at-menu-price, not profit.
+          </p>
+
+          <button
+            onClick={handleDownload}
+            disabled={working}
+            className="w-full flex items-center justify-center gap-2 rounded-xl bg-[var(--color-primary)] disabled:opacity-60 text-white font-semibold py-2.5 mb-3"
+          >
+            <FileSpreadsheet size={15} /> {working ? "Preparing…" : "Download Stock Excel"}
+          </button>
+
+          <div className="space-y-2">
+            {rows.map(({ item, opening, used, remaining, revenue, profit }) => (
+              <Card key={item.id}>
+                <div className="flex items-center justify-between">
+                  <p className="text-sm font-medium">{item.name}</p>
+                  <span className="text-xs text-[var(--color-text-dim)]">
+                    {remaining == null ? "not tracked" : `${remaining} in stock`}
+                  </span>
+                </div>
+                <div className="grid grid-cols-4 gap-2 mt-2 pt-2 border-t border-[var(--color-border)] text-center">
+                  <div>
+                    <p className="text-[10px] text-[var(--color-text-faint)]">Opening</p>
+                    <p className="text-sm font-semibold">{opening ?? "—"}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-[var(--color-text-faint)]">Used</p>
+                    <p className="text-sm font-semibold">{used}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-[var(--color-text-faint)]">Left</p>
+                    <p className="text-sm font-semibold">{remaining ?? "—"}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-[var(--color-text-faint)]">
+                      {profit != null ? "Profit" : "Value used"}
+                    </p>
+                    <p
+                      className={
+                        "text-sm font-semibold " + (profit != null ? "text-[var(--color-success)]" : "")
+                      }
+                    >
+                      {formatMoney(profit ?? revenue, currency)}
+                    </p>
+                  </div>
+                </div>
+              </Card>
+            ))}
+          </div>
+        </div>
       </div>
     </Modal>
   );

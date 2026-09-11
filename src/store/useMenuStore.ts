@@ -16,6 +16,7 @@ function item(name: string, categoryId: string, price: number): MenuItem {
     name,
     categoryId,
     price,
+    costPrice: null,
     inStock: true,
     stockQty: null,
     lowStockThreshold: 5,
@@ -73,6 +74,7 @@ interface ItemRow {
   name: string;
   category_id: string;
   price: number;
+  cost_price: number | null;
   in_stock: boolean;
   stock_qty: number | null;
   low_stock_threshold: number;
@@ -87,6 +89,7 @@ const itemFromRow = (row: ItemRow): MenuItem => ({
   name: row.name,
   categoryId: row.category_id,
   price: Number(row.price),
+  costPrice: row.cost_price != null ? Number(row.cost_price) : null,
   inStock: row.in_stock,
   stockQty: row.stock_qty,
   lowStockThreshold: row.low_stock_threshold,
@@ -96,6 +99,7 @@ const itemToRow = (i: MenuItem): ItemRow => ({
   name: i.name,
   category_id: i.categoryId,
   price: i.price,
+  cost_price: i.costPrice,
   in_stock: i.inStock,
   stock_qty: i.stockQty,
   low_stock_threshold: i.lowStockThreshold,
@@ -206,17 +210,32 @@ setupSync<CategoryRow, MenuCategory>(
   (id) => useMenuStore.setState((state) => ({ categories: state.categories.filter((c) => c.id !== id) }))
 );
 
+// Cost price is only readable from the cloud once the "cost_price" column
+// exists there (see supabase/migration-cost-price.sql). Until then, a fetch
+// always comes back with it missing — keep whatever this device already had
+// entered instead of letting a stale/columnless fetch silently blank it out.
+function keepLocalCostPrice(incoming: MenuItem, local: MenuItem | undefined): MenuItem {
+  return incoming.costPrice == null && local?.costPrice != null
+    ? { ...incoming, costPrice: local.costPrice }
+    : incoming;
+}
+
 setupSync<ItemRow, MenuItem>(
   ITEM_TABLE,
   itemFromRow,
   itemToRow,
   () => useMenuStore.getState().items,
-  (items) => useMenuStore.setState({ items }),
+  (items) =>
+    useMenuStore.setState((state) => {
+      const byId = new Map(state.items.map((i) => [i.id, i]));
+      return { items: items.map((i) => keepLocalCostPrice(i, byId.get(i.id))) };
+    }),
   (item) =>
     useMenuStore.setState((state) => {
-      const exists = state.items.some((i) => i.id === item.id);
+      const existing = state.items.find((i) => i.id === item.id);
+      const merged = keepLocalCostPrice(item, existing);
       return {
-        items: exists ? state.items.map((i) => (i.id === item.id ? item : i)) : [...state.items, item],
+        items: existing ? state.items.map((i) => (i.id === item.id ? merged : i)) : [...state.items, merged],
       };
     }),
   (id) => useMenuStore.setState((state) => ({ items: state.items.filter((i) => i.id !== id) }))

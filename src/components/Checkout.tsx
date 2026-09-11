@@ -3,22 +3,14 @@ import { Modal } from "./ui/Modal";
 import { Card } from "./ui/Card";
 import { useBillsStore } from "../store/useBillsStore";
 import { useCustomersStore } from "../store/useCustomersStore";
+import { CustomerNameInput } from "./ui/CustomerNameInput";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { formatMoney } from "../lib/format";
 import type { Bill, PaymentMethod } from "../types";
 import { QRCodeSVG } from "qrcode.react";
-import { Check, ArrowLeft, Users, Frown, Repeat } from "lucide-react";
+import { Check, ArrowLeft, Repeat } from "lucide-react";
 
 type CheckoutStep = "select" | "upi-qr" | "success";
-
-interface SwitchOptions {
-  onSplitByItem: () => void;
-  onSplitEqually: () => void;
-  onLoserPays: () => void;
-  // Saves this bill as-is (into history, to settle whenever) and starts a
-  // fresh session on the same table for the same players right away.
-  onRestart: () => void;
-}
 
 interface CheckoutProps {
   bill: Bill;
@@ -31,13 +23,12 @@ interface CheckoutProps {
   // callers use it to drop any pending "undo" so a later close never reverts
   // a bill that's actually been paid.
   onSettled?: () => void;
-  // Present only alongside onCancel, for a multi-person table — lets this
-  // screen switch to a different billing method before anything's been paid,
-  // instead of forcing a trip back to the table detail view first.
-  switchOptions?: SwitchOptions;
+  // Offered once payment is confirmed — leaves this bill exactly as settled
+  // and starts a fresh session right away for the same players, same game.
+  onRestart?: () => void;
 }
 
-export function CheckoutModal({ bill, onDone, onCancel, onSettled, switchOptions }: CheckoutProps) {
+export function CheckoutModal({ bill, onDone, onCancel, onSettled, onRestart }: CheckoutProps) {
   return (
     <Modal title={bill.tableName ?? "Checkout"} onClose={onCancel ?? onDone}>
       <Checkout
@@ -45,13 +36,13 @@ export function CheckoutModal({ bill, onDone, onCancel, onSettled, switchOptions
         onDone={onDone}
         onCancel={onCancel}
         onSettled={onSettled}
-        switchOptions={switchOptions}
+        onRestart={onRestart}
       />
     </Modal>
   );
 }
 
-export function Checkout({ bill, onDone, onCancel, onSettled, switchOptions }: CheckoutProps) {
+export function Checkout({ bill, onDone, onCancel, onSettled, onRestart }: CheckoutProps) {
   const currency = useSettingsStore((s) => s.currencySymbol);
   const storeName = useSettingsStore((s) => s.storeName);
   const upiId = useSettingsStore((s) => s.upiId);
@@ -139,6 +130,14 @@ export function Checkout({ bill, onDone, onCancel, onSettled, switchOptions }: C
         >
           Done
         </button>
+        {onRestart && (
+          <button
+            onClick={onRestart}
+            className="w-full flex items-center justify-center gap-2 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] font-semibold py-3"
+          >
+            <Repeat size={15} /> Restart same session
+          </button>
+        )}
       </div>
     );
   }
@@ -181,40 +180,6 @@ export function Checkout({ bill, onDone, onCancel, onSettled, switchOptions }: C
         >
           <ArrowLeft size={14} /> Back
         </button>
-      )}
-
-      {switchOptions && (
-        <div>
-          <p className="text-xs text-[var(--color-text-faint)] mb-1.5">
-            Changed your mind? Switch to a different way of billing this:
-          </p>
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              onClick={switchOptions.onSplitByItem}
-              className="flex flex-col items-center justify-center gap-1 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[11px] font-medium py-2.5"
-            >
-              <Users size={14} /> Split by item
-            </button>
-            <button
-              onClick={switchOptions.onSplitEqually}
-              className="flex flex-col items-center justify-center gap-1 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[11px] font-medium py-2.5"
-            >
-              <Users size={14} /> Split equally
-            </button>
-            <button
-              onClick={switchOptions.onLoserPays}
-              className="flex flex-col items-center justify-center gap-1 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[11px] font-medium py-2.5"
-            >
-              <Frown size={14} /> Loser pays
-            </button>
-            <button
-              onClick={switchOptions.onRestart}
-              className="flex flex-col items-center justify-center gap-1 rounded-xl bg-[var(--color-primary)]/10 border border-[var(--color-primary)]/40 text-[var(--color-primary)] text-[11px] font-medium py-2.5"
-            >
-              <Repeat size={14} /> Restart
-            </button>
-          </div>
-        </div>
       )}
 
       <Card>
@@ -277,12 +242,7 @@ export function Checkout({ bill, onDone, onCancel, onSettled, switchOptions }: C
             Only needed if you're leaving any balance unpaid. Same name reuses their existing
             credit profile.
           </p>
-          <input
-            value={payerName}
-            onChange={(e) => setPayerName(e.target.value)}
-            placeholder="Name"
-            className="w-full rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] px-3 py-2 text-sm outline-none"
-          />
+          <CustomerNameInput value={payerName} onChange={setPayerName} placeholder="Name" />
         </div>
       )}
 

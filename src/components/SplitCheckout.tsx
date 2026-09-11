@@ -42,10 +42,28 @@ export function SplitCheckout({ bill: initialBill, onDone }: { bill: Bill; onDon
   const restartTable = bill.tableId ? tables.find((t) => t.id === bill.tableId) : null;
   const canRestart =
     anyPaid && !allPaid && !!restartTable && restartTable.status === "available" && pendingShares.length > 0;
+  // Once every share is settled, offer a fresh rematch for the whole group —
+  // same players, same game, timer back at zero.
+  const canRestartAll =
+    allPaid && !!restartTable && restartTable.status === "available" && !!bill.matchParticipants?.length;
 
   function handleRestartForRest() {
     if (!restartTable || pendingShares.length === 0) return;
     const [primaryName, ...restNames] = pendingShares.map((s) => s.payerName);
+    const primary = findOrCreateCustomer({ name: primaryName, phone: "" });
+    const extraCustomerIds = restNames.map((name) => findOrCreateCustomer({ name, phone: "" }).id);
+    const game = bill.gameId ? games.find((g) => g.id === bill.gameId) : undefined;
+    startSession(restartTable.id, primary.id, {
+      extraCustomerIds,
+      gameId: game?.id ?? null,
+      ratePerHour: game?.ratePerHour ?? null,
+    });
+    onDone();
+  }
+
+  function handleRestartAll() {
+    if (!restartTable || !bill.matchParticipants?.length) return;
+    const [primaryName, ...restNames] = bill.matchParticipants;
     const primary = findOrCreateCustomer({ name: primaryName, phone: "" });
     const extraCustomerIds = restNames.map((name) => findOrCreateCustomer({ name, phone: "" }).id);
     const game = bill.gameId ? games.find((g) => g.id === bill.gameId) : undefined;
@@ -213,6 +231,15 @@ export function SplitCheckout({ bill: initialBill, onDone }: { bill: Bill; onDon
             </>
           )}
         </button>
+
+        {canRestartAll && (
+          <button
+            onClick={handleRestartAll}
+            className="w-full flex items-center justify-center gap-2 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] font-semibold py-3"
+          >
+            <Repeat size={15} /> Restart same session
+          </button>
+        )}
       </div>
     </Modal>
   );

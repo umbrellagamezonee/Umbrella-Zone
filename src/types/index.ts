@@ -15,6 +15,7 @@ export interface BillingTable {
   accumulatedMs: number; // time banked from previous run/pause cycles this session
   plannedDurationMs: number | null; // snapshot of defaultSessionMinutes taken at session start
   note: string;
+  sortOrder: number; // manual display order for Home + Table Management; per-device, not cloud-synced
 }
 
 export interface Game {
@@ -44,7 +45,8 @@ export interface MenuItem {
   id: string;
   name: string;
   categoryId: string;
-  price: number;
+  price: number; // selling price
+  costPrice: number | null; // what it costs to buy/make one unit; null = not entered
   inStock: boolean;
   stockQty: number | null; // null = stock not tracked for this item
   lowStockThreshold: number;

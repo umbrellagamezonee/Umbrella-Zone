@@ -15,6 +15,7 @@ import { useBillsStore } from "../store/useBillsStore";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { formatMoney, toDateInputValue, formatTime } from "../lib/format";
 import { billCollected } from "../lib/billing";
+import { billPersonName, billPlace } from "../lib/billLabel";
 import { useNow } from "../lib/useNow";
 import type { Bill } from "../types";
 import { Check, CalendarDays, Trash2, Repeat } from "lucide-react";
@@ -41,17 +42,23 @@ export function Home() {
   const isToday = selectedDate === toDateInputValue(Date.now());
 
   // Active tables first (what needs attention right now), available ones
-  // below — one list instead of juggling separate "tables" and "sessions"
-  // pages.
+  // below — and within each group, the owner's manual order from
+  // Settings → Table Management.
   const sortedTables = [...tables].sort((a, b) => {
     const aAvail = a.status === "available" ? 1 : 0;
     const bAvail = b.status === "available" ? 1 : 0;
-    return aAvail - bAvail;
+    return aAvail - bAvail || a.sortOrder - b.sortOrder || a.name.localeCompare(b.name);
   });
 
-  // Only table sessions here (not standalone canteen bills), for the picked day.
+  // Table sessions and standalone canteen orders for the picked day — but not
+  // credit settlements (no table, no order behind them), which belong on the
+  // customer's own page, not here.
   const dateBills = bills
-    .filter((b) => b.tableId && toDateInputValue(b.createdAt) === selectedDate)
+    .filter(
+      (b) =>
+        (b.tableId != null || b.orderId != null) &&
+        toDateInputValue(b.createdAt) === selectedDate
+    )
     .sort((a, b) => b.createdAt - a.createdAt);
   const collectedForDate = dateBills
     .filter((b) => b.status !== "cancelled")
@@ -148,6 +155,10 @@ export function Home() {
           <div className="space-y-2">
             {dateBills.map((bill) => {
               const customer = customers.find((c) => c.id === bill.customerId);
+              // Name first, table/canteen second — the owner scans this list by
+              // "who was that", not by which table.
+              const who = billPersonName(bill, customer);
+              const where = billPlace(bill);
               const canResume = bill.status === "open";
               const rematchTable = bill.tableId ? tables.find((t) => t.id === bill.tableId) : null;
               const canRematch =
@@ -163,10 +174,9 @@ export function Home() {
                 >
                   <div className="flex items-center justify-between gap-2">
                     <div>
-                      <p className="text-sm font-medium">{bill.tableName}</p>
+                      <p className="text-sm font-medium">{who}</p>
                       <p className="text-xs text-[var(--color-text-dim)]">
-                        {customer && !customer.isWalkIn ? customer.name : "Walk-in"} ·{" "}
-                        {formatTime(bill.createdAt)}
+                        {where} · {formatTime(bill.createdAt)}
                       </p>
                       {bill.matchParticipants && bill.matchParticipants.length > 1 && (
                         <p className="text-xs text-[var(--color-text-faint)] mt-0.5">

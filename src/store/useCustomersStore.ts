@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { Customer } from "../types";
+import { cleanName, normalizeName } from "../lib/customerName";
 import { syncCreditLedger } from "../lib/reminderApi";
 import { setupSync, pushInsert, pushUpsert, pushDelete, pushDeleteAll } from "../lib/cloudSync";
 
@@ -57,6 +58,10 @@ interface CustomersState {
   adjustCredit: (id: string, delta: number) => void;
   markReminded: (id: string) => void;
   removeCustomer: (id: string) => void;
+  // Folds `sourceId` into `targetId`: the source's credit balance moves to the
+  // target and the source profile is deleted. Rewriting the source's name off
+  // any past bills is the caller's job (see useBillsStore.reassignCustomer).
+  mergeCustomer: (sourceId: string, targetId: string) => void;
   resetAll: () => void;
 }
 
@@ -68,7 +73,7 @@ export const useCustomersStore = create<CustomersState>()(
       addCustomer: (data) => {
         const customer: Customer = {
           id: crypto.randomUUID(),
-          name: data.name,
+          name: cleanName(data.name),
           phone: data.phone,
           email: data.email,
           isWalkIn: false,
@@ -83,21 +88,21 @@ export const useCustomersStore = create<CustomersState>()(
 
       // Phone is optional. If given and it matches an existing customer, that
       // profile wins. Otherwise falls back to matching by name (trimmed,
-      // case-insensitive) so re-entering the same person's name reuses their
-      // existing profile and credit balance instead of creating a duplicate.
+      // whitespace-collapsed, case-insensitive) so re-entering the same
+      // person's name — however they capitalise or space it — reuses their
+      // existing profile and credit balance instead of piling up duplicates.
       findOrCreateCustomer: (data) => {
         const phone = data.phone.trim();
-        const name = data.name.trim();
+        const key = normalizeName(data.name);
         if (phone) {
           const byPhone = get().customers.find((c) => !c.isWalkIn && c.phone === phone);
           if (byPhone) return byPhone;
         }
-        if (name) {
-          const lower = name.toLowerCase();
-          const byName = get().customers.find((c) => !c.isWalkIn && c.name.trim().toLowerCase() === lower);
+        if (key) {
+          const byName = get().customers.find((c) => !c.isWalkIn && normalizeName(c.name) === key);
           if (byName) return byName;
         }
-        return get().addCustomer({ name: name || "Guest", phone, email: "" });
+        return get().addCustomer({ name: cleanName(data.name) || "Guest", phone, email: "" });
       },
 
       adjustCredit: (id, delta) => {
@@ -126,6 +131,33 @@ export const useCustomersStore = create<CustomersState>()(
       removeCustomer: (id) => {
         set((state) => ({ customers: state.customers.filter((c) => c.id !== id) }));
         if (id !== "walk-in") pushDelete(TABLE, id);
+      },
+
+      mergeCustomer: (sourceId, targetId) => {
+        if (sourceId === targetId || sourceId === "walk-in" || targetId === "walk-in") return;
+        const source = get().customers.find((c) => c.id === sourceId);
+        const target = get().customers.find((c) => c.id === targetId);
+        if (!source || !target) return;
+        const merged: Customer = {
+          ...target,
+          creditBalance: target.creditBalance + source.creditBalance,
+          // Keep whichever profile actually has contact details filled in.
+          phone: target.phone || source.phone,
+          email: target.email || source.email,
+        };
+        set((state) => ({
+          customers: state.customers
+            .filter((c) => c.id !== sourceId)
+            .map((c) => (c.id === targetId ? merged : c)),
+        }));
+        syncCreditLedger({
+          customerId: merged.id,
+          name: merged.name,
+          phone: merged.phone,
+          amountDue: merged.creditBalance,
+        });
+        pushUpsert(TABLE, toRow(merged));
+        pushDelete(TABLE, sourceId);
       },
 
       // Keeps the "walk-in" sentinel (never a real cloud row) and wipes

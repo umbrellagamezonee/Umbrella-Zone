@@ -5,7 +5,7 @@ import { setupSync, pushInsert, pushUpsert, pushDelete } from "../lib/cloudSync"
 
 const DEFAULT_SESSION_MINUTES = 60;
 
-function seedTable(name: string, kind: string, ratePerHour: number): BillingTable {
+function seedTable(name: string, kind: string, ratePerHour: number, sortOrder: number): BillingTable {
   return {
     id: crypto.randomUUID(),
     name,
@@ -21,17 +21,18 @@ function seedTable(name: string, kind: string, ratePerHour: number): BillingTabl
     accumulatedMs: 0,
     plannedDurationMs: null,
     note: "",
+    sortOrder,
   };
 }
 
 const seedTables: BillingTable[] = [
-  seedTable("PS-4", "PlayStation", 120),
-  seedTable("PS-5", "PlayStation", 150),
-  seedTable("Pool 1", "Pool", 150),
-  seedTable("Pool 2", "Pool", 150),
-  seedTable("S2 1", "Snooker", 210),
-  seedTable("S2 2", "Snooker", 210),
-  seedTable("S1", "Snooker", 300),
+  seedTable("PS-4", "PlayStation", 120, 0),
+  seedTable("PS-5", "PlayStation", 150, 1),
+  seedTable("Pool 1", "Pool", 150, 2),
+  seedTable("Pool 2", "Pool", 150, 3),
+  seedTable("S2 1", "Snooker", 210, 4),
+  seedTable("S2 2", "Snooker", 210, 5),
+  seedTable("S1", "Snooker", 300, 6),
 ];
 
 interface TableRow {
@@ -67,6 +68,10 @@ const fromRow = (row: TableRow): BillingTable => ({
   accumulatedMs: Number(row.accumulated_ms),
   plannedDurationMs: row.planned_duration_ms != null ? Number(row.planned_duration_ms) : null,
   note: row.note ?? "",
+  // Display order is a per-device preference, not stored in the cloud — a
+  // freshly-synced table drops to the bottom until this device places it,
+  // and the real value is merged back in by the sync handlers below.
+  sortOrder: Number.MAX_SAFE_INTEGER,
 });
 const toRow = (t: BillingTable): TableRow => ({
   id: t.id,
@@ -98,6 +103,9 @@ interface TablesState {
   tables: BillingTable[];
   addTable: (table: NewTableInput) => void;
   updateTable: (id: string, patch: Partial<BillingTable>) => void;
+  // Nudges a table one place up or down in the manual display order. Local to
+  // this device — renumbers every table's sortOrder 0..n-1 so ties can't build up.
+  moveTable: (id: string, direction: "up" | "down") => void;
   removeTable: (id: string) => void;
   startSession: (id: string, customerId: string | null, opts?: StartSessionOptions) => void;
   addParticipant: (id: string, customerId: string) => void;
@@ -120,8 +128,15 @@ function withDefaults(t: Partial<BillingTable> & { id: string; name: string }): 
     accumulatedMs: 0,
     plannedDurationMs: null,
     note: "",
+    sortOrder: 0,
     ...t,
   };
+}
+
+// Tables in the owner's chosen order (falls back to name so brand-new or
+// freshly-synced tables sit predictably until placed).
+export function orderedTables(tables: BillingTable[]): BillingTable[] {
+  return [...tables].sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name));
 }
 
 // Every action below ends by re-reading the table it just touched and
@@ -138,10 +153,12 @@ export const useTablesStore = create<TablesState>()(
       tables: seedTables,
 
       addTable: (table) => {
+        const maxOrder = get().tables.reduce((m, t) => Math.max(m, t.sortOrder), -1);
         const created = withDefaults({
           ...table,
           id: crypto.randomUUID(),
           defaultSessionMinutes: table.defaultSessionMinutes ?? DEFAULT_SESSION_MINUTES,
+          sortOrder: maxOrder + 1,
         });
         set((state) => ({ tables: [...state.tables, created] }));
         pushInsert(TABLE, toRow(created));
@@ -152,6 +169,19 @@ export const useTablesStore = create<TablesState>()(
           tables: state.tables.map((t) => (t.id === id ? { ...t, ...patch } : t)),
         }));
         pushTable(id);
+      },
+
+      moveTable: (id, direction) => {
+        const ordered = orderedTables(get().tables);
+        const idx = ordered.findIndex((t) => t.id === id);
+        const swapIdx = direction === "up" ? idx - 1 : idx + 1;
+        if (idx < 0 || swapIdx < 0 || swapIdx >= ordered.length) return;
+        [ordered[idx], ordered[swapIdx]] = [ordered[swapIdx], ordered[idx]];
+        const orderMap = new Map(ordered.map((t, i) => [t.id, i]));
+        set((state) => ({
+          tables: state.tables.map((t) => ({ ...t, sortOrder: orderMap.get(t.id) ?? t.sortOrder })),
+        }));
+        // Local-only: display order isn't pushed to the cloud.
       },
 
       removeTable: (id) => {
@@ -249,7 +279,7 @@ export const useTablesStore = create<TablesState>()(
     }),
     {
       name: "cuebill-tables",
-      version: 4,
+      version: 6,
       migrate: (persisted) => {
         const state = persisted as {
           tables?: (Partial<BillingTable> & {
@@ -259,11 +289,13 @@ export const useTablesStore = create<TablesState>()(
           })[];
         };
         return {
-          tables: (state.tables ?? []).map((t) => {
+          tables: (state.tables ?? []).map((t, i) => {
             const { ratePerMinute, ...rest } = t;
             return withDefaults({
               ...rest,
               ratePerHour: rest.ratePerHour ?? ratePerMinute ?? 0,
+              // Seed the manual order from the position tables were already in.
+              sortOrder: rest.sortOrder ?? i,
             });
           }),
         };
@@ -272,19 +304,34 @@ export const useTablesStore = create<TablesState>()(
   )
 );
 
+// sortOrder never comes from the cloud, so every sync handler keeps whatever
+// order this device already had for a table it knows, and drops a genuinely
+// new one at the bottom.
 setupSync<TableRow, BillingTable>(
   TABLE,
   fromRow,
   toRow,
   () => useTablesStore.getState().tables,
-  (tables) => useTablesStore.setState({ tables }),
+  (tables) =>
+    useTablesStore.setState((state) => {
+      const localOrder = new Map(state.tables.map((t) => [t.id, t.sortOrder]));
+      const maxLocal = state.tables.reduce((m, t) => Math.max(m, t.sortOrder), -1);
+      return {
+        tables: tables.map((t, i) => ({
+          ...t,
+          sortOrder: localOrder.get(t.id) ?? maxLocal + 1 + i,
+        })),
+      };
+    }),
   (table) =>
     useTablesStore.setState((state) => {
-      const exists = state.tables.some((t) => t.id === table.id);
+      const existing = state.tables.find((t) => t.id === table.id);
+      const maxLocal = state.tables.reduce((m, t) => Math.max(m, t.sortOrder), -1);
+      const merged = { ...table, sortOrder: existing ? existing.sortOrder : maxLocal + 1 };
       return {
-        tables: exists
-          ? state.tables.map((t) => (t.id === table.id ? table : t))
-          : [...state.tables, table],
+        tables: existing
+          ? state.tables.map((t) => (t.id === table.id ? merged : t))
+          : [...state.tables, merged],
       };
     }),
   (id) => useTablesStore.setState((state) => ({ tables: state.tables.filter((t) => t.id !== id) }))
