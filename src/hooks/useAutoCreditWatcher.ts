@@ -5,6 +5,14 @@ import { useCustomersStore } from "../store/useCustomersStore";
 
 const CHECK_INTERVAL_MS = 15 * 60 * 1000; // check every 15 minutes while the app is open
 const AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
+// Every store's initial cloud fetch (setupSync) is still in flight for a
+// moment after the app boots and blindly replaces local state once it
+// lands — running the very first sweep before that settles risks it
+// mutating a bill/order right before that fetch overwrites it back. Wait
+// this long before the first sweep so real network latency has cleared;
+// every sweep after the first (on CHECK_INTERVAL_MS) is unaffected since
+// the initial fetch is long done by then.
+const FIRST_SWEEP_DELAY_MS = 10 * 1000;
 
 // Runs while the app is open: anything left unpaid for a full day gets
 // written off to the customer's credit account automatically, instead of
@@ -75,8 +83,11 @@ export function useAutoCreditWatcher() {
       }
     }
 
-    sweep();
+    const startupTimer = setTimeout(sweep, FIRST_SWEEP_DELAY_MS);
     const id = setInterval(sweep, CHECK_INTERVAL_MS);
-    return () => clearInterval(id);
+    return () => {
+      clearTimeout(startupTimer);
+      clearInterval(id);
+    };
   }, []);
 }
