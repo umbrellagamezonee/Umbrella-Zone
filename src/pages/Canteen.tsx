@@ -340,6 +340,7 @@ function OrderEditModal({ order, onClose }: { order: CanteenOrder; onClose: () =
   const changeQty = useOrdersStore((s) => s.changeQty);
   const setNote = useOrdersStore((s) => s.setNote);
   const currency = useSettingsStore((s) => s.currencySymbol);
+  const [activeCategory, setActiveCategory] = useState(categories[0]?.id ?? "");
 
   const live = orders.find((o) => o.id === order.id) ?? order;
   const total = live.items.reduce((sum, i) => sum + i.price * i.qty, 0);
@@ -385,37 +386,54 @@ function OrderEditModal({ order, onClose }: { order: CanteenOrder; onClose: () =
           </div>
         )}
 
-        {categories.map((cat) => {
-          const items = menuItems.filter((i) => i.categoryId === cat.id);
-          if (items.length === 0) return null;
-          return (
-            <div key={cat.id}>
-              <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-2">
-                ADD {cat.name.toUpperCase()}
+        <div>
+          <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-2">
+            ADD ITEM
+          </p>
+          <div className="flex gap-2 mb-3">
+            {categories.map((cat) => (
+              <button
+                key={cat.id}
+                onClick={() => setActiveCategory(cat.id)}
+                className={
+                  "flex-1 rounded-full px-3 py-1.5 text-sm font-medium " +
+                  (activeCategory === cat.id
+                    ? "bg-[var(--color-primary)] text-white"
+                    : "bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[var(--color-text-dim)]")
+                }
+              >
+                {cat.name}
+              </button>
+            ))}
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            {menuItems
+              .filter((i) => i.categoryId === activeCategory)
+              .map((item) => {
+                const outOfStock = item.stockQty != null && item.stockQty <= 0;
+                return (
+                  <button
+                    key={item.id}
+                    onClick={() =>
+                      addItem(live.id, { menuItemId: item.id, name: item.name, price: item.price, qty: 1 })
+                    }
+                    disabled={outOfStock}
+                    className="text-left rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2 disabled:opacity-40"
+                  >
+                    <p className="text-sm font-medium">{item.name}</p>
+                    <p className="text-xs text-[var(--color-text-dim)]">
+                      {outOfStock ? "Out of stock" : formatMoney(item.price, currency)}
+                    </p>
+                  </button>
+                );
+              })}
+            {menuItems.filter((i) => i.categoryId === activeCategory).length === 0 && (
+              <p className="col-span-2 text-sm text-[var(--color-text-faint)] text-center py-4">
+                No items in this category yet.
               </p>
-              <div className="grid grid-cols-2 gap-2">
-                {items.map((item) => {
-                  const outOfStock = item.stockQty != null && item.stockQty <= 0;
-                  return (
-                    <button
-                      key={item.id}
-                      onClick={() =>
-                        addItem(live.id, { menuItemId: item.id, name: item.name, price: item.price, qty: 1 })
-                      }
-                      disabled={outOfStock}
-                      className="text-left rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2 disabled:opacity-40"
-                    >
-                      <p className="text-sm font-medium">{item.name}</p>
-                      <p className="text-xs text-[var(--color-text-dim)]">
-                        {outOfStock ? "Out of stock" : formatMoney(item.price, currency)}
-                      </p>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          );
-        })}
+            )}
+          </div>
+        </div>
 
         <div>
           <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-1.5">
@@ -461,6 +479,7 @@ function NewOrderModal({ onClose }: { onClose: () => void }) {
   const [note, setNote] = useState("");
   const [cart, setCart] = useState<Record<string, number>>({});
   const [itemSearch, setItemSearch] = useState("");
+  const [activeCategory, setActiveCategory] = useState(categories[0]?.id ?? "");
 
   // Food for someone already playing goes straight onto their table's tab —
   // billed together when the session stops — instead of the customer-name
@@ -548,64 +567,78 @@ function NewOrderModal({ onClose }: { onClose: () => void }) {
           />
         </div>
 
-        {categories.map((cat) => {
+        {!itemSearch.trim() && (
+          <div className="flex gap-2">
+            {categories.map((cat) => (
+              <button
+                key={cat.id}
+                onClick={() => setActiveCategory(cat.id)}
+                className={
+                  "flex-1 rounded-full px-3 py-1.5 text-sm font-medium " +
+                  (activeCategory === cat.id
+                    ? "bg-[var(--color-primary)] text-white"
+                    : "bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[var(--color-text-dim)]")
+                }
+              >
+                {cat.name}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {(() => {
           const items = menuItems.filter(
             (i) =>
-              i.categoryId === cat.id &&
-              (!itemSearch.trim() || i.name.toLowerCase().includes(itemSearch.trim().toLowerCase()))
+              (itemSearch.trim()
+                ? i.name.toLowerCase().includes(itemSearch.trim().toLowerCase())
+                : i.categoryId === activeCategory)
           );
-          if (items.length === 0) return null;
-          return (
-            <div key={cat.id}>
-              <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-1.5">
-                {cat.name.toUpperCase()}
+          if (items.length === 0) {
+            return (
+              <p className="text-sm text-[var(--color-text-faint)] text-center py-4">
+                {itemSearch.trim() ? `No items match "${itemSearch.trim()}"` : "No items in this category yet."}
               </p>
-              <div className="space-y-2">
-                {items.map((item) => {
-                  const qtyInCart = cart[item.id] ?? 0;
-                  const outOfStock = item.stockQty != null && item.stockQty <= 0;
-                  const atCartLimit = item.stockQty != null && qtyInCart >= item.stockQty;
-                  return (
-                    <div key={item.id} className="flex items-center justify-between">
-                      <div>
-                        <p className={"text-sm " + (outOfStock ? "text-[var(--color-text-faint)]" : "")}>
-                          {item.name}
-                        </p>
-                        <p className="text-xs text-[var(--color-text-dim)]">
-                          {outOfStock ? "Out of stock" : formatMoney(item.price, currency)}
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={() => setQty(item.id, qtyInCart - 1)}
-                          disabled={outOfStock}
-                          className="h-7 w-7 flex items-center justify-center rounded-full bg-[var(--color-surface-2)] disabled:opacity-30"
-                        >
-                          <Minus size={12} />
-                        </button>
-                        <span className="text-sm w-4 text-center">{qtyInCart}</span>
-                        <button
-                          onClick={() => setQty(item.id, qtyInCart + 1)}
-                          disabled={atCartLimit}
-                          className="h-7 w-7 flex items-center justify-center rounded-full bg-[var(--color-surface-2)] disabled:opacity-30"
-                        >
-                          <Plus size={12} />
-                        </button>
-                      </div>
+            );
+          }
+          return (
+            <div className="space-y-2">
+              {items.map((item) => {
+                const qtyInCart = cart[item.id] ?? 0;
+                const outOfStock = item.stockQty != null && item.stockQty <= 0;
+                const atCartLimit = item.stockQty != null && qtyInCart >= item.stockQty;
+                return (
+                  <div key={item.id} className="flex items-center justify-between">
+                    <div>
+                      <p className={"text-sm " + (outOfStock ? "text-[var(--color-text-faint)]" : "")}>
+                        {item.name}
+                      </p>
+                      <p className="text-xs text-[var(--color-text-dim)]">
+                        {outOfStock ? "Out of stock" : formatMoney(item.price, currency)}
+                      </p>
                     </div>
-                  );
-                })}
-              </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => setQty(item.id, qtyInCart - 1)}
+                        disabled={outOfStock}
+                        className="h-7 w-7 flex items-center justify-center rounded-full bg-[var(--color-surface-2)] disabled:opacity-30"
+                      >
+                        <Minus size={12} />
+                      </button>
+                      <span className="text-sm w-4 text-center">{qtyInCart}</span>
+                      <button
+                        onClick={() => setQty(item.id, qtyInCart + 1)}
+                        disabled={atCartLimit}
+                        className="h-7 w-7 flex items-center justify-center rounded-full bg-[var(--color-surface-2)] disabled:opacity-30"
+                      >
+                        <Plus size={12} />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           );
-        })}
-
-        {itemSearch.trim() &&
-          !menuItems.some((i) => i.name.toLowerCase().includes(itemSearch.trim().toLowerCase())) && (
-            <p className="text-sm text-[var(--color-text-faint)] text-center py-2">
-              No items match "{itemSearch.trim()}"
-            </p>
-          )}
+        })()}
 
         <div>
           <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-1.5">
