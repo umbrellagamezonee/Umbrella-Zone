@@ -2,29 +2,44 @@ import { useState } from "react";
 import { AppShell } from "../components/layout/AppShell";
 import { Card } from "../components/ui/Card";
 import { useCustomersStore } from "../store/useCustomersStore";
+import { useOrdersStore } from "../store/useOrdersStore";
+import { useBillsStore } from "../store/useBillsStore";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { formatMoney, timeAgo } from "../lib/format";
+import { customerPendingOrders, orderTotal } from "../lib/billing";
 import { sendCreditReminder } from "../lib/reminderApi";
 import { customerLabel } from "../lib/customerName";
-import { SettleCreditModal } from "./Customers";
+import { CustomerDetailModal, SettleCreditModal } from "./Customers";
+import type { Customer } from "../types";
 import { BellRing, Wallet } from "lucide-react";
 
 // Everyone who owes money and the tools to chase it down — kept separate
 // from the plain Customers directory so day-to-day lookups aren't buried
-// under a wall of due-payment cards.
+// under a wall of due-payment cards. "Owed" here is credit already on the
+// books PLUS any served-but-not-yet-billed canteen orders, so this matches
+// what that customer's own profile shows as their total (not just the
+// narrower credit ledger, which only updates once an order is actually billed).
 export function Credits() {
   const customers = useCustomersStore((s) => s.customers);
   const markReminded = useCustomersStore((s) => s.markReminded);
+  const orders = useOrdersStore((s) => s.orders);
+  const bills = useBillsStore((s) => s.bills);
   const currency = useSettingsStore((s) => s.currencySymbol);
   const storeName = useSettingsStore((s) => s.storeName);
   const [sendingId, setSendingId] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ id: string; ok: boolean } | null>(null);
-  const [settleCustomer, setSettleCustomer] = useState<(typeof customers)[number] | null>(null);
+  const [settleCustomer, setSettleCustomer] = useState<Customer | null>(null);
+  const [detailCustomer, setDetailCustomer] = useState<Customer | null>(null);
+
+  const pendingTotalFor = (customerId: string) =>
+    customerPendingOrders(orders, bills, customerId).reduce((sum, o) => sum + orderTotal(o), 0);
 
   const dueCustomers = customers
-    .filter((c) => !c.isWalkIn && c.creditBalance > 0)
-    .sort((a, b) => b.creditBalance - a.creditBalance);
-  const totalDue = dueCustomers.reduce((sum, c) => sum + c.creditBalance, 0);
+    .filter((c) => !c.isWalkIn)
+    .map((c) => ({ customer: c, pendingTotal: pendingTotalFor(c.id) }))
+    .filter(({ customer: c, pendingTotal }) => c.creditBalance > 0 || pendingTotal > 0)
+    .sort((a, b) => (b.customer.creditBalance + b.pendingTotal) - (a.customer.creditBalance + a.pendingTotal));
+  const totalDue = dueCustomers.reduce((sum, { customer: c, pendingTotal }) => sum + c.creditBalance + pendingTotal, 0);
 
   async function handleRemindNow(id: string) {
     const c = customers.find((x) => x.id === id);
@@ -60,8 +75,12 @@ export function Credits() {
         </p>
       ) : (
         <div className="space-y-2">
-          {dueCustomers.map((c) => (
-            <Card key={c.id} className="border-[var(--color-warning)]/40">
+          {dueCustomers.map(({ customer: c, pendingTotal }) => (
+            <Card
+              key={c.id}
+              onClick={() => setDetailCustomer(c)}
+              className="border-[var(--color-warning)]/40"
+            >
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-sm font-medium">{customerLabel(c, customers)}</p>
@@ -70,18 +89,31 @@ export function Credits() {
                   </p>
                 </div>
                 <span className="text-sm font-semibold text-[var(--color-warning)]">
-                  {formatMoney(c.creditBalance, currency)}
+                  {formatMoney(c.creditBalance + pendingTotal, currency)}
                 </span>
               </div>
+              {pendingTotal > 0 && (
+                <p className="text-xs text-[var(--color-text-faint)] mt-1">
+                  {formatMoney(c.creditBalance, currency)} on credit · {formatMoney(pendingTotal, currency)} not
+                  billed yet
+                </p>
+              )}
               <div className="mt-2 grid grid-cols-2 gap-2">
                 <button
-                  onClick={() => setSettleCustomer(c)}
-                  className="flex items-center justify-center gap-2 rounded-xl bg-[var(--color-success)]/15 text-[var(--color-success)] text-sm font-medium py-2"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSettleCustomer(c);
+                  }}
+                  disabled={c.creditBalance === 0}
+                  className="flex items-center justify-center gap-2 rounded-xl bg-[var(--color-success)]/15 text-[var(--color-success)] text-sm font-medium py-2 disabled:opacity-40"
                 >
                   <Wallet size={14} /> Settle
                 </button>
                 <button
-                  onClick={() => handleRemindNow(c.id)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleRemindNow(c.id);
+                  }}
                   disabled={sendingId === c.id}
                   className="flex items-center justify-center gap-2 rounded-xl bg-[var(--color-warning)]/15 text-[var(--color-warning)] text-sm font-medium py-2 disabled:opacity-50"
                 >
@@ -119,6 +151,9 @@ export function Credits() {
 
       {settleCustomer && (
         <SettleCreditModal customer={settleCustomer} onClose={() => setSettleCustomer(null)} />
+      )}
+      {detailCustomer && (
+        <CustomerDetailModal customer={detailCustomer} onClose={() => setDetailCustomer(null)} />
       )}
     </AppShell>
   );

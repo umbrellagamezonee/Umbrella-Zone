@@ -10,7 +10,7 @@ import { useBillsStore } from "../store/useBillsStore";
 import { useOrdersStore } from "../store/useOrdersStore";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { formatMoney, formatTime, toDateInputValue, formatDateKey } from "../lib/format";
-import { billCollected } from "../lib/billing";
+import { billCollected, customerPendingOrders, orderTotal } from "../lib/billing";
 import { customerLabel, findCustomerByName, normalizeName } from "../lib/customerName";
 import type { Customer, Bill } from "../types";
 import { Search, Footprints, Check, ChevronRight, Wallet, Users } from "lucide-react";
@@ -149,7 +149,7 @@ export function Customers() {
 // many matches they played, what they spent and what they ate, with every
 // session tappable for the full breakdown. Answers "how often do they come in,
 // what do they usually order" at a glance instead of scrolling through Reports.
-function CustomerDetailModal({ customer: initialCustomer, onClose }: { customer: Customer; onClose: () => void }) {
+export function CustomerDetailModal({ customer: initialCustomer, onClose }: { customer: Customer; onClose: () => void }) {
   const bills = useBillsStore((s) => s.bills);
   // Deleted bills too — a credit balance doesn't get reversed when the bill
   // that created it is trashed, so leaving those out would hide exactly the
@@ -198,12 +198,12 @@ function CustomerDetailModal({ customer: initialCustomer, onClose }: { customer:
   // Canteen food served to this customer but not yet paid for — canteen
   // staff mark an order "served" and payment happens from here instead of
   // billing it on the spot at the counter.
-  const pendingOrders = orders.filter(
-    (o) => o.customerId === customer.id && o.status === "served" && !bills.some((b) => b.orderId === o.id)
-  );
+  const pendingOrders = customerPendingOrders(orders, bills, customer.id);
+  const pendingTotal = pendingOrders.reduce((sum, o) => sum + orderTotal(o), 0);
+  const totalOwed = customer.creditBalance + pendingTotal;
 
   function handleBillOrder(order: (typeof pendingOrders)[number]) {
-    const total = order.items.reduce((sum, i) => sum + i.price * i.qty, 0);
+    const total = orderTotal(order);
     const bill = createOpenBill({
       tableId: null,
       tableName: customer.name,
@@ -263,12 +263,24 @@ function CustomerDetailModal({ customer: initialCustomer, onClose }: { customer:
           </Card>
         </div>
 
-        {customer.creditBalance > 0 && (
+        {totalOwed > 0 && (
           <Card className="border-[var(--color-warning)]/40">
-            <p className="text-xs text-[var(--color-text-dim)]">CREDIT DUE</p>
+            <p className="text-xs text-[var(--color-text-dim)]">TOTAL OWED</p>
             <p className="text-lg font-bold text-[var(--color-warning)] mt-1">
-              {formatMoney(customer.creditBalance, currency)}
+              {formatMoney(totalOwed, currency)}
             </p>
+            {pendingTotal > 0 && (
+              <div className="mt-2 space-y-0.5 text-xs text-[var(--color-text-dim)]">
+                <div className="flex justify-between">
+                  <span>On credit</span>
+                  <span>{formatMoney(customer.creditBalance, currency)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Not billed yet (below)</span>
+                  <span>{formatMoney(pendingTotal, currency)}</span>
+                </div>
+              </div>
+            )}
             {deletedCount > 0 && (
               <p className="text-xs text-[var(--color-text-faint)] mt-1">
                 {deletedCount} bill{deletedCount > 1 ? "s" : ""} below {deletedCount > 1 ? "were" : "was"}{" "}
@@ -277,12 +289,14 @@ function CustomerDetailModal({ customer: initialCustomer, onClose }: { customer:
                 traced back further than that.
               </p>
             )}
-            <button
-              onClick={() => setShowSettle(true)}
-              className="mt-3 w-full flex items-center justify-center gap-2 rounded-xl bg-[var(--color-success)]/15 text-[var(--color-success)] text-sm font-medium py-2.5"
-            >
-              <Wallet size={14} /> Settle payment
-            </button>
+            {customer.creditBalance > 0 && (
+              <button
+                onClick={() => setShowSettle(true)}
+                className="mt-3 w-full flex items-center justify-center gap-2 rounded-xl bg-[var(--color-success)]/15 text-[var(--color-success)] text-sm font-medium py-2.5"
+              >
+                <Wallet size={14} /> Settle payment
+              </button>
+            )}
           </Card>
         )}
 
@@ -293,7 +307,7 @@ function CustomerDetailModal({ customer: initialCustomer, onClose }: { customer:
             </p>
             <div className="space-y-2">
               {pendingOrders.map((order) => {
-                const total = order.items.reduce((sum, i) => sum + i.price * i.qty, 0);
+                const total = orderTotal(order);
                 return (
                   <Card key={order.id} className="border-[var(--color-warning)]/40">
                     <div className="flex items-center justify-between gap-2">

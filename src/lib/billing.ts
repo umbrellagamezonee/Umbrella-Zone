@@ -1,4 +1,4 @@
-import type { Bill, PaymentMethod } from "../types";
+import type { Bill, CanteenOrder, PaymentMethod } from "../types";
 
 export interface BillMoney {
   cash: number;
@@ -76,6 +76,20 @@ export function billRemaining(bill: Bill): number {
     return bill.total - settled;
   }
   return bill.status === "paid" ? 0 : bill.total;
+}
+
+export function orderTotal(order: CanteenOrder): number {
+  return order.items.reduce((sum, i) => sum + i.price * i.qty, 0);
+}
+
+// Food served to a customer but not yet turned into a bill — money already
+// earned that won't show up in their credit balance until someone taps
+// "Bill this order". Used to fold it into a customer's real total owed
+// instead of just the already-billed credit ledger.
+export function customerPendingOrders(orders: CanteenOrder[], bills: Bill[], customerId: string): CanteenOrder[] {
+  return orders.filter(
+    (o) => o.customerId === customerId && o.status === "served" && !bills.some((b) => b.orderId === o.id)
+  );
 }
 
 export function sumBillMoney(bills: Bill[]): BillMoney {
