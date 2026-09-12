@@ -10,7 +10,7 @@ import { useMenuStore } from "../store/useMenuStore";
 import { useGamesStore } from "../store/useGamesStore";
 import { useTablesStore } from "../store/useTablesStore";
 import { useSettingsStore } from "../store/useSettingsStore";
-import { formatMoney, formatTime, isToday, isThisMonth, toDateInputValue } from "../lib/format";
+import { formatMoney, formatTime, isToday, isThisMonth, toDateInputValue, formatDateKey } from "../lib/format";
 import { billMoney, billCollected, billRemaining } from "../lib/billing";
 import { billPersonName, billPlace } from "../lib/billLabel";
 import { useCustomersStore } from "../store/useCustomersStore";
@@ -264,7 +264,7 @@ export function Reports() {
           <p className="text-lg font-bold text-[var(--color-success)] mt-1">
             {formatMoney(totals.collected, currency)}
           </p>
-          <p className="text-xs text-[var(--color-text-faint)]">cash / UPI</p>
+          <p className="text-xs text-[var(--color-text-faint)]">cash / account</p>
         </Card>
         <Card>
           <p className="text-xs text-[var(--color-text-dim)]">BILLED ON CREDIT</p>
@@ -305,10 +305,7 @@ export function Reports() {
               </p>
               <p className="text-xs text-[var(--color-text-dim)]">
                 {billPlace(bill)} ·{" "}
-                {new Date(bill.createdAt).toLocaleTimeString([], {
-                  hour: "2-digit",
-                  minute: "2-digit",
-                })}{" "}
+                {formatTime(bill.createdAt)}{" "}
                 ·{" "}
                 {bill.status === "paid" && bill.amountPaid === 0
                   ? "on credit"
@@ -534,7 +531,7 @@ function GallaSummaryModal({ onClose }: { onClose: () => void }) {
             </p>
           </Card>
           <Card>
-            <p className="text-xs text-[var(--color-text-dim)]">UPI</p>
+            <p className="text-xs text-[var(--color-text-dim)]">ACCOUNT</p>
             <p className="text-lg font-bold text-[var(--color-success)] mt-1">
               {formatMoney(upi, currency)}
             </p>
@@ -586,20 +583,11 @@ function InsightsModal({ onClose }: { onClose: () => void }) {
   const last7Days = useMemo(() => {
     const days: { label: string; total: number }[] = [];
     for (let i = 6; i >= 0; i--) {
-      const d = new Date();
-      d.setDate(d.getDate() - i);
+      const dayKey = toDateInputValue(Date.now() - i * 86_400_000);
       const dayTotal = bills
-        .filter((b) => {
-          if (b.status === "cancelled") return false;
-          const bd = new Date(b.createdAt);
-          return (
-            bd.getFullYear() === d.getFullYear() &&
-            bd.getMonth() === d.getMonth() &&
-            bd.getDate() === d.getDate()
-          );
-        })
+        .filter((b) => b.status !== "cancelled" && toDateInputValue(b.createdAt) === dayKey)
         .reduce((s, b) => s + billCollected(b), 0);
-      days.push({ label: d.toLocaleDateString([], { weekday: "short" }), total: dayTotal });
+      days.push({ label: formatDateKey(dayKey, { weekday: "short" }), total: dayTotal });
     }
     return days;
   }, [bills]);

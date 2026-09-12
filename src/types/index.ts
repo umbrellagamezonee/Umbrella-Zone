@@ -84,7 +84,10 @@ export interface BillCanteenItem {
   personName?: string | null;
 }
 
-export type PaymentMethod = "cash" | "upi" | "credit";
+// "upi" covers any bank/account transfer, not just a UPI-app payment — the
+// shop just calls it "Account". "split" means the amountPaid portion below
+// was itself divided between cash and account (see amountCash/amountUpi).
+export type PaymentMethod = "cash" | "upi" | "credit" | "split";
 
 // A locked portion of a bill assigned to one payer (e.g. table charge to one
 // person, food to another). Once created, a share's label/payer/amount never
@@ -114,9 +117,11 @@ export interface Bill {
   canteenItems: BillCanteenItem[];
   discount: number;
   total: number;
-  amountPaid: number; // actually collected now (cash/UPI)
+  amountPaid: number; // actually collected now — amountCash + amountUpi
+  amountCash: number; // portion of amountPaid received as cash
+  amountUpi: number; // portion of amountPaid received via account/UPI transfer
   amountDue: number; // added to the customer's credit balance
-  paymentMethod: PaymentMethod | null; // method used for the amountPaid portion
+  paymentMethod: PaymentMethod | null; // best-effort label for the amountPaid portion — "split" when both amountCash and amountUpi are non-zero
   shares: BillShare[] | null; // present when the bill was split between payers
   status: "open" | "paid" | "cancelled";
   createdAt: number;

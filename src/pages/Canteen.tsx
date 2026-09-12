@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { AppShell } from "../components/layout/AppShell";
 import { Card } from "../components/ui/Card";
 import { Modal } from "../components/ui/Modal";
@@ -8,7 +8,7 @@ import { CustomerNameInput } from "../components/ui/CustomerNameInput";
 import { useOrdersStore } from "../store/useOrdersStore";
 import { useMenuStore } from "../store/useMenuStore";
 import { useCustomersStore } from "../store/useCustomersStore";
-import { useTablesStore } from "../store/useTablesStore";
+import { useTablesStore, orderedTables } from "../store/useTablesStore";
 import { useBillsStore } from "../store/useBillsStore";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { formatMoney, toDateInputValue, formatTime } from "../lib/format";
@@ -16,7 +16,6 @@ import { billCollectedByPart } from "../lib/billing";
 import type { Bill, CanteenOrder } from "../types";
 import {
   Scissors,
-  Boxes,
   Search,
   Plus,
   Minus,
@@ -42,7 +41,6 @@ export function Canteen() {
   const [filter, setFilter] = useState<"all" | "note">("all");
   const [selectedDate, setSelectedDate] = useState(() => toDateInputValue(Date.now()));
   const [showNew, setShowNew] = useState(false);
-  const [showCategories, setShowCategories] = useState(false);
   const [editOrder, setEditOrder] = useState<CanteenOrder | null>(null);
   const [checkoutBill, setCheckoutBill] = useState<Bill | null>(null);
   const [detailBill, setDetailBill] = useState<Bill | null>(null);
@@ -148,20 +146,12 @@ export function Canteen() {
         )}
       </div>
 
-      <div className="flex gap-2">
-        <button
-          onClick={() => setShowNew(true)}
-          className="flex items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 text-sm"
-        >
-          <Scissors size={14} /> Menu
-        </button>
-        <button
-          onClick={() => setShowCategories(true)}
-          className="flex items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 text-sm"
-        >
-          <Boxes size={14} /> Categories
-        </button>
-      </div>
+      <button
+        onClick={() => setShowNew(true)}
+        className="flex items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 text-sm w-fit"
+      >
+        <Scissors size={14} /> Menu
+      </button>
 
       <div className="relative">
         <Search
@@ -274,7 +264,7 @@ export function Canteen() {
                         <Check size={14} /> Served
                       </button>
                     )}
-                    {!billed && !order.tableId && (
+                    {!billed && !order.tableId && order.customerId === "walk-in" && (
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
@@ -313,6 +303,11 @@ export function Canteen() {
                     Billed together with the table when the session stops
                   </p>
                 )}
+                {!order.tableId && !billed && order.customerId !== "walk-in" && (
+                  <p className="text-xs text-[var(--color-text-faint)] mt-1">
+                    Pay from {label.name}'s profile on the Customers page
+                  </p>
+                )}
               </Card>
             );
           })}
@@ -327,7 +322,6 @@ export function Canteen() {
       </button>
 
       {showNew && <NewOrderModal onClose={() => setShowNew(false)} />}
-      {showCategories && <CategoriesModal onClose={() => setShowCategories(false)} />}
       {editOrder && <OrderEditModal order={editOrder} onClose={() => setEditOrder(null)} />}
       {checkoutBill && <CheckoutModal bill={checkoutBill} onDone={() => setCheckoutBill(null)} />}
       {detailBill && <BillDetailModal bill={detailBill} onClose={() => setDetailBill(null)} />}
@@ -451,71 +445,27 @@ function OrderEditModal({ order, onClose }: { order: CanteenOrder; onClose: () =
   );
 }
 
-function CategoriesModal({ onClose }: { onClose: () => void }) {
-  const categories = useMenuStore((s) => s.categories);
-  const items = useMenuStore((s) => s.items);
-  const addCategory = useMenuStore((s) => s.addCategory);
-  const removeCategory = useMenuStore((s) => s.removeCategory);
-  const [name, setName] = useState("");
-
-  function handleAdd() {
-    if (!name.trim()) return;
-    addCategory(name.trim());
-    setName("");
-  }
-
-  return (
-    <Modal title="Categories" onClose={onClose}>
-      <div className="space-y-2 mb-4">
-        {categories.map((c) => {
-          const count = items.filter((i) => i.categoryId === c.id).length;
-          return (
-            <Card key={c.id} className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium">{c.name}</p>
-                <p className="text-xs text-[var(--color-text-dim)]">{count} items</p>
-              </div>
-              <button
-                onClick={() => removeCategory(c.id)}
-                disabled={count > 0}
-                className="text-xs text-[var(--color-danger)] disabled:opacity-30 disabled:cursor-not-allowed"
-              >
-                Remove
-              </button>
-            </Card>
-          );
-        })}
-      </div>
-      <div className="flex gap-2">
-        <input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="New category name"
-          className="flex-1 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] px-3 py-2.5 text-sm outline-none"
-        />
-        <button
-          onClick={handleAdd}
-          className="rounded-xl bg-[var(--color-primary)] text-white px-4 text-sm font-medium"
-        >
-          Add
-        </button>
-      </div>
-    </Modal>
-  );
-}
-
 function NewOrderModal({ onClose }: { onClose: () => void }) {
   const menuItems = useMenuStore((s) => s.items);
   const categories = useMenuStore((s) => s.categories);
   const findOrCreateCustomer = useCustomersStore((s) => s.findOrCreateCustomer);
   const createOrder = useOrdersStore((s) => s.createOrder);
   const addItem = useOrdersStore((s) => s.addItem);
+  const getOpenOrderForTable = useOrdersStore((s) => s.getOpenOrderForTable);
+  const rawTables = useTablesStore((s) => s.tables);
+  const tables = useMemo(() => orderedTables(rawTables), [rawTables]);
   const currency = useSettingsStore((s) => s.currencySymbol);
 
   const [name, setName] = useState("");
+  const [tableId, setTableId] = useState("");
   const [note, setNote] = useState("");
   const [cart, setCart] = useState<Record<string, number>>({});
   const [itemSearch, setItemSearch] = useState("");
+
+  // Food for someone already playing goes straight onto their table's tab —
+  // billed together when the session stops — instead of the customer-name
+  // flow below, which is for standalone/walk-in canteen orders.
+  const runningTables = tables.filter((t) => t.status !== "available");
 
   const setQty = (id: string, qty: number) =>
     setCart((c) => ({ ...c, [id]: Math.max(0, qty) }));
@@ -526,35 +476,64 @@ function NewOrderModal({ onClose }: { onClose: () => void }) {
   function handleSave() {
     const items = menuItems.filter((i) => (cart[i.id] ?? 0) > 0);
     if (items.length === 0) return;
-    // A typed name attaches the order (and its bill) to that customer's
-    // profile — same rule as starting a table session. Blank = walk-in.
-    const customerId = name.trim() ? findOrCreateCustomer({ name: name.trim(), phone: "" }).id : "walk-in";
-    const order = createOrder(null, customerId, null);
+    let orderId: string;
+    if (tableId) {
+      const table = tables.find((t) => t.id === tableId);
+      const order = getOpenOrderForTable(tableId) ?? createOrder(tableId, table?.customerId ?? null);
+      orderId = order.id;
+    } else {
+      // A typed name attaches the order (and its bill) to that customer's
+      // profile — same rule as starting a table session. Blank = walk-in.
+      const customerId = name.trim() ? findOrCreateCustomer({ name: name.trim(), phone: "" }).id : "walk-in";
+      orderId = createOrder(null, customerId, null).id;
+    }
     items.forEach((item) => {
-      addItem(order.id, {
+      addItem(orderId, {
         menuItemId: item.id,
         name: item.name,
         price: item.price,
         qty: cart[item.id],
       });
     });
-    if (note) setNoteStore(order.id, note);
+    if (note) setNoteStore(orderId, note);
     onClose();
   }
 
   return (
     <Modal title="New order" onClose={onClose}>
       <div className="space-y-4">
-        <div>
-          <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-1.5">
-            CUSTOMER NAME
-          </p>
-          <CustomerNameInput
-            value={name}
-            onChange={setName}
-            placeholder="Name — leave blank for walk-in"
-          />
-        </div>
+        {runningTables.length > 0 && (
+          <div>
+            <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-1.5">
+              TABLE
+            </p>
+            <select
+              value={tableId}
+              onChange={(e) => setTableId(e.target.value)}
+              className="w-full rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] px-3 py-2.5 text-sm outline-none"
+            >
+              <option value="">Not at a table (standalone order)</option>
+              {runningTables.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {!tableId && (
+          <div>
+            <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-1.5">
+              CUSTOMER NAME
+            </p>
+            <CustomerNameInput
+              value={name}
+              onChange={setName}
+              placeholder="Name — leave blank for walk-in"
+            />
+          </div>
+        )}
 
         <div className="relative">
           <Search

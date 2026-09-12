@@ -2,14 +2,17 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { Home } from "./pages/Home";
 import { Canteen } from "./pages/Canteen";
 import { Customers } from "./pages/Customers";
+import { Credits } from "./pages/Credits";
 import { Reports } from "./pages/Reports";
 import { Settings } from "./pages/Settings";
 import { useCreditReminderWatcher } from "./hooks/useCreditReminderWatcher";
+import { useAutoCreditWatcher } from "./hooks/useAutoCreditWatcher";
 import { LockScreen } from "./components/LockScreen";
 import { ThemeApplier } from "./components/ThemeApplier";
 
 export default function App() {
   useCreditReminderWatcher();
+  useAutoCreditWatcher();
 
   return (
     <>
@@ -23,6 +26,7 @@ export default function App() {
             <Route path="/sessions" element={<Home />} />
             <Route path="/canteen" element={<Canteen />} />
             <Route path="/customers" element={<Customers />} />
+            <Route path="/credits" element={<Credits />} />
             <Route path="/reports" element={<Reports />} />
             <Route path="/settings" element={<Settings />} />
           </Routes>

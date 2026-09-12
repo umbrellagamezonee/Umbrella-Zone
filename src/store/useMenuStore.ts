@@ -3,12 +3,23 @@ import { persist } from "zustand/middleware";
 import type { MenuCategory, MenuItem } from "../types";
 import { setupSync, pushInsert, pushUpsert, pushDelete, pushDeleteAll } from "../lib/cloudSync";
 
+// The shop only wants exactly these three, fixed — no more freeform add/
+// remove of categories. Ids are stable strings (not random) so every device
+// converges on the same three rows instead of creating its own duplicates.
 const seedCategories: MenuCategory[] = [
-  { id: "cat-sandwiches", name: "Sandwiches & Kulcha" },
-  { id: "cat-maggi-eggs", name: "Maggi & Eggs" },
-  { id: "cat-chinese-fries", name: "Chinese & Fries" },
-  { id: "cat-drinks", name: "Drinks" },
+  { id: "cat-kitchen", name: "Kitchen" },
+  { id: "cat-cigarettes", name: "Cigarettes" },
+  { id: "cat-fridge", name: "Fridge" },
 ];
+
+// Old freeform categories being folded into the fixed set below — anything
+// under an unrecognized/removed category id falls back to Kitchen.
+const CATEGORY_REMAP: Record<string, string> = {
+  "cat-sandwiches": "cat-kitchen",
+  "cat-maggi-eggs": "cat-kitchen",
+  "cat-chinese-fries": "cat-kitchen",
+  "cat-drinks": "cat-fridge",
+};
 
 function item(name: string, categoryId: string, price: number): MenuItem {
   return {
@@ -24,45 +35,41 @@ function item(name: string, categoryId: string, price: number): MenuItem {
 }
 
 const seedItems: MenuItem[] = [
-  // Sandwiches & Kulcha
-  item("Veg Grilled Sandwich (with Amul Butter)", "cat-sandwiches", 35),
-  item("Pasta Sandwich (with Amul Butter)", "cat-sandwiches", 40),
-  item("Veg Kulcha (with Amul Butter)", "cat-sandwiches", 40),
-  item("Veg Burger (with Amul Butter)", "cat-sandwiches", 40),
-  item("Sweetcorn Patties (with Amul Butter)", "cat-sandwiches", 25),
-  item("Spl. Veg Sandwich", "cat-sandwiches", 80),
+  // Kitchen
+  item("Veg Grilled Sandwich (with Amul Butter)", "cat-kitchen", 35),
+  item("Pasta Sandwich (with Amul Butter)", "cat-kitchen", 40),
+  item("Veg Kulcha (with Amul Butter)", "cat-kitchen", 40),
+  item("Veg Burger (with Amul Butter)", "cat-kitchen", 40),
+  item("Sweetcorn Patties (with Amul Butter)", "cat-kitchen", 25),
+  item("Spl. Veg Sandwich", "cat-kitchen", 80),
+  item("Veg Maggi", "cat-kitchen", 40),
+  item("Paneer Maggi", "cat-kitchen", 60),
+  item("Egg Maggi", "cat-kitchen", 50),
+  item("Double Masala Maggi", "cat-kitchen", 50),
+  item("Egg Omelette (2 Egg)", "cat-kitchen", 50),
+  item("Egg Fry", "cat-kitchen", 30),
+  item("Egg Bhurji", "cat-kitchen", 50),
+  item("Half Fry", "cat-kitchen", 30),
+  item("Egg Pizza", "cat-kitchen", 150),
+  item("Veg Noodles", "cat-kitchen", 80),
+  item("Paneer Noodles", "cat-kitchen", 100),
+  item("French Fries", "cat-kitchen", 70),
+  item("Peri-Peri Fries", "cat-kitchen", 80),
+  item("Chilli Potato", "cat-kitchen", 110),
+  item("Cheese Chilli", "cat-kitchen", 150),
+  item("Dry Manchurian", "cat-kitchen", 110),
+  item("Gravy Manchurian", "cat-kitchen", 130),
+  item("Spring Roll", "cat-kitchen", 80),
+  item("Fry Momos", "cat-kitchen", 70),
+  item("Chilli Mushroom", "cat-kitchen", 110),
 
-  // Maggi & Eggs
-  item("Veg Maggi", "cat-maggi-eggs", 40),
-  item("Paneer Maggi", "cat-maggi-eggs", 60),
-  item("Egg Maggi", "cat-maggi-eggs", 50),
-  item("Double Masala Maggi", "cat-maggi-eggs", 50),
-  item("Egg Omelette (2 Egg)", "cat-maggi-eggs", 50),
-  item("Egg Fry", "cat-maggi-eggs", 30),
-  item("Egg Bhurji", "cat-maggi-eggs", 50),
-  item("Half Fry", "cat-maggi-eggs", 30),
-  item("Egg Pizza", "cat-maggi-eggs", 150),
-
-  // Chinese & Fries
-  item("Veg Noodles", "cat-chinese-fries", 80),
-  item("Paneer Noodles", "cat-chinese-fries", 100),
-  item("French Fries", "cat-chinese-fries", 70),
-  item("Peri-Peri Fries", "cat-chinese-fries", 80),
-  item("Chilli Potato", "cat-chinese-fries", 110),
-  item("Cheese Chilli", "cat-chinese-fries", 150),
-  item("Dry Manchurian", "cat-chinese-fries", 110),
-  item("Gravy Manchurian", "cat-chinese-fries", 130),
-  item("Spring Roll", "cat-chinese-fries", 80),
-  item("Fry Momos", "cat-chinese-fries", 70),
-  item("Chilli Mushroom", "cat-chinese-fries", 110),
-
-  // Drinks
-  item("Cold Coffee", "cat-drinks", 60),
-  item("Hot Coffee", "cat-drinks", 20),
-  item("Tea", "cat-drinks", 20),
-  item("Chocolate Shake", "cat-drinks", 80),
-  item("Kitkat Shake", "cat-drinks", 90),
-  item("Oreo Shake", "cat-drinks", 90),
+  // Fridge
+  item("Cold Coffee", "cat-fridge", 60),
+  item("Hot Coffee", "cat-fridge", 20),
+  item("Tea", "cat-fridge", 20),
+  item("Chocolate Shake", "cat-fridge", 80),
+  item("Kitkat Shake", "cat-fridge", 90),
+  item("Oreo Shake", "cat-fridge", 90),
 ];
 
 interface CategoryRow {
@@ -108,8 +115,6 @@ const itemToRow = (i: MenuItem): ItemRow => ({
 interface MenuState {
   categories: MenuCategory[];
   items: MenuItem[];
-  addCategory: (name: string) => void;
-  removeCategory: (id: string) => void;
   addItem: (item: Omit<MenuItem, "id">) => void;
   updateItem: (id: string, patch: Partial<MenuItem>) => void;
   removeItem: (id: string) => void;
@@ -123,17 +128,6 @@ export const useMenuStore = create<MenuState>()(
     (set, get) => ({
       categories: seedCategories,
       items: seedItems,
-
-      addCategory: (name) => {
-        const created: MenuCategory = { id: crypto.randomUUID(), name };
-        set((state) => ({ categories: [...state.categories, created] }));
-        pushInsert(CAT_TABLE, catToRow(created));
-      },
-
-      removeCategory: (id) => {
-        set((state) => ({ categories: state.categories.filter((c) => c.id !== id) }));
-        pushDelete(CAT_TABLE, id);
-      },
 
       addItem: (item) => {
         const created: MenuItem = { ...item, id: crypto.randomUUID() };
@@ -184,20 +178,59 @@ export const useMenuStore = create<MenuState>()(
     }),
     {
       name: "cuebill-menu",
-      // Bumped to reset everyone onto the real cafe menu — this intentionally
-      // replaces old placeholder items/categories rather than merging them.
-      version: 2,
-      migrate: () => ({ categories: seedCategories, items: seedItems }),
+      // v3: collapsed the old freeform categories down to the fixed
+      // Kitchen/Cigarettes/Fridge set — remap existing items instead of
+      // wiping them like the v2 reset did.
+      version: 3,
+      migrate: (persisted, version) => {
+        if (version < 2) return { categories: seedCategories, items: seedItems };
+        const state = persisted as { categories?: MenuCategory[]; items?: MenuItem[] };
+        const items = (state.items ?? []).map((i) =>
+          CATEGORY_REMAP[i.categoryId] ? { ...i, categoryId: CATEGORY_REMAP[i.categoryId] } : i
+        );
+        return { categories: seedCategories, items };
+      },
     }
   )
 );
+
+// One-time cleanup for the cloud side of the same category collapse — the
+// local `migrate` above only fixes this device's own persisted storage, but
+// a fresh cloud fetch would otherwise stomp that with whatever old category
+// rows are still sitting in Supabase. Safe to call repeatedly (every device
+// runs it after every sync) since it's a no-op once nothing needs remapping,
+// and it upserts the three fixed rows (fixed ids) rather than inserting, so
+// two devices racing to create them can't collide.
+function ensureFixedCategories() {
+  const { categories, items } = useMenuStore.getState();
+  const fixedIds = new Set(seedCategories.map((c) => c.id));
+  const stale = categories.filter((c) => !fixedIds.has(c.id));
+  const staleItems = items.filter((i) => !fixedIds.has(i.categoryId));
+  if (stale.length === 0 && staleItems.length === 0 && categories.length === seedCategories.length) return;
+
+  const missing = seedCategories.filter((c) => !categories.some((existing) => existing.id === c.id));
+  for (const c of missing) pushUpsert(CAT_TABLE, catToRow(c));
+  for (const c of stale) pushDelete(CAT_TABLE, c.id);
+
+  const remappedItems = items.map((i) =>
+    fixedIds.has(i.categoryId) ? i : { ...i, categoryId: CATEGORY_REMAP[i.categoryId] ?? "cat-kitchen" }
+  );
+  for (const i of remappedItems) {
+    if (i.categoryId !== items.find((x) => x.id === i.id)?.categoryId) pushUpsert(ITEM_TABLE, itemToRow(i));
+  }
+
+  useMenuStore.setState({ categories: seedCategories, items: remappedItems });
+}
 
 setupSync<CategoryRow, MenuCategory>(
   CAT_TABLE,
   catFromRow,
   catToRow,
   () => useMenuStore.getState().categories,
-  (categories) => useMenuStore.setState({ categories }),
+  (categories) => {
+    useMenuStore.setState({ categories });
+    ensureFixedCategories();
+  },
   (cat) =>
     useMenuStore.setState((state) => {
       const exists = state.categories.some((c) => c.id === cat.id);
@@ -209,6 +242,11 @@ setupSync<CategoryRow, MenuCategory>(
     }),
   (id) => useMenuStore.setState((state) => ({ categories: state.categories.filter((c) => c.id !== id) }))
 );
+
+// Covers the offline/no-Supabase case (setupSync no-ops entirely then) and
+// gives the local persisted state one more pass in case items' own cloud
+// fetch below lands before this one does.
+ensureFixedCategories();
 
 // Cost price is only readable from the cloud once the "cost_price" column
 // exists there (see supabase/migration-cost-price.sql). Until then, a fetch
@@ -225,11 +263,13 @@ setupSync<ItemRow, MenuItem>(
   itemFromRow,
   itemToRow,
   () => useMenuStore.getState().items,
-  (items) =>
+  (items) => {
     useMenuStore.setState((state) => {
       const byId = new Map(state.items.map((i) => [i.id, i]));
       return { items: items.map((i) => keepLocalCostPrice(i, byId.get(i.id))) };
-    }),
+    });
+    ensureFixedCategories();
+  },
   (item) =>
     useMenuStore.setState((state) => {
       const existing = state.items.find((i) => i.id === item.id);

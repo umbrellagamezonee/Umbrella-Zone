@@ -101,6 +101,8 @@ create table bills (
   discount numeric not null default 0,
   total numeric not null default 0,
   amount_paid numeric not null default 0,
+  amount_cash numeric not null default 0,
+  amount_upi numeric not null default 0,
   amount_due numeric not null default 0,
   payment_method text,
   shares jsonb,

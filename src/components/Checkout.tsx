@@ -6,7 +6,7 @@ import { useCustomersStore } from "../store/useCustomersStore";
 import { CustomerNameInput } from "./ui/CustomerNameInput";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { formatMoney } from "../lib/format";
-import type { Bill, PaymentMethod } from "../types";
+import type { Bill } from "../types";
 import { QRCodeSVG } from "qrcode.react";
 import { Check, ArrowLeft, Repeat } from "lucide-react";
 
@@ -55,23 +55,27 @@ export function Checkout({ bill, onDone, onCancel, onSettled, onRestart }: Check
   const isRegistered = !!billCustomer && !billCustomer.isWalkIn;
 
   const [step, setStep] = useState<CheckoutStep>("select");
-  const [amountPaidInput, setAmountPaidInput] = useState(bill.total.toFixed(2));
+  const [cashInput, setCashInput] = useState(bill.total.toFixed(2));
+  const [accountInput, setAccountInput] = useState("0");
   const [payerName, setPayerName] = useState(
     billCustomer && !billCustomer.isWalkIn ? billCustomer.name : ""
   );
   const [settled, setSettled] = useState<{
-    method: PaymentMethod;
-    amountPaid: number;
+    amountCash: number;
+    amountUpi: number;
     amountDue: number;
     creditTo: string | null;
   } | null>(null);
   const [error, setError] = useState("");
 
-  const amountPaid = Math.min(Math.max(0, Number(amountPaidInput) || 0), bill.total);
+  const cash = Math.min(Math.max(0, Number(cashInput) || 0), bill.total);
+  const account = Math.min(Math.max(0, Number(accountInput) || 0), Math.max(0, bill.total - cash));
+  const amountPaid = cash + account;
   const creditPortion = Math.round((bill.total - amountPaid) * 100) / 100;
   const needsContact = !isRegistered;
 
-  function finalize(method: PaymentMethod, paidNow: number) {
+  function finalize(cashAmt: number, accountAmt: number) {
+    const paidNow = cashAmt + accountAmt;
     const due = Math.round((bill.total - paidNow) * 100) / 100;
     let creditCustomerId = bill.customerId;
     let creditCustomerName = billCustomer?.name ?? null;
@@ -89,34 +93,51 @@ export function Checkout({ bill, onDone, onCancel, onSettled, onRestart }: Check
     }
 
     setError("");
-    const updated = settlePayment(bill.id, { method, amountPaid: paidNow });
+    const updated = settlePayment(bill.id, { amountCash: cashAmt, amountUpi: accountAmt });
     if (updated && due > 0 && creditCustomerId) {
       adjustCredit(creditCustomerId, due);
     }
     onSettled?.();
     setSettled({
-      method,
-      amountPaid: paidNow,
+      amountCash: cashAmt,
+      amountUpi: accountAmt,
       amountDue: due,
       creditTo: due > 0 ? creditCustomerName : null,
     });
     setStep("success");
   }
 
+  function handleConfirm() {
+    if (needsContact && creditPortion > 0 && !payerName.trim()) {
+      setError("Enter a name so this balance can be tracked.");
+      return;
+    }
+    setError("");
+    if (account > 0 && upiId) setStep("upi-qr");
+    else finalize(cash, account);
+  }
+
   const upiUri = `upi://pay?pa=${encodeURIComponent(upiId)}&pn=${encodeURIComponent(
     storeName
-  )}&am=${amountPaid.toFixed(2)}&cu=INR&tn=${encodeURIComponent(bill.tableName ?? "Bill")}`;
+  )}&am=${account.toFixed(2)}&cu=INR&tn=${encodeURIComponent(bill.tableName ?? "Bill")}`;
 
   if (step === "success" && settled) {
+    const paidNow = settled.amountCash + settled.amountUpi;
     return (
       <div className="space-y-4 py-4 text-center">
         <div className="mx-auto h-16 w-16 rounded-full bg-[var(--color-success)]/15 text-[var(--color-success)] flex items-center justify-center">
           <Check size={32} />
         </div>
         <div>
-          <p className="text-2xl font-bold">{formatMoney(settled.amountPaid, currency)}</p>
+          {paidNow > 0 && <p className="text-2xl font-bold">{formatMoney(paidNow, currency)}</p>}
           <p className="text-sm text-[var(--color-text-dim)] mt-1">
-            Received via {settled.method === "upi" ? "UPI" : settled.method === "cash" ? "Cash" : "Credit"}
+            {settled.amountCash > 0 && settled.amountUpi > 0
+              ? `${formatMoney(settled.amountCash, currency)} cash + ${formatMoney(settled.amountUpi, currency)} account`
+              : settled.amountUpi > 0
+              ? "Received via Account"
+              : settled.amountCash > 0
+              ? "Received via Cash"
+              : "Fully on credit"}
           </p>
           {settled.amountDue > 0 && (
             <p className="text-sm text-[var(--color-warning)] mt-2">
@@ -158,11 +179,11 @@ export function Checkout({ bill, onDone, onCancel, onSettled, onRestart }: Check
           <div className="rounded-xl bg-white p-3">
             <QRCodeSVG value={upiUri} size={200} />
           </div>
-          <p className="text-2xl font-bold">{formatMoney(amountPaid, currency)}</p>
+          <p className="text-2xl font-bold">{formatMoney(account, currency)}</p>
           <p className="text-xs text-[var(--color-text-dim)]">Pay to {storeName}</p>
         </Card>
         <button
-          onClick={() => finalize("upi", amountPaid)}
+          onClick={() => finalize(cash, account)}
           className="w-full rounded-xl bg-[var(--color-success)]/15 text-[var(--color-success)] font-semibold py-3"
         >
           Payment received
@@ -218,13 +239,24 @@ export function Checkout({ bill, onDone, onCancel, onSettled, onRestart }: Check
       </Card>
 
       <div className="flex items-center justify-between">
-        <span className="text-sm text-[var(--color-text-dim)]">Receiving now</span>
+        <span className="text-sm text-[var(--color-text-dim)]">Cash</span>
         <input
           type="number"
           min={0}
           max={bill.total}
-          value={amountPaidInput}
-          onChange={(e) => setAmountPaidInput(e.target.value)}
+          value={cashInput}
+          onChange={(e) => setCashInput(e.target.value)}
+          className="w-24 text-right bg-[var(--color-surface-2)] rounded-lg px-2 py-1.5 text-sm outline-none"
+        />
+      </div>
+      <div className="flex items-center justify-between">
+        <span className="text-sm text-[var(--color-text-dim)]">Account (UPI)</span>
+        <input
+          type="number"
+          min={0}
+          max={Math.max(0, bill.total - cash)}
+          value={accountInput}
+          onChange={(e) => setAccountInput(e.target.value)}
           className="w-24 text-right bg-[var(--color-surface-2)] rounded-lg px-2 py-1.5 text-sm outline-none"
         />
       </div>
@@ -248,37 +280,27 @@ export function Checkout({ bill, onDone, onCancel, onSettled, onRestart }: Check
 
       {error && <p className="text-xs text-[var(--color-danger)] -mt-2">{error}</p>}
 
-      <div className="grid grid-cols-2 gap-2">
-        <button
-          onClick={() => finalize("cash", amountPaid)}
-          className="rounded-xl bg-[var(--color-success)]/15 text-[var(--color-success)] font-semibold py-3 text-sm"
-        >
-          Cash
-        </button>
-        <button
-          onClick={() => {
-            if (needsContact && creditPortion > 0 && !payerName.trim()) {
-              setError("Enter a name so this balance can be tracked.");
-              return;
-            }
-            setError("");
-            if (upiId && amountPaid > 0) setStep("upi-qr");
-            else finalize("upi", amountPaid);
-          }}
-          className="rounded-xl bg-[var(--color-primary)]/15 text-[var(--color-primary)] font-semibold py-3 text-sm"
-        >
-          UPI
-        </button>
-      </div>
-      {amountPaid > 0 && !upiId && (
+      <button
+        onClick={handleConfirm}
+        className="w-full rounded-xl bg-[var(--color-primary)] text-white font-semibold py-3"
+      >
+        Confirm payment
+      </button>
+      {account > 0 && !upiId && (
         <p className="text-xs text-[var(--color-text-faint)] text-center -mt-2">
           Add a UPI ID in Settings → Store Settings to show a scannable QR code.
         </p>
       )}
       <button
         onClick={() => {
-          setAmountPaidInput("0");
-          finalize("credit", 0);
+          setCashInput("0");
+          setAccountInput("0");
+          if (needsContact && !payerName.trim()) {
+            setError("Enter a name so this balance can be tracked.");
+            return;
+          }
+          setError("");
+          finalize(0, 0);
         }}
         className="w-full rounded-xl bg-[var(--color-warning)]/15 text-[var(--color-warning)] font-semibold py-2.5 text-sm"
       >

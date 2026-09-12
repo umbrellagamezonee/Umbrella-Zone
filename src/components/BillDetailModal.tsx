@@ -213,12 +213,20 @@ export function BillDetailModal({ bill, onClose }: { bill: Bill; onClose: () => 
               ))
             ) : bill.status === "paid" ? (
               <>
-                {(money.cash > 0 || money.upi > 0) && (
+                {money.cash > 0 && (
                   <div className="flex justify-between items-center text-[var(--color-success)]">
                     <span className="flex items-center gap-1">
-                      <Check size={12} /> Paid via {bill.paymentMethod?.toUpperCase()}
+                      <Check size={12} /> Paid via Cash
                     </span>
-                    <span>{money0(money.cash + money.upi)}</span>
+                    <span>{money0(money.cash)}</span>
+                  </div>
+                )}
+                {money.upi > 0 && (
+                  <div className="flex justify-between items-center text-[var(--color-success)]">
+                    <span className="flex items-center gap-1">
+                      <Check size={12} /> Paid via Account
+                    </span>
+                    <span>{money0(money.upi)}</span>
                   </div>
                 )}
                 {money.credit > 0 && (

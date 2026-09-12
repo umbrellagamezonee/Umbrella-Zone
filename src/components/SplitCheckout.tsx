@@ -189,7 +189,7 @@ export function SplitCheckout({ bill: initialBill, onDone }: { bill: Bill; onDon
                   onClick={() => (upiId ? setStep(share.id, "upi-qr") : settle(share, "upi"))}
                   className="rounded-xl bg-[var(--color-primary)]/15 text-[var(--color-primary)] font-medium py-2 text-xs"
                 >
-                  UPI
+                  Account
                 </button>
                 <button
                   onClick={() => settle(share, "credit")}

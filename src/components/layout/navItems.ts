@@ -1,4 +1,4 @@
-import { Home, UtensilsCrossed, Users, BarChart3, Settings } from "lucide-react";
+import { Home, UtensilsCrossed, Users, Wallet, BarChart3, Settings } from "lucide-react";
 
 // Shared between BottomNav (phone) and SideNav (tablet landscape / desktop)
 // so the two never drift out of sync.
@@ -8,6 +8,7 @@ export const navItems = [
   { to: "/", label: "Home", icon: Home },
   { to: "/canteen", label: "Canteen", icon: UtensilsCrossed },
   { to: "/customers", label: "Customers", icon: Users },
+  { to: "/credits", label: "Credits", icon: Wallet },
   { to: "/reports", label: "Reports", icon: BarChart3 },
   { to: "/settings", label: "Settings", icon: Settings },
 ];

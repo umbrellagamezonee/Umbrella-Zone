@@ -6,6 +6,15 @@ export interface BillMoney {
   credit: number;
 }
 
+// A share only ever settles as one of cash/upi/credit (never "split" — that
+// only describes a whole bill's amountPaid being divided between the first
+// two), so this only needs to handle those three.
+function addByMethod(result: BillMoney, method: PaymentMethod, amount: number) {
+  if (method === "cash") result.cash += amount;
+  else if (method === "upi") result.upi += amount;
+  else if (method === "credit") result.credit += amount;
+}
+
 // Actual money collected/owed for a bill, broken down by method. A split
 // bill's overall `status` only flips to "paid" once every share is settled,
 // so we read the shares directly here — otherwise cash already collected on
@@ -15,14 +24,14 @@ export function billMoney(bill: Bill): BillMoney {
   if (bill.shares) {
     for (const s of bill.shares) {
       if (s.status === "paid" && s.paymentMethod) {
-        result[s.paymentMethod] += s.amount;
+        addByMethod(result, s.paymentMethod, s.amount);
       }
     }
     return result;
   }
   if (bill.status !== "paid") return result;
-  if (bill.paymentMethod === "cash") result.cash = bill.amountPaid;
-  else if (bill.paymentMethod === "upi") result.upi = bill.amountPaid;
+  result.cash = bill.amountCash;
+  result.upi = bill.amountUpi;
   result.credit = bill.amountDue;
   return result;
 }
@@ -71,10 +80,11 @@ export function billRemaining(bill: Bill): number {
 
 export function sumBillMoney(bills: Bill[]): BillMoney {
   const total: BillMoney = { cash: 0, upi: 0, credit: 0 };
-  const methods: PaymentMethod[] = ["cash", "upi", "credit"];
   for (const bill of bills) {
     const m = billMoney(bill);
-    for (const method of methods) total[method] += m[method];
+    total.cash += m.cash;
+    total.upi += m.upi;
+    total.credit += m.credit;
   }
   return total;
 }

@@ -59,28 +59,85 @@ function logError(action: string, table: string, error: unknown) {
   if (error) console.error(`[cloudSync] ${action} on "${table}" failed`, error);
 }
 
-export function pushBulkInsert<TRow extends object>(table: string, rows: TRow[]) {
-  if (!supabase || rows.length === 0) return;
-  supabase
+// PostgREST's error for a column a migration hasn't added yet: "Could not
+// find the 'x' column of 'table' in the schema cache" (code PGRST204).
+// Naming the missing column, it's parseable — so instead of losing the
+// *entire* row (insert/upsert is all-or-nothing; one unknown column fails
+// the whole write), strip just that column and retry. The row still saves
+// with whatever columns do exist, and picks the rest back up next time it's
+// written after the migration runs — never data lost to a field that just
+// hasn't landed in the cloud schema yet.
+function missingColumn(message: string | undefined): string | null {
+  const match = message ? /Could not find the '([^']+)' column/.exec(message) : null;
+  return match ? match[1] : null;
+}
+
+function insertWithRetry(table: string, row: Record<string, unknown>, action: string) {
+  supabase!
+    .from(table)
+    .insert(row)
+    .then(({ error }) => {
+      const col = missingColumn(error?.message);
+      if (col && col in row) {
+        const { [col]: _drop, ...rest } = row;
+        insertWithRetry(table, rest, action);
+      } else {
+        logError(action, table, error);
+      }
+    });
+}
+
+function upsertWithRetry(table: string, row: Record<string, unknown>) {
+  supabase!
+    .from(table)
+    .upsert(row)
+    .then(({ error }) => {
+      const col = missingColumn(error?.message);
+      if (col && col in row) {
+        const { [col]: _drop, ...rest } = row;
+        upsertWithRetry(table, rest);
+      } else {
+        logError("upsert", table, error);
+      }
+    });
+}
+
+function bulkInsertWithRetry(table: string, rows: Record<string, unknown>[]) {
+  supabase!
     .from(table)
     .insert(rows)
-    .then(({ error }) => logError("bulk insert (initial seed)", table, error));
+    .then(({ error }) => {
+      const col = missingColumn(error?.message);
+      if (col) {
+        // Strip the missing column from every row (they're all the same
+        // shape here) rather than retrying one row at a time.
+        bulkInsertWithRetry(
+          table,
+          rows.map((r) => {
+            const rest = { ...r };
+            delete rest[col];
+            return rest;
+          })
+        );
+      } else {
+        logError("bulk insert (initial seed)", table, error);
+      }
+    });
+}
+
+export function pushBulkInsert<TRow extends object>(table: string, rows: TRow[]) {
+  if (!supabase || rows.length === 0) return;
+  bulkInsertWithRetry(table, rows as Record<string, unknown>[]);
 }
 
 export function pushInsert<TRow extends object>(table: string, row: TRow) {
   if (!supabase) return;
-  supabase
-    .from(table)
-    .insert(row)
-    .then(({ error }) => logError("insert", table, error));
+  insertWithRetry(table, row as Record<string, unknown>, "insert");
 }
 
 export function pushUpsert<TRow extends object>(table: string, row: TRow) {
   if (!supabase) return;
-  supabase
-    .from(table)
-    .upsert(row)
-    .then(({ error }) => logError("upsert", table, error));
+  upsertWithRetry(table, row as Record<string, unknown>);
 }
 
 export function pushDelete(table: string, id: string) {

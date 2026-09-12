@@ -3,6 +3,7 @@ import { persist } from "zustand/middleware";
 import type { Bill, BillCanteenItem, BillShare, PaymentMethod } from "../types";
 import { setupSync, pushInsert, pushUpsert, pushDelete, pushDeleteAll } from "../lib/cloudSync";
 import { useOrdersStore } from "./useOrdersStore";
+import { isToday } from "../lib/format";
 
 interface ShareInput {
   label: string;
@@ -27,9 +28,17 @@ interface CreateBillInput {
   matchLosers?: string[] | null;
 }
 
+// A payer can split what they hand over between cash and account (UPI/bank
+// transfer) — whatever's left of the total after both becomes credit.
 interface SettleInput {
-  method: PaymentMethod;
-  amountPaid: number;
+  amountCash: number;
+  amountUpi: number;
+}
+
+function paymentMethodFor(amountCash: number, amountUpi: number, amountDue: number): PaymentMethod | null {
+  if (amountCash === 0 && amountUpi === 0) return amountDue > 0 ? "credit" : null;
+  if (amountCash > 0 && amountUpi > 0) return "split";
+  return amountUpi > 0 ? "upi" : "cash";
 }
 
 interface SettleShareInput {
@@ -52,6 +61,10 @@ interface BillRow {
   discount: number;
   total: number;
   amount_paid: number;
+  // Optional: only present once supabase/migration-payment-split.sql has
+  // been run. Missing (not just null) on any row fetched before that.
+  amount_cash?: number;
+  amount_upi?: number;
   amount_due: number;
   payment_method: string | null;
   shares: BillShare[] | null;
@@ -64,31 +77,43 @@ interface BillRow {
 }
 
 const TABLE = "bills";
-const fromRow = (row: BillRow): Bill => ({
-  id: row.id,
-  tableId: row.table_id,
-  tableName: row.table_name,
-  orderId: row.order_id,
-  gameId: row.game_id,
-  gameName: row.game_name,
-  customerId: row.customer_id,
-  tableChargeMinutes: Number(row.table_charge_minutes),
-  tableCharge: Number(row.table_charge),
-  canteenCharge: Number(row.canteen_charge),
-  canteenItems: row.canteen_items ?? [],
-  discount: Number(row.discount),
-  total: Number(row.total),
-  amountPaid: Number(row.amount_paid),
-  amountDue: Number(row.amount_due),
-  paymentMethod: row.payment_method as PaymentMethod | null,
-  shares: row.shares,
-  status: row.status as Bill["status"],
-  createdAt: new Date(row.created_at).getTime(),
-  paidAt: row.paid_at ? new Date(row.paid_at).getTime() : null,
-  deletedAt: row.deleted_at ? new Date(row.deleted_at).getTime() : null,
-  matchParticipants: row.match_participants ?? null,
-  matchLosers: row.match_losers ?? null,
-});
+const fromRow = (row: BillRow): Bill => {
+  const amountPaid = Number(row.amount_paid);
+  // Before the migration adds these columns, fall back to the old
+  // single-method assumption so a fetch that predates it still displays
+  // sensibly instead of showing every rupee as cash.
+  const amountCash =
+    row.amount_cash != null ? Number(row.amount_cash) : row.payment_method === "upi" ? 0 : amountPaid;
+  const amountUpi =
+    row.amount_upi != null ? Number(row.amount_upi) : row.payment_method === "upi" ? amountPaid : 0;
+  return {
+    id: row.id,
+    tableId: row.table_id,
+    tableName: row.table_name,
+    orderId: row.order_id,
+    gameId: row.game_id,
+    gameName: row.game_name,
+    customerId: row.customer_id,
+    tableChargeMinutes: Number(row.table_charge_minutes),
+    tableCharge: Number(row.table_charge),
+    canteenCharge: Number(row.canteen_charge),
+    canteenItems: row.canteen_items ?? [],
+    discount: Number(row.discount),
+    total: Number(row.total),
+    amountPaid,
+    amountCash,
+    amountUpi,
+    amountDue: Number(row.amount_due),
+    paymentMethod: row.payment_method as PaymentMethod | null,
+    shares: row.shares,
+    status: row.status as Bill["status"],
+    createdAt: new Date(row.created_at).getTime(),
+    paidAt: row.paid_at ? new Date(row.paid_at).getTime() : null,
+    deletedAt: row.deleted_at ? new Date(row.deleted_at).getTime() : null,
+    matchParticipants: row.match_participants ?? null,
+    matchLosers: row.match_losers ?? null,
+  };
+};
 const toRow = (b: Bill): BillRow => ({
   id: b.id,
   table_id: b.tableId,
@@ -104,6 +129,8 @@ const toRow = (b: Bill): BillRow => ({
   discount: b.discount,
   total: b.total,
   amount_paid: b.amountPaid,
+  amount_cash: b.amountCash,
+  amount_upi: b.amountUpi,
   amount_due: b.amountDue,
   payment_method: b.paymentMethod,
   shares: b.shares,
@@ -131,9 +158,9 @@ interface BillsState {
   recordCreditSettlement: (input: {
     customerId: string;
     customerName: string;
-    amountPaid: number;
+    amountCash: number;
+    amountUpi: number;
     discount: number;
-    method: PaymentMethod;
   }) => Bill;
   settlePayment: (id: string, input: SettleInput) => Bill | undefined;
   settleShare: (billId: string, shareId: string, input: SettleShareInput) => { bill: Bill; share: BillShare } | undefined;
@@ -148,16 +175,6 @@ interface BillsState {
   permanentlyDeleteBill: (id: string) => void;
   todaysBills: () => Bill[];
   resetAll: () => void;
-}
-
-function isToday(ts: number) {
-  const d = new Date(ts);
-  const now = new Date();
-  return (
-    d.getFullYear() === now.getFullYear() &&
-    d.getMonth() === now.getMonth() &&
-    d.getDate() === now.getDate()
-  );
 }
 
 export const useBillsStore = create<BillsState>()(
@@ -197,6 +214,8 @@ export const useBillsStore = create<BillsState>()(
           discount,
           total,
           amountPaid: 0,
+          amountCash: 0,
+          amountUpi: 0,
           amountDue: total,
           paymentMethod: null,
           shares,
@@ -218,7 +237,8 @@ export const useBillsStore = create<BillsState>()(
       // customer's own history, instead of just silently shrinking a number
       // with no record of when or how.
       recordCreditSettlement: (input) => {
-        const total = input.amountPaid + input.discount;
+        const amountPaid = input.amountCash + input.amountUpi;
+        const total = amountPaid + input.discount;
         const bill: Bill = {
           id: crypto.randomUUID(),
           tableId: null,
@@ -233,9 +253,11 @@ export const useBillsStore = create<BillsState>()(
           canteenItems: [],
           discount: input.discount,
           total,
-          amountPaid: input.amountPaid,
+          amountPaid,
+          amountCash: input.amountCash,
+          amountUpi: input.amountUpi,
           amountDue: 0,
-          paymentMethod: input.method,
+          paymentMethod: paymentMethodFor(input.amountCash, input.amountUpi, 0),
           shares: null,
           status: "paid",
           createdAt: Date.now(),
@@ -254,13 +276,23 @@ export const useBillsStore = create<BillsState>()(
         set((state) => ({
           bills: state.bills.map((b) => {
             if (b.id !== id) return b;
-            const amountPaid = Math.min(Math.max(0, input.amountPaid), b.total);
+            const rawCash = Math.max(0, input.amountCash);
+            const rawUpi = Math.max(0, input.amountUpi);
+            // Clamp the combined total against what's actually owed, trimming
+            // upi first then cash if the two together overshoot it.
+            const overshoot = Math.max(0, rawCash + rawUpi - b.total);
+            const amountUpi = Math.max(0, rawUpi - overshoot);
+            const amountCash = Math.max(0, rawCash - Math.max(0, overshoot - rawUpi));
+            const amountPaid = amountCash + amountUpi;
+            const amountDue = Math.round((b.total - amountPaid) * 100) / 100;
             updated = {
               ...b,
               status: "paid",
-              paymentMethod: input.method,
+              paymentMethod: paymentMethodFor(amountCash, amountUpi, amountDue),
               amountPaid,
-              amountDue: b.total - amountPaid,
+              amountCash,
+              amountUpi,
+              amountDue,
               paidAt: Date.now(),
             };
             return updated;
@@ -287,16 +319,22 @@ export const useBillsStore = create<BillsState>()(
                 : s
             );
             const allPaid = shares.every((s) => s.status === "paid");
-            const amountPaid = shares
-              .filter((s) => s.status === "paid" && s.paymentMethod !== "credit")
+            const paidShares = shares.filter((s) => s.status === "paid");
+            const amountCash = paidShares
+              .filter((s) => s.paymentMethod === "cash")
               .reduce((sum, s) => sum + s.amount, 0);
-            const amountDue = shares
-              .filter((s) => s.status === "paid" && s.paymentMethod === "credit")
+            const amountUpi = paidShares
+              .filter((s) => s.paymentMethod === "upi")
+              .reduce((sum, s) => sum + s.amount, 0);
+            const amountDue = paidShares
+              .filter((s) => s.paymentMethod === "credit")
               .reduce((sum, s) => sum + s.amount, 0);
             const updated: Bill = {
               ...b,
               shares,
-              amountPaid,
+              amountPaid: amountCash + amountUpi,
+              amountCash,
+              amountUpi,
               amountDue,
               status: allPaid ? "paid" : "open",
               paidAt: allPaid ? Date.now() : b.paidAt,
@@ -409,13 +447,20 @@ export const useBillsStore = create<BillsState>()(
     }),
     {
       name: "cuebill-bills",
-      version: 7,
+      version: 8,
       migrate: (persisted) => {
         const state = persisted as {
           bills?: (Partial<Bill> & { id: string; total: number; matchLoser?: string | null })[];
           deletedBills?: (Partial<Bill> & { id: string; total: number; matchLoser?: string | null })[];
         };
-        const fill = (b: Partial<Bill> & { id: string; total: number; matchLoser?: string | null }): Bill => ({
+        const fill = (b: Partial<Bill> & { id: string; total: number; matchLoser?: string | null }): Bill => {
+          const amountPaid = b.amountPaid ?? (b.status === "paid" ? b.total : 0);
+          // Bills recorded before the cash/account split existed only ever
+          // had one method for the whole amountPaid — keep that as-is rather
+          // than guessing it was split.
+          const amountCash = b.amountCash ?? (b.paymentMethod === "upi" ? 0 : amountPaid);
+          const amountUpi = b.amountUpi ?? (b.paymentMethod === "upi" ? amountPaid : 0);
+          return {
           id: b.id,
           tableId: b.tableId ?? null,
           tableName: b.tableName ?? null,
@@ -429,7 +474,9 @@ export const useBillsStore = create<BillsState>()(
           canteenItems: b.canteenItems ?? [],
           discount: b.discount ?? 0,
           total: b.total,
-          amountPaid: b.amountPaid ?? (b.status === "paid" ? b.total : 0),
+          amountPaid,
+          amountCash,
+          amountUpi,
           amountDue: b.amountDue ?? (b.status === "paid" ? 0 : b.total),
           paymentMethod: b.paymentMethod ?? null,
           shares: b.shares ?? null,
@@ -441,7 +488,8 @@ export const useBillsStore = create<BillsState>()(
           // Old persisted bills only ever had a single `matchLoser` string —
           // wrap it into the new array shape instead of losing it.
           matchLosers: b.matchLosers ?? (b.matchLoser ? [b.matchLoser] : null),
-        });
+          };
+        };
         return {
           bills: (state.bills ?? []).map(fill),
           deletedBills: (state.deletedBills ?? []).map(fill),
@@ -451,24 +499,44 @@ export const useBillsStore = create<BillsState>()(
   )
 );
 
+// Cash/account amounts are only readable from the cloud once
+// supabase/migration-payment-split.sql has been run — until then a fetch
+// always comes back with amount_cash/amount_upi missing, and fromRow's
+// best-effort fallback would silently overwrite an already-recorded split
+// with its single-method guess. Keep this device's real split instead.
+function keepLocalPaymentSplit(incoming: Bill, local: Bill | undefined): Bill {
+  if (!local) return incoming;
+  if (incoming.amountCash === local.amountCash && incoming.amountUpi === local.amountUpi) return incoming;
+  if (incoming.paymentMethod !== "split" && local.paymentMethod === "split") {
+    return { ...incoming, amountCash: local.amountCash, amountUpi: local.amountUpi, paymentMethod: local.paymentMethod };
+  }
+  return incoming;
+}
+
 setupSync<BillRow, Bill>(
   TABLE,
   fromRow,
   toRow,
   () => [...useBillsStore.getState().bills, ...useBillsStore.getState().deletedBills],
   (allBills) => {
-    useBillsStore.setState({
-      bills: allBills.filter((b) => !b.deletedAt),
-      deletedBills: allBills.filter((b) => !!b.deletedAt),
+    useBillsStore.setState((state) => {
+      const byId = new Map([...state.bills, ...state.deletedBills].map((b) => [b.id, b]));
+      const merged = allBills.map((b) => keepLocalPaymentSplit(b, byId.get(b.id)));
+      return {
+        bills: merged.filter((b) => !b.deletedAt),
+        deletedBills: merged.filter((b) => !!b.deletedAt),
+      };
     });
   },
   (bill) =>
     useBillsStore.setState((state) => {
-      const bills = state.bills.filter((b) => b.id !== bill.id);
-      const deletedBills = state.deletedBills.filter((b) => b.id !== bill.id);
-      return bill.deletedAt
-        ? { bills, deletedBills: [bill, ...deletedBills] }
-        : { bills: [bill, ...bills], deletedBills };
+      const existing = state.bills.find((b) => b.id === bill.id) ?? state.deletedBills.find((b) => b.id === bill.id);
+      const merged = keepLocalPaymentSplit(bill, existing);
+      const bills = state.bills.filter((b) => b.id !== merged.id);
+      const deletedBills = state.deletedBills.filter((b) => b.id !== merged.id);
+      return merged.deletedAt
+        ? { bills, deletedBills: [merged, ...deletedBills] }
+        : { bills: [merged, ...bills], deletedBills };
     }),
   (id) =>
     useBillsStore.setState((state) => ({

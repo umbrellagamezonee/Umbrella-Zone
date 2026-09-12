@@ -4,43 +4,30 @@ import { Card } from "../components/ui/Card";
 import { Modal } from "../components/ui/Modal";
 import { PhoneInput } from "../components/ui/PhoneInput";
 import { BillDetailModal } from "../components/BillDetailModal";
+import { CheckoutModal } from "../components/Checkout";
 import { useCustomersStore } from "../store/useCustomersStore";
 import { useBillsStore } from "../store/useBillsStore";
+import { useOrdersStore } from "../store/useOrdersStore";
 import { useSettingsStore } from "../store/useSettingsStore";
-import { formatMoney, formatTime, toDateInputValue } from "../lib/format";
+import { formatMoney, formatTime, toDateInputValue, formatDateKey } from "../lib/format";
 import { billCollected } from "../lib/billing";
-import { sendCreditReminder } from "../lib/reminderApi";
 import { customerLabel, findCustomerByName, normalizeName } from "../lib/customerName";
-import type { Customer, Bill, PaymentMethod } from "../types";
-import { Search, Footprints, BellRing, Check, ChevronRight, Wallet, Users } from "lucide-react";
+import type { Customer, Bill } from "../types";
+import { Search, Footprints, Check, ChevronRight, Wallet, Users } from "lucide-react";
 
-function timeAgo(ts: number | null) {
-  if (ts == null) return "Never reminded";
-  const mins = Math.floor((Date.now() - ts) / 60000);
-  if (mins < 1) return "Reminded just now";
-  if (mins < 60) return `Reminded ${mins}m ago`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `Reminded ${hours}h ago`;
-  return `Reminded ${Math.floor(hours / 24)}d ago`;
-}
-
+// Plain day-to-day directory — look someone up, add a new profile, open
+// their history. Credit chasing (who's due, reminders, settling) lives on
+// its own Credits tab instead of crowding this list.
 export function Customers() {
   const customers = useCustomersStore((s) => s.customers);
   const addCustomer = useCustomersStore((s) => s.addCustomer);
-  const markReminded = useCustomersStore((s) => s.markReminded);
   const currency = useSettingsStore((s) => s.currencySymbol);
-  const storeName = useSettingsStore((s) => s.storeName);
   const [search, setSearch] = useState("");
   const [showAdd, setShowAdd] = useState(false);
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
-  const [sendingId, setSendingId] = useState<string | null>(null);
-  const [notice, setNotice] = useState<{ id: string; ok: boolean } | null>(null);
   const [detailCustomer, setDetailCustomer] = useState<Customer | null>(null);
-  const [settleCustomer, setSettleCustomer] = useState<Customer | null>(null);
-
-  const dueCustomers = customers.filter((c) => !c.isWalkIn && c.creditBalance > 0);
 
   const filtered = customers.filter(
     (c) =>
@@ -65,88 +52,8 @@ export function Customers() {
     setShowAdd(false);
   }
 
-  async function handleRemindNow(id: string) {
-    const c = customers.find((x) => x.id === id);
-    if (!c) return;
-    setSendingId(id);
-    setNotice(null);
-    const sent = await sendCreditReminder({
-      customerId: c.id,
-      name: c.name,
-      phone: c.phone,
-      amountDue: c.creditBalance,
-      storeName,
-      currencySymbol: currency,
-    });
-    if (sent) markReminded(id);
-    setSendingId(null);
-    setNotice({ id, ok: sent });
-  }
-
   return (
     <AppShell title="Customers">
-      {dueCustomers.length > 0 && (
-        <div>
-          <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-2">
-            PAYMENT DUE
-          </p>
-          <div className="space-y-2">
-            {dueCustomers.map((c) => (
-              <Card key={c.id} className="border-[var(--color-warning)]/40">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm font-medium">{customerLabel(c, customers)}</p>
-                    <p className="text-xs text-[var(--color-text-dim)]">
-                      {c.phone || "No phone"} · {timeAgo(c.lastReminderAt)}
-                    </p>
-                  </div>
-                  <span className="text-sm font-semibold text-[var(--color-warning)]">
-                    {formatMoney(c.creditBalance, currency)}
-                  </span>
-                </div>
-                <div className="mt-2 grid grid-cols-2 gap-2">
-                  <button
-                    onClick={() => setSettleCustomer(c)}
-                    className="flex items-center justify-center gap-2 rounded-xl bg-[var(--color-success)]/15 text-[var(--color-success)] text-sm font-medium py-2"
-                  >
-                    <Wallet size={14} /> Settle
-                  </button>
-                  <button
-                    onClick={() => handleRemindNow(c.id)}
-                    disabled={sendingId === c.id}
-                    className="flex items-center justify-center gap-2 rounded-xl bg-[var(--color-warning)]/15 text-[var(--color-warning)] text-sm font-medium py-2 disabled:opacity-50"
-                  >
-                    {sendingId === c.id ? (
-                      <>Sending…</>
-                    ) : (
-                      <>
-                        <BellRing size={14} /> Remind
-                      </>
-                    )}
-                  </button>
-                </div>
-                {notice?.id === c.id && (
-                  <p
-                    className={
-                      "text-xs text-center mt-1.5 " +
-                      (notice.ok ? "text-[var(--color-success)]" : "text-[var(--color-text-faint)]")
-                    }
-                  >
-                    {notice.ok
-                      ? "Message sent."
-                      : "Not sent — reminder server isn't running/configured (see server/README.md)."}
-                  </p>
-                )}
-              </Card>
-            ))}
-          </div>
-          <p className="text-xs text-[var(--color-text-faint)] mt-2">
-            Auto-reminded every 24 hours while the app is open. Real WhatsApp/SMS sending needs
-            the reminder server running with Twilio credentials — see server/README.md.
-          </p>
-        </div>
-      )}
-
       <div className="relative">
         <Search
           size={16}
@@ -209,10 +116,6 @@ export function Customers() {
         <CustomerDetailModal customer={detailCustomer} onClose={() => setDetailCustomer(null)} />
       )}
 
-      {settleCustomer && (
-        <SettleCreditModal customer={settleCustomer} onClose={() => setSettleCustomer(null)} />
-      )}
-
       {showAdd && (
         <Modal title="Add customer" onClose={() => setShowAdd(false)}>
           <div className="space-y-3">
@@ -253,10 +156,14 @@ function CustomerDetailModal({ customer: initialCustomer, onClose }: { customer:
   // history someone's most likely trying to track down.
   const deletedBills = useBillsStore((s) => s.deletedBills);
   const reassignCustomer = useBillsStore((s) => s.reassignCustomer);
+  const createOpenBill = useBillsStore((s) => s.createOpenBill);
+  const orders = useOrdersStore((s) => s.orders);
+  const markOrderBilled = useOrdersStore((s) => s.markBilled);
   const currency = useSettingsStore((s) => s.currencySymbol);
   const allCustomers = useCustomersStore((s) => s.customers);
   const mergeCustomer = useCustomersStore((s) => s.mergeCustomer);
   const [detailBill, setDetailBill] = useState<Bill | null>(null);
+  const [checkoutBill, setCheckoutBill] = useState<Bill | null>(null);
   const [showSettle, setShowSettle] = useState(false);
   const [mergeTarget, setMergeTarget] = useState<Customer | null>(null);
   // Read live off the store — settling a payment from right here should
@@ -286,6 +193,37 @@ function CustomerDetailModal({ customer: initialCustomer, onClose }: { customer:
     mergeCustomer(customer.id, target.id);
     setMergeTarget(null);
     onClose();
+  }
+
+  // Canteen food served to this customer but not yet paid for — canteen
+  // staff mark an order "served" and payment happens from here instead of
+  // billing it on the spot at the counter.
+  const pendingOrders = orders.filter(
+    (o) => o.customerId === customer.id && o.status === "served" && !bills.some((b) => b.orderId === o.id)
+  );
+
+  function handleBillOrder(order: (typeof pendingOrders)[number]) {
+    const total = order.items.reduce((sum, i) => sum + i.price * i.qty, 0);
+    const bill = createOpenBill({
+      tableId: null,
+      tableName: customer.name,
+      orderId: order.id,
+      gameId: null,
+      gameName: null,
+      customerId: customer.id,
+      tableChargeMinutes: 0,
+      tableCharge: 0,
+      canteenCharge: total,
+      canteenItems: order.items.map((i) => ({
+        name: i.name,
+        price: i.price,
+        qty: i.qty,
+        personName: i.personName ?? null,
+      })),
+      discount: 0,
+    });
+    markOrderBilled(order.id);
+    setCheckoutBill(bill);
   }
 
   const customerBills = [...bills, ...deletedBills]
@@ -348,6 +286,38 @@ function CustomerDetailModal({ customer: initialCustomer, onClose }: { customer:
           </Card>
         )}
 
+        {pendingOrders.length > 0 && (
+          <div>
+            <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-2">
+              PENDING ORDERS
+            </p>
+            <div className="space-y-2">
+              {pendingOrders.map((order) => {
+                const total = order.items.reduce((sum, i) => sum + i.price * i.qty, 0);
+                return (
+                  <Card key={order.id} className="border-[var(--color-warning)]/40">
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <p className="text-sm">{order.items.map((i) => `${i.name} x${i.qty}`).join(", ")}</p>
+                        <p className="text-xs text-[var(--color-text-dim)] mt-0.5">
+                          {formatTime(order.createdAt)}
+                        </p>
+                      </div>
+                      <p className="text-sm font-semibold shrink-0">{formatMoney(total, currency)}</p>
+                    </div>
+                    <button
+                      onClick={() => handleBillOrder(order)}
+                      className="mt-2 w-full flex items-center justify-center gap-2 rounded-xl bg-[var(--color-primary)] text-white text-sm font-medium py-2"
+                    >
+                      <Wallet size={14} /> Bill this order
+                    </button>
+                  </Card>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         <div>
           <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-2">
             HISTORY
@@ -402,6 +372,7 @@ function CustomerDetailModal({ customer: initialCustomer, onClose }: { customer:
       </div>
 
       {detailBill && <BillDetailModal bill={detailBill} onClose={() => setDetailBill(null)} />}
+      {checkoutBill && <CheckoutModal bill={checkoutBill} onDone={() => setCheckoutBill(null)} />}
       {showSettle && <SettleCreditModal customer={customer} onClose={() => setShowSettle(false)} />}
       {mergeTarget && (
         <Modal title="Merge customers" onClose={() => setMergeTarget(null)}>
@@ -460,11 +431,7 @@ function DayGroup({
       ? "Today"
       : dateKey === yesterdayKey
         ? "Yesterday"
-        : new Date(`${dateKey}T00:00:00`).toLocaleDateString([], {
-            weekday: "short",
-            day: "numeric",
-            month: "short",
-          });
+        : formatDateKey(dateKey, { weekday: "short", day: "numeric", month: "short" });
 
   const counted = dayBills.filter((b) => !b.deletedAt && b.status !== "cancelled");
   const matches = counted.filter((b) => b.tableId).length;
@@ -560,33 +527,37 @@ function DayGroup({
 // Collects a credit payment (cash/UPI), with an optional discount to write
 // off part of what's owed — recorded as its own settled bill so it counts
 // toward the day's collection, not just a number quietly shrinking.
-function SettleCreditModal({ customer, onClose }: { customer: Customer; onClose: () => void }) {
+export function SettleCreditModal({ customer, onClose }: { customer: Customer; onClose: () => void }) {
   const currency = useSettingsStore((s) => s.currencySymbol);
   const recordCreditSettlement = useBillsStore((s) => s.recordCreditSettlement);
   const adjustCredit = useCustomersStore((s) => s.adjustCredit);
 
   const [discountInput, setDiscountInput] = useState("0");
-  const [amountInput, setAmountInput] = useState(customer.creditBalance.toFixed(2));
-  const [settled, setSettled] = useState<{ method: PaymentMethod; amountPaid: number; discount: number } | null>(
+  const [cashInput, setCashInput] = useState(customer.creditBalance.toFixed(2));
+  const [accountInput, setAccountInput] = useState("0");
+  const [settled, setSettled] = useState<{ amountCash: number; amountUpi: number; discount: number } | null>(
     null
   );
 
   const discount = Math.min(Math.max(0, Number(discountInput) || 0), customer.creditBalance);
-  const amountPaid = Math.min(Math.max(0, Number(amountInput) || 0), customer.creditBalance - discount);
+  const payableMax = Math.max(0, customer.creditBalance - discount);
+  const cash = Math.min(Math.max(0, Number(cashInput) || 0), payableMax);
+  const account = Math.min(Math.max(0, Number(accountInput) || 0), Math.max(0, payableMax - cash));
+  const amountPaid = cash + account;
   const remaining = Math.max(0, customer.creditBalance - amountPaid - discount);
   const canSettle = amountPaid > 0 || discount > 0;
 
-  function handleSettle(method: PaymentMethod) {
+  function handleSettle() {
     if (!canSettle) return;
     recordCreditSettlement({
       customerId: customer.id,
       customerName: customer.name,
-      amountPaid,
+      amountCash: cash,
+      amountUpi: account,
       discount,
-      method,
     });
     adjustCredit(customer.id, -(amountPaid + discount));
-    setSettled({ method, amountPaid, discount });
+    setSettled({ amountCash: cash, amountUpi: account, discount });
   }
 
   if (settled) {
@@ -597,14 +568,20 @@ function SettleCreditModal({ customer, onClose }: { customer: Customer; onClose:
             <Check size={32} />
           </div>
           <div>
-            {settled.amountPaid > 0 && (
-              <p className="text-2xl font-bold">{formatMoney(settled.amountPaid, currency)}</p>
-            )}
-            {settled.amountPaid > 0 && (
-              <p className="text-sm text-[var(--color-text-dim)] mt-1">
-                Received via {settled.method === "upi" ? "UPI" : "Cash"}
+            {settled.amountCash + settled.amountUpi > 0 && (
+              <p className="text-2xl font-bold">
+                {formatMoney(settled.amountCash + settled.amountUpi, currency)}
               </p>
             )}
+            {settled.amountCash > 0 && settled.amountUpi > 0 ? (
+              <p className="text-sm text-[var(--color-text-dim)] mt-1">
+                {formatMoney(settled.amountCash, currency)} cash + {formatMoney(settled.amountUpi, currency)} account
+              </p>
+            ) : settled.amountUpi > 0 ? (
+              <p className="text-sm text-[var(--color-text-dim)] mt-1">Received via Account</p>
+            ) : settled.amountCash > 0 ? (
+              <p className="text-sm text-[var(--color-text-dim)] mt-1">Received via Cash</p>
+            ) : null}
             {settled.discount > 0 && (
               <p className="text-sm text-[var(--color-warning)] mt-2">
                 {formatMoney(settled.discount, currency)} written off
@@ -652,20 +629,31 @@ function SettleCreditModal({ customer, onClose }: { customer: Customer; onClose:
               // more than what's actually owed.
               const newDiscount = Math.min(Math.max(0, Number(raw) || 0), customer.creditBalance);
               const maxAmount = customer.creditBalance - newDiscount;
-              setAmountInput((prev) => ((Number(prev) || 0) > maxAmount ? maxAmount.toFixed(2) : prev));
+              setCashInput((prev) => ((Number(prev) || 0) > maxAmount ? maxAmount.toFixed(2) : prev));
             }}
             className="w-24 text-right bg-[var(--color-surface-2)] rounded-lg px-2 py-1.5 text-sm outline-none"
           />
         </div>
 
         <div className="flex items-center justify-between">
-          <span className="text-sm text-[var(--color-text-dim)]">Receiving now</span>
+          <span className="text-sm text-[var(--color-text-dim)]">Cash</span>
           <input
             type="number"
             min={0}
-            max={customer.creditBalance - discount}
-            value={amountInput}
-            onChange={(e) => setAmountInput(e.target.value)}
+            max={payableMax}
+            value={cashInput}
+            onChange={(e) => setCashInput(e.target.value)}
+            className="w-24 text-right bg-[var(--color-surface-2)] rounded-lg px-2 py-1.5 text-sm outline-none"
+          />
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-sm text-[var(--color-text-dim)]">Account (UPI)</span>
+          <input
+            type="number"
+            min={0}
+            max={Math.max(0, payableMax - cash)}
+            value={accountInput}
+            onChange={(e) => setAccountInput(e.target.value)}
             className="w-24 text-right bg-[var(--color-surface-2)] rounded-lg px-2 py-1.5 text-sm outline-none"
           />
         </div>
@@ -676,22 +664,13 @@ function SettleCreditModal({ customer, onClose }: { customer: Customer; onClose:
             : "This clears their credit completely."}
         </p>
 
-        <div className="grid grid-cols-2 gap-2">
-          <button
-            onClick={() => handleSettle("cash")}
-            disabled={!canSettle}
-            className="rounded-xl bg-[var(--color-success)]/15 text-[var(--color-success)] font-semibold py-3 text-sm disabled:opacity-40"
-          >
-            Cash
-          </button>
-          <button
-            onClick={() => handleSettle("upi")}
-            disabled={!canSettle}
-            className="rounded-xl bg-[var(--color-primary)]/15 text-[var(--color-primary)] font-semibold py-3 text-sm disabled:opacity-40"
-          >
-            UPI
-          </button>
-        </div>
+        <button
+          onClick={handleSettle}
+          disabled={!canSettle}
+          className="w-full rounded-xl bg-[var(--color-primary)] text-white font-semibold py-3 disabled:opacity-40"
+        >
+          Settle
+        </button>
       </div>
     </Modal>
   );

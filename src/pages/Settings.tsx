@@ -11,7 +11,7 @@ import { useCustomersStore } from "../store/useCustomersStore";
 import { useExpensesStore } from "../store/useExpensesStore";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { useAuthStore } from "../store/useAuthStore";
-import { formatMoney, formatDateTime } from "../lib/format";
+import { formatMoney, formatDateTime, IST_TIME_ZONE } from "../lib/format";
 import {
   LayoutGrid,
   Tag,
@@ -421,7 +421,6 @@ function MenuManagementModal({ onClose }: { onClose: () => void }) {
   const addItem = useMenuStore((s) => s.addItem);
   const updateItem = useMenuStore((s) => s.updateItem);
   const removeItem = useMenuStore((s) => s.removeItem);
-  const addCategory = useMenuStore((s) => s.addCategory);
   const currency = useSettingsStore((s) => s.currencySymbol);
 
   const [name, setName] = useState("");
@@ -429,7 +428,6 @@ function MenuManagementModal({ onClose }: { onClose: () => void }) {
   const [costPrice, setCostPrice] = useState("");
   const [stock, setStock] = useState("");
   const [categoryId, setCategoryId] = useState(categories[0]?.id ?? "");
-  const [newCategory, setNewCategory] = useState("");
 
   function handleAddItem() {
     if (!name.trim() || !categoryId) return;
@@ -448,11 +446,6 @@ function MenuManagementModal({ onClose }: { onClose: () => void }) {
     setStock("");
   }
 
-  function handleAddCategory() {
-    if (!newCategory.trim()) return;
-    addCategory(newCategory.trim());
-    setNewCategory("");
-  }
 
   return (
     <Modal title="Menu Management" onClose={onClose}>
@@ -572,25 +565,6 @@ function MenuManagementModal({ onClose }: { onClose: () => void }) {
         </button>
       </div>
 
-      <div className="mt-4 pt-4 border-t border-[var(--color-border)]">
-        <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-2">
-          ADD CATEGORY
-        </p>
-        <div className="flex gap-2">
-          <input
-            value={newCategory}
-            onChange={(e) => setNewCategory(e.target.value)}
-            placeholder="Category name"
-            className="flex-1 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] px-3 py-2.5 text-sm outline-none"
-          />
-          <button
-            onClick={handleAddCategory}
-            className="rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] px-4 text-sm font-medium"
-          >
-            Add
-          </button>
-        </div>
-      </div>
     </Modal>
   );
 }
@@ -899,11 +873,11 @@ function ExportExcelModal({ onClose }: { onClose: () => void }) {
         .map((b) => {
           const customer = customers.find((c) => c.id === b.customerId);
           return {
-            Date: new Date(b.createdAt).toLocaleDateString(),
+            Date: new Date(b.createdAt).toLocaleDateString([], { timeZone: IST_TIME_ZONE }),
             "Started At": b.tableId
-              ? new Date(b.createdAt - b.tableChargeMinutes * 60000).toLocaleTimeString()
+              ? new Date(b.createdAt - b.tableChargeMinutes * 60000).toLocaleTimeString([], { timeZone: IST_TIME_ZONE })
               : "",
-            "Ended At": new Date(b.createdAt).toLocaleTimeString(),
+            "Ended At": new Date(b.createdAt).toLocaleTimeString([], { timeZone: IST_TIME_ZONE }),
             Table: b.tableName ?? "",
             Game: b.gameName ?? "",
             Customer: customer && !customer.isWalkIn ? customer.name : "Walk-in",
@@ -916,6 +890,8 @@ function ExportExcelModal({ onClose }: { onClose: () => void }) {
             Status: b.status,
             "Payment Method": b.paymentMethod ?? "",
             "Amount Paid": b.amountPaid,
+            Cash: b.amountCash,
+            Account: b.amountUpi,
             "Amount on Credit": b.amountDue,
           };
         });
@@ -925,7 +901,7 @@ function ExportExcelModal({ onClose }: { onClose: () => void }) {
         .sort((a, b) => a.createdAt - b.createdAt)
         .flatMap((b) =>
           b.canteenItems.map((item) => ({
-            Date: new Date(b.createdAt).toLocaleDateString(),
+            Date: new Date(b.createdAt).toLocaleDateString([], { timeZone: IST_TIME_ZONE }),
             Table: b.tableName ?? "",
             Item: item.name,
             Qty: item.qty,
@@ -944,14 +920,14 @@ function ExportExcelModal({ onClose }: { onClose: () => void }) {
           Name: c.name,
           Phone: c.phone,
           "Credit Balance": c.creditBalance,
-          "Added On": new Date(c.createdAt).toLocaleDateString(),
+          "Added On": new Date(c.createdAt).toLocaleDateString([], { timeZone: IST_TIME_ZONE }),
         }));
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(customerRows), "Customers");
 
       const expenseRows = [...expenses]
         .sort((a, b) => a.createdAt - b.createdAt)
         .map((e) => ({
-          Date: new Date(e.createdAt).toLocaleDateString(),
+          Date: new Date(e.createdAt).toLocaleDateString([], { timeZone: IST_TIME_ZONE }),
           Category: e.category,
           Amount: e.amount,
           Note: e.note,
