@@ -7,7 +7,6 @@ import { Reports } from "./pages/Reports";
 import { Settings } from "./pages/Settings";
 import { useCreditReminderWatcher } from "./hooks/useCreditReminderWatcher";
 import { useAutoCreditWatcher } from "./hooks/useAutoCreditWatcher";
-import { LockScreen } from "./components/LockScreen";
 import { ThemeApplier } from "./components/ThemeApplier";
 
 export default function App() {
@@ -17,21 +16,19 @@ export default function App() {
   return (
     <>
       <ThemeApplier />
-      <LockScreen>
-        <BrowserRouter>
-          <Routes>
-            <Route path="/" element={<Home />} />
-            {/* Sessions was merged into Home — keep the old path working for
-                anyone with a bookmark or home-screen shortcut pointed at it. */}
-            <Route path="/sessions" element={<Home />} />
-            <Route path="/canteen" element={<Canteen />} />
-            <Route path="/customers" element={<Customers />} />
-            <Route path="/credits" element={<Credits />} />
-            <Route path="/reports" element={<Reports />} />
-            <Route path="/settings" element={<Settings />} />
-          </Routes>
-        </BrowserRouter>
-      </LockScreen>
+      <BrowserRouter>
+        <Routes>
+          <Route path="/" element={<Home />} />
+          {/* Sessions was merged into Home — keep the old path working for
+              anyone with a bookmark or home-screen shortcut pointed at it. */}
+          <Route path="/sessions" element={<Home />} />
+          <Route path="/canteen" element={<Canteen />} />
+          <Route path="/customers" element={<Customers />} />
+          <Route path="/credits" element={<Credits />} />
+          <Route path="/reports" element={<Reports />} />
+          <Route path="/settings" element={<Settings />} />
+        </Routes>
+      </BrowserRouter>
     </>
   );
 }

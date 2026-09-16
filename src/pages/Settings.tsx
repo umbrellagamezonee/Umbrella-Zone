@@ -10,7 +10,6 @@ import { useOrdersStore } from "../store/useOrdersStore";
 import { useCustomersStore } from "../store/useCustomersStore";
 import { useExpensesStore } from "../store/useExpensesStore";
 import { useSettingsStore } from "../store/useSettingsStore";
-import { useAuthStore } from "../store/useAuthStore";
 import { formatMoney, formatDateTime, IST_TIME_ZONE } from "../lib/format";
 import {
   LayoutGrid,
@@ -639,30 +638,17 @@ function MenuManagementModal({ onClose }: { onClose: () => void }) {
 
 function StoreSettingsModal({ onClose }: { onClose: () => void }) {
   const settings = useSettingsStore();
-  const lock = useAuthStore((s) => s.lock);
   const [storeName, setStoreName] = useState(settings.storeName);
   const [currencySymbol, setCurrencySymbol] = useState(settings.currencySymbol);
   const [upiId, setUpiId] = useState(settings.upiId);
-  const [appPassword, setAppPassword] = useState(settings.appPassword);
 
   function handleSave() {
     settings.update({
       storeName,
       currencySymbol,
       upiId: upiId.trim(),
-      appPassword: appPassword.trim() || settings.appPassword,
     });
     onClose();
-  }
-
-  function handleLockNow() {
-    settings.update({
-      storeName,
-      currencySymbol,
-      upiId: upiId.trim(),
-      appPassword: appPassword.trim() || settings.appPassword,
-    });
-    lock();
   }
 
   return (
@@ -702,32 +688,11 @@ function StoreSettingsModal({ onClose }: { onClose: () => void }) {
             Used to generate the payment QR shown at checkout.
           </p>
         </div>
-        <div>
-          <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-1.5">
-            APP PASSWORD
-          </p>
-          <input
-            value={appPassword}
-            onChange={(e) => setAppPassword(e.target.value)}
-            placeholder="Shared password for this device"
-            className="w-full rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] px-3 py-2.5 text-sm outline-none"
-          />
-          <p className="text-xs text-[var(--color-text-faint)] mt-1">
-            Whoever opens the app on this device needs this to get in. It's a simple deterrent,
-            not real security — change it from the default before going live.
-          </p>
-        </div>
         <button
           onClick={handleSave}
           className="w-full rounded-xl bg-[var(--color-primary)] text-white font-semibold py-3"
         >
           Save
-        </button>
-        <button
-          onClick={handleLockNow}
-          className="w-full rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] text-sm font-medium py-2.5"
-        >
-          Lock this device now
         </button>
       </div>
     </Modal>
