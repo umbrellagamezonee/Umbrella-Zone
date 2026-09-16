@@ -145,6 +145,7 @@ export interface StoreSettings {
   timezone: string;
   upiId: string;
   appPassword: string; // shared PIN gating access to the whole app on this device
+  adminPin: string; // second PIN gating Menu Management / Deleted Bills / Backup & Restore — staff who know appPassword can't reach these without it
   themeColor: string; // base hex color the primary/accent theme shades are derived from
   themeMode: "dark" | "light";
 }

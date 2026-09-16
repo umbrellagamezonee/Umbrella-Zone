@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type FormEvent, type ReactNode } from "react";
 import { AppShell } from "../components/layout/AppShell";
 import { Card } from "../components/ui/Card";
 import { Modal } from "../components/ui/Modal";
@@ -32,6 +32,7 @@ import {
   Sun,
   AlertTriangle,
   FileSpreadsheet,
+  Lock,
 } from "lucide-react";
 
 type Panel =
@@ -148,14 +149,81 @@ export function Settings() {
       {panel === "tables" && <TableManagementModal onClose={() => setPanel(null)} />}
       {panel === "rates" && <TableRatesModal onClose={() => setPanel(null)} />}
       {panel === "games" && <GamesRatesModal onClose={() => setPanel(null)} />}
-      {panel === "menu" && <MenuManagementModal onClose={() => setPanel(null)} />}
+      {panel === "menu" && (
+        <AdminGate title="Menu Management" onClose={() => setPanel(null)}>
+          <MenuManagementModal onClose={() => setPanel(null)} />
+        </AdminGate>
+      )}
       {panel === "store" && <StoreSettingsModal onClose={() => setPanel(null)} />}
-      {panel === "trash" && <DeletedBillsModal onClose={() => setPanel(null)} />}
-      {panel === "backup" && <BackupModal onClose={() => setPanel(null)} />}
+      {panel === "trash" && (
+        <AdminGate title="Deleted Bills" onClose={() => setPanel(null)}>
+          <DeletedBillsModal onClose={() => setPanel(null)} />
+        </AdminGate>
+      )}
+      {panel === "backup" && (
+        <AdminGate title="Backup & Restore" onClose={() => setPanel(null)}>
+          <BackupModal onClose={() => setPanel(null)} />
+        </AdminGate>
+      )}
       {panel === "export" && <ExportExcelModal onClose={() => setPanel(null)} />}
       {panel === "theme" && <ThemeModal onClose={() => setPanel(null)} />}
       {panel === "danger" && <ResetAllDataModal onClose={() => setPanel(null)} />}
     </AppShell>
+  );
+}
+
+// Second PIN check in front of Menu Management / Deleted Bills / Backup &
+// Restore — staff who know the shared app password (needed just to open the
+// app at all) can't touch these without also knowing this separate PIN, set
+// from within Backup & Restore itself. Doesn't persist "unlocked" — asks
+// fresh every time one of these is opened.
+function AdminGate({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+  const adminPin = useSettingsStore((s) => s.adminPin);
+  const [unlocked, setUnlocked] = useState(false);
+  const [input, setInput] = useState("");
+  const [error, setError] = useState("");
+
+  if (unlocked) return <>{children}</>;
+
+  function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (input === adminPin) {
+      setUnlocked(true);
+    } else {
+      setError("Wrong PIN");
+      setInput("");
+    }
+  }
+
+  return (
+    <Modal title={title} onClose={onClose}>
+      <form onSubmit={handleSubmit} className="space-y-4 py-2 text-center">
+        <div className="mx-auto h-14 w-14 rounded-2xl bg-[var(--color-primary)]/15 text-[var(--color-primary)] flex items-center justify-center">
+          <Lock size={24} />
+        </div>
+        <p className="text-sm text-[var(--color-text-dim)]">Admin PIN required to open this.</p>
+        <input
+          type="password"
+          inputMode="numeric"
+          autoFocus
+          value={input}
+          onChange={(e) => {
+            setInput(e.target.value);
+            setError("");
+          }}
+          placeholder="Admin PIN"
+          className="w-full rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] px-4 py-3 text-center text-lg tracking-widest outline-none focus:border-[var(--color-primary)]"
+        />
+        {error && <p className="text-xs text-[var(--color-danger)]">{error}</p>}
+        <button
+          type="submit"
+          disabled={!input}
+          className="w-full rounded-xl bg-[var(--color-primary)] disabled:opacity-40 text-white font-semibold py-3"
+        >
+          Unlock
+        </button>
+      </form>
+    </Modal>
   );
 }
 
@@ -745,9 +813,19 @@ function DeletedBillsModal({ onClose }: { onClose: () => void }) {
 }
 
 function BackupModal({ onClose }: { onClose: () => void }) {
+  const adminPin = useSettingsStore((s) => s.adminPin);
+  const updateSettings = useSettingsStore((s) => s.update);
+  const [pinInput, setPinInput] = useState(adminPin);
+  const [pinSaved, setPinSaved] = useState(false);
   const [pending, setPending] = useState<Record<string, string> | null>(null);
   const [error, setError] = useState("");
   const [restoring, setRestoring] = useState(false);
+
+  function handleSavePin() {
+    if (!pinInput.trim()) return;
+    updateSettings({ adminPin: pinInput.trim() });
+    setPinSaved(true);
+  }
 
   function handleExport() {
     const backup: Record<string, string> = {};
@@ -820,6 +898,36 @@ function BackupModal({ onClose }: { onClose: () => void }) {
             <input type="file" accept="application/json" className="hidden" onChange={handleFilePicked} />
           </label>
           {error && <p className="text-xs text-[var(--color-danger)] mt-2">{error}</p>}
+        </div>
+
+        <div className="pt-4 border-t border-[var(--color-border)]">
+          <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-1.5">
+            ADMIN PIN
+          </p>
+          <div className="flex gap-2">
+            <input
+              value={pinInput}
+              onChange={(e) => {
+                setPinInput(e.target.value);
+                setPinSaved(false);
+              }}
+              inputMode="numeric"
+              placeholder="Admin PIN"
+              className="flex-1 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] px-3 py-2.5 text-sm outline-none"
+            />
+            <button
+              onClick={handleSavePin}
+              disabled={!pinInput.trim()}
+              className="rounded-xl bg-[var(--color-primary)] disabled:opacity-40 text-white px-4 text-sm font-medium"
+            >
+              Save
+            </button>
+          </div>
+          <p className="text-xs text-[var(--color-text-faint)] mt-1">
+            Needed to open Menu Management, Deleted Bills, and Backup & Restore — separate from the
+            app password, so staff who unlock the app can't touch these. Don't forget it.
+          </p>
+          {pinSaved && <p className="text-xs text-[var(--color-success)] mt-1">Saved.</p>}
         </div>
       </div>
 

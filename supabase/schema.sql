@@ -130,6 +130,7 @@ create table store_settings (
   timezone text not null default 'Asia/Kolkata',
   upi_id text not null default '',
   app_password text not null default '0000',
+  admin_pin text not null default '0000',
   theme_color text not null default '#8b5cf6',
   theme_mode text not null default 'dark',
   constraint single_row check (id = 1)
