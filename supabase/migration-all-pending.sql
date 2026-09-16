@@ -10,4 +10,4 @@ alter table bills add column if not exists amount_cash numeric not null default 
 alter table bills add column if not exists amount_upi numeric not null default 0;
 
 -- Second admin PIN (Menu Management / Deleted Bills / Backup & Restore)
-alter table store_settings add column if not exists admin_pin text not null default '0000';
+alter table store_settings add column if not exists admin_pin text not null default '0310';

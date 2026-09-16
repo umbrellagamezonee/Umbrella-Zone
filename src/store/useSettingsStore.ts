@@ -18,6 +18,10 @@ interface SettingsRow {
   theme_mode: string;
 }
 
+// Falls back to this when a fetch's row doesn't have the admin_pin column
+// yet (migration not run) — not just an arbitrary default.
+const DEFAULT_ADMIN_PIN = "0310";
+
 const TABLE = "store_settings";
 const fromRow = (row: SettingsRow): StoreSettings => ({
   storeName: row.store_name,
@@ -25,7 +29,7 @@ const fromRow = (row: SettingsRow): StoreSettings => ({
   timezone: row.timezone,
   upiId: row.upi_id,
   appPassword: row.app_password,
-  adminPin: row.admin_pin ?? "0000",
+  adminPin: row.admin_pin ?? DEFAULT_ADMIN_PIN,
   themeColor: row.theme_color,
   themeMode: row.theme_mode as StoreSettings["themeMode"],
 });
@@ -53,7 +57,7 @@ export const useSettingsStore = create<SettingsState>()(
       timezone: "Asia/Kolkata",
       upiId: "",
       appPassword: "0000",
-      adminPin: "0000",
+      adminPin: DEFAULT_ADMIN_PIN,
       themeColor: "#8b5cf6",
       themeMode: "dark",
       update: (patch) => {
@@ -67,28 +71,30 @@ export const useSettingsStore = create<SettingsState>()(
     }),
     {
       name: "cuebill-settings",
-      version: 5,
-      migrate: (persisted) => ({
-        upiId: "",
-        appPassword: "0000",
-        adminPin: "0000",
-        themeColor: "#8b5cf6",
-        themeMode: "dark",
-        ...(persisted as object),
-      }),
+      version: 6,
+      migrate: (persisted, version) => {
+        const state = { upiId: "", appPassword: "0000", themeColor: "#8b5cf6", themeMode: "dark", ...(persisted as object) } as StoreSettings;
+        // Anyone still on the old hardcoded "0000" default (persisted before
+        // this version, or never explicitly changed) picks up the new one —
+        // an actual custom PIN someone already set is left alone.
+        if (version < 6 && (!("adminPin" in state) || state.adminPin === "0000")) {
+          state.adminPin = DEFAULT_ADMIN_PIN;
+        }
+        return state;
+      },
     }
   )
 );
 
 // adminPin is only readable from the cloud once
-// supabase/migration-admin-pin.sql has been run — until then a fetch always
-// comes back with the column missing, and fromRow's "0000" fallback would
-// silently reset a PIN this device already changed. Keep the local value
-// instead of letting a stale/columnless fetch overwrite it.
-function keepLocalAdminPin(incoming: StoreSettings, local: StoreSettings): StoreSettings {
-  return incoming.adminPin === "0000" && local.adminPin !== "0000"
-    ? { ...incoming, adminPin: local.adminPin }
-    : incoming;
+// supabase/migration-admin-pin.sql has been run — until then a fetch's row
+// simply doesn't have the column (not null — absent), and fromRow's default
+// fallback would silently reset a PIN this device already changed. Keep the
+// local value in that case instead of letting a stale/columnless fetch
+// overwrite it; this checks the raw row, not the resolved value, so it
+// isn't tied to whatever the current default PIN happens to be.
+function keepLocalAdminPin(row: SettingsRow, incoming: StoreSettings, local: StoreSettings): StoreSettings {
+  return row.admin_pin === undefined ? { ...incoming, adminPin: local.adminPin } : incoming;
 }
 
 // Single-row table (id 1) — a bit of custom wiring since the shared
@@ -105,7 +111,8 @@ if (supabase) {
         return;
       }
       if (data) {
-        useSettingsStore.setState(keepLocalAdminPin(fromRow(data as SettingsRow), useSettingsStore.getState()));
+        const row = data as SettingsRow;
+        useSettingsStore.setState(keepLocalAdminPin(row, fromRow(row), useSettingsStore.getState()));
       } else {
         // Nothing in the cloud yet — this device's settings become the seed.
         const { update: _update, ...rest } = useSettingsStore.getState();
@@ -118,9 +125,8 @@ if (supabase) {
     .channel(`${TABLE}-sync`)
     .on("postgres_changes", { event: "*", schema: "public", table: TABLE }, (payload) => {
       if (payload.eventType === "DELETE") return; // the single row never gets deleted
-      useSettingsStore.setState(
-        keepLocalAdminPin(fromRow(payload.new as SettingsRow), useSettingsStore.getState())
-      );
+      const row = payload.new as SettingsRow;
+      useSettingsStore.setState(keepLocalAdminPin(row, fromRow(row), useSettingsStore.getState()));
     })
     .subscribe();
 }
