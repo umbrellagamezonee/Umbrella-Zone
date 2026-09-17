@@ -574,6 +574,20 @@ function MenuManagementModal({ onClose }: { onClose: () => void }) {
                 </button>
               </div>
               <div className="flex items-center justify-between mt-2 pt-2 border-t border-[var(--color-border)]">
+                <span className="text-xs text-[var(--color-text-dim)]">Category</span>
+                <select
+                  value={item.categoryId}
+                  onChange={(e) => updateItem(item.id, { categoryId: e.target.value })}
+                  className="bg-[var(--color-surface-2)] rounded-lg px-2 py-1 text-sm outline-none"
+                >
+                  {categories.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex items-center justify-between mt-1.5">
                 <span className="text-xs text-[var(--color-text-dim)]">Cost price</span>
                 <input
                   type="number"
