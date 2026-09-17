@@ -50,6 +50,9 @@ interface TableRow {
   accumulated_ms: number;
   planned_duration_ms: number | null;
   note: string;
+  // Optional: only present once supabase/migration-table-order.sql has been
+  // run. Missing (not just null) on any row fetched before that.
+  sort_order?: number;
 }
 
 const TABLE = "billing_tables";
@@ -68,10 +71,10 @@ const fromRow = (row: TableRow): BillingTable => ({
   accumulatedMs: Number(row.accumulated_ms),
   plannedDurationMs: row.planned_duration_ms != null ? Number(row.planned_duration_ms) : null,
   note: row.note ?? "",
-  // Display order is a per-device preference, not stored in the cloud — a
-  // freshly-synced table drops to the bottom until this device places it,
-  // and the real value is merged back in by the sync handlers below.
-  sortOrder: Number.MAX_SAFE_INTEGER,
+  // Falls back to this only when the fetch's row doesn't have sort_order
+  // yet (migration not run) — an extreme value so an unplaced table sorts
+  // to the very bottom instead of jumbling in among placed ones.
+  sortOrder: row.sort_order ?? Number.MAX_SAFE_INTEGER,
 });
 const toRow = (t: BillingTable): TableRow => ({
   id: t.id,
@@ -88,6 +91,7 @@ const toRow = (t: BillingTable): TableRow => ({
   accumulated_ms: t.accumulatedMs,
   planned_duration_ms: t.plannedDurationMs,
   note: t.note,
+  sort_order: t.sortOrder,
 });
 
 type NewTableInput = Pick<BillingTable, "name" | "kind" | "ratePerHour" | "note"> &
@@ -181,7 +185,9 @@ export const useTablesStore = create<TablesState>()(
         set((state) => ({
           tables: state.tables.map((t) => ({ ...t, sortOrder: orderMap.get(t.id) ?? t.sortOrder })),
         }));
-        // Local-only: display order isn't pushed to the cloud.
+        // Every table got renumbered above, not just the swapped pair —
+        // push all of them so this order shows up the same on every device.
+        for (const t of get().tables) pushTable(t.id);
       },
 
       removeTable: (id) => {
@@ -304,9 +310,18 @@ export const useTablesStore = create<TablesState>()(
   )
 );
 
-// sortOrder never comes from the cloud, so every sync handler keeps whatever
-// order this device already had for a table it knows, and drops a genuinely
-// new one at the bottom.
+// Merge safety for the window before supabase/migration-table-order.sql has
+// been run: fromRow's fallback resolves a columnless fetch's sortOrder to
+// Number.MAX_SAFE_INTEGER — keep whatever order this device already had for
+// that table instead of losing it to a fetch that can't carry the real
+// value yet. Once the migration lands, real values flow through normally
+// and this stops doing anything.
+function keepLocalSortOrder(incoming: BillingTable, local: BillingTable | undefined): BillingTable {
+  return incoming.sortOrder === Number.MAX_SAFE_INTEGER && local
+    ? { ...incoming, sortOrder: local.sortOrder }
+    : incoming;
+}
+
 setupSync<TableRow, BillingTable>(
   TABLE,
   fromRow,
@@ -314,20 +329,25 @@ setupSync<TableRow, BillingTable>(
   () => useTablesStore.getState().tables,
   (tables) =>
     useTablesStore.setState((state) => {
-      const localOrder = new Map(state.tables.map((t) => [t.id, t.sortOrder]));
+      const byId = new Map(state.tables.map((t) => [t.id, t]));
       const maxLocal = state.tables.reduce((m, t) => Math.max(m, t.sortOrder), -1);
       return {
-        tables: tables.map((t, i) => ({
-          ...t,
-          sortOrder: localOrder.get(t.id) ?? maxLocal + 1 + i,
-        })),
+        tables: tables.map((t, i) => {
+          const merged = keepLocalSortOrder(t, byId.get(t.id));
+          // Neither this device nor the cloud has a real order for it — new
+          // table, seed it in at the end instead of leaving the sentinel.
+          return merged.sortOrder === Number.MAX_SAFE_INTEGER
+            ? { ...merged, sortOrder: maxLocal + 1 + i }
+            : merged;
+        }),
       };
     }),
   (table) =>
     useTablesStore.setState((state) => {
       const existing = state.tables.find((t) => t.id === table.id);
       const maxLocal = state.tables.reduce((m, t) => Math.max(m, t.sortOrder), -1);
-      const merged = { ...table, sortOrder: existing ? existing.sortOrder : maxLocal + 1 };
+      let merged = keepLocalSortOrder(table, existing);
+      if (merged.sortOrder === Number.MAX_SAFE_INTEGER) merged = { ...merged, sortOrder: maxLocal + 1 };
       return {
         tables: existing
           ? state.tables.map((t) => (t.id === table.id ? merged : t))

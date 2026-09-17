@@ -11,3 +11,7 @@ alter table bills add column if not exists amount_upi numeric not null default 0
 
 -- Second admin PIN (Menu Management / Deleted Bills / Backup & Restore)
 alter table store_settings add column if not exists admin_pin text not null default '0310';
+
+-- Table display order synced across devices (re-arrange once after this
+-- runs, from whichever device already has the right order, to seed it)
+alter table billing_tables add column if not exists sort_order int not null default 0;

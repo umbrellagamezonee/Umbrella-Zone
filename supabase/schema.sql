@@ -37,6 +37,7 @@ create table billing_tables (
   accumulated_ms bigint not null default 0,
   planned_duration_ms bigint,
   note text not null default '',
+  sort_order int not null default 0,
   updated_at timestamptz not null default now()
 );
 

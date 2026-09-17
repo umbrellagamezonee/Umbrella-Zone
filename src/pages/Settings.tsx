@@ -494,7 +494,12 @@ function MenuManagementModal({ onClose }: { onClose: () => void }) {
   const [price, setPrice] = useState("");
   const [costPrice, setCostPrice] = useState("");
   const [stock, setStock] = useState("");
-  const [categoryId, setCategoryId] = useState(categories[0]?.id ?? "");
+  const [categoryId, setCategoryId] = useState(
+    categories.find((c) => c.name === "Kitchen")?.id ?? categories[0]?.id ?? ""
+  );
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState<{ added: number; skipped: number } | null>(null);
+  const [importError, setImportError] = useState("");
 
   function handleAddItem() {
     if (!name.trim() || !categoryId) return;
@@ -511,6 +516,76 @@ function MenuManagementModal({ onClose }: { onClose: () => void }) {
     setPrice("");
     setCostPrice("");
     setStock("");
+  }
+
+  // Looks up a value by trying several possible header spellings — sheets
+  // people already have rarely use this app's exact field names.
+  function pickColumn(row: Record<string, unknown>, keys: string[]): string | undefined {
+    const normalized = new Map(Object.keys(row).map((k) => [k.trim().toLowerCase(), k]));
+    for (const key of keys) {
+      const realKey = normalized.get(key);
+      if (realKey !== undefined && row[realKey] !== undefined && row[realKey] !== "") {
+        return String(row[realKey]);
+      }
+    }
+    return undefined;
+  }
+
+  function categoryIdForName(rawCategory: string | undefined): string {
+    if (rawCategory) {
+      const match = categories.find((c) => c.name.toLowerCase() === rawCategory.trim().toLowerCase());
+      if (match) return match.id;
+    }
+    // No category given (or it didn't match one of the three) — Kitchen,
+    // not just whichever category happens to be first in the array (cloud
+    // fetch order isn't guaranteed to put Kitchen first).
+    return categories.find((c) => c.name === "Kitchen")?.id ?? categories[0]?.id ?? "";
+  }
+
+  async function handleImportFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow picking the same file again later
+    if (!file) return;
+    setImportError("");
+    setImportResult(null);
+    setImporting(true);
+    try {
+      const XLSX = await import("xlsx");
+      const buffer = await file.arrayBuffer();
+      const workbook = XLSX.read(buffer, { type: "array" });
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
+
+      let added = 0;
+      let skipped = 0;
+      for (const row of rows) {
+        const rawName = pickColumn(row, ["name", "item", "item name", "product", "item name/naam"]);
+        const rawPrice = pickColumn(row, ["price", "selling price", "rate", "mrp"]);
+        const rawStock = pickColumn(row, ["stock", "qty", "quantity", "stock qty", "in stock"]);
+        const rawCost = pickColumn(row, ["cost", "cost price", "buy price", "purchase price"]);
+        const rawCategory = pickColumn(row, ["category"]);
+
+        if (!rawName?.trim()) {
+          skipped++;
+          continue;
+        }
+        addItem({
+          name: rawName.trim(),
+          price: Math.max(0, Number(rawPrice) || 0),
+          costPrice: rawCost === undefined ? null : Math.max(0, Number(rawCost) || 0),
+          categoryId: categoryIdForName(rawCategory),
+          inStock: true,
+          stockQty: rawStock === undefined ? null : Math.max(0, Number(rawStock) || 0),
+          lowStockThreshold: 5,
+        });
+        added++;
+      }
+      setImportResult({ added, skipped });
+    } catch {
+      setImportError("Ye file padh nahi payi — Excel (.xlsx) ya CSV file try karo, pehli row mein column names ke saath (Name, Price, Stock).");
+    } finally {
+      setImporting(false);
+    }
   }
 
 
@@ -575,6 +650,34 @@ function MenuManagementModal({ onClose }: { onClose: () => void }) {
             </Card>
           );
         })}
+      </div>
+
+      <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-2">
+        IMPORT FROM EXCEL
+      </p>
+      <div className="mb-4">
+        <label className="w-full flex items-center justify-center gap-2 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] font-medium py-2.5 cursor-pointer">
+          <FileSpreadsheet size={16} />
+          {importing ? "Importing…" : "Choose Excel/CSV File"}
+          <input
+            type="file"
+            accept=".xlsx,.xls,.csv"
+            className="hidden"
+            disabled={importing}
+            onChange={handleImportFile}
+          />
+        </label>
+        <p className="text-xs text-[var(--color-text-faint)] mt-1">
+          Pehli row mein column names hone chahiye: Name, Price, Stock — Cost Price aur Category
+          (Kitchen/Cigarettes/Fridge) optional hain, na di toh Kitchen mein chala jayega.
+        </p>
+        {importResult && (
+          <p className="text-xs text-[var(--color-success)] mt-1">
+            {importResult.added} item{importResult.added === 1 ? "" : "s"} add hue
+            {importResult.skipped > 0 ? `, ${importResult.skipped} skip hue (naam missing)` : ""}.
+          </p>
+        )}
+        {importError && <p className="text-xs text-[var(--color-danger)] mt-1">{importError}</p>}
       </div>
 
       <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-2">ADD ITEM</p>

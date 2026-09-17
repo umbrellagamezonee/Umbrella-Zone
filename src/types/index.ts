@@ -15,7 +15,7 @@ export interface BillingTable {
   accumulatedMs: number; // time banked from previous run/pause cycles this session
   plannedDurationMs: number | null; // snapshot of defaultSessionMinutes taken at session start
   note: string;
-  sortOrder: number; // manual display order for Home + Table Management; per-device, not cloud-synced
+  sortOrder: number; // manual display order for Home + Table Management, synced across devices
 }
 
 export interface Game {
