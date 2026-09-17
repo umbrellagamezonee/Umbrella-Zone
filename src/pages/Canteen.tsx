@@ -318,9 +318,10 @@ export function Canteen() {
 
       <button
         onClick={() => setShowNew(true)}
-        className="fixed bottom-24 right-4 h-14 w-14 rounded-full bg-[var(--color-primary)] text-white flex items-center justify-center shadow-lg shadow-black/40"
+        aria-label="New order"
+        className="fixed bottom-24 right-4 h-14 w-14 rounded-full bg-gradient-to-br from-[var(--color-primary)] to-[var(--color-primary-dark)] text-white flex items-center justify-center shadow-lg shadow-[var(--color-primary)]/50 ring-1 ring-white/15 transition-transform active:scale-90"
       >
-        <Plus size={24} />
+        <Plus size={26} strokeWidth={2.5} />
       </button>
 
       {showNew && <NewOrderModal onClose={() => setShowNew(false)} />}
