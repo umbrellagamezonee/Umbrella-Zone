@@ -8,6 +8,7 @@ import { CheckoutModal } from "../components/Checkout";
 import { SplitCheckout } from "../components/SplitCheckout";
 import { BillDetailModal } from "../components/BillDetailModal";
 import { InstallBanner } from "../components/InstallBanner";
+import { AdminPinGate } from "../components/AdminPinGate";
 import { useTablesStore } from "../store/useTablesStore";
 import { useCustomersStore } from "../store/useCustomersStore";
 import { useGamesStore } from "../store/useGamesStore";
@@ -36,6 +37,7 @@ export function Home() {
   const [selectedDate, setSelectedDate] = useState(() => toDateInputValue(Date.now()));
   const [resumeBill, setResumeBill] = useState<Bill | null>(null);
   const [detailBill, setDetailBill] = useState<Bill | null>(null);
+  const [confirmDeleteBillId, setConfirmDeleteBillId] = useState<string | null>(null);
 
   const startTable = tables.find((t) => t.id === startTableId) || null;
   const detailTable = tables.find((t) => t.id === detailTableId) || null;
@@ -226,7 +228,7 @@ export function Home() {
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
-                          softDeleteBill(bill.id);
+                          setConfirmDeleteBillId(bill.id);
                         }}
                         title="Delete this session (recoverable from Settings → Deleted Bills)"
                         className="h-8 w-8 flex items-center justify-center rounded-full bg-[var(--color-danger)]/10 text-[var(--color-danger)] shrink-0"
@@ -258,6 +260,14 @@ export function Home() {
         ))}
 
       {detailBill && <BillDetailModal bill={detailBill} onClose={() => setDetailBill(null)} />}
+
+      {confirmDeleteBillId && (
+        <AdminPinGate
+          title="Delete session"
+          onClose={() => setConfirmDeleteBillId(null)}
+          onConfirm={() => softDeleteBill(confirmDeleteBillId)}
+        />
+      )}
     </AppShell>
   );
 }
