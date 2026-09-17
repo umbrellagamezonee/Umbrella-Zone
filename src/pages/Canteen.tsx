@@ -148,12 +148,20 @@ export function Canteen() {
         )}
       </div>
 
-      <button
-        onClick={() => setShowNew(true)}
-        className="flex items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 text-sm w-fit"
-      >
-        <Scissors size={14} /> Menu
-      </button>
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => setShowNew(true)}
+          className="flex items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 text-sm"
+        >
+          <Scissors size={14} /> Menu
+        </button>
+        <button
+          onClick={() => setShowNew(true)}
+          className="flex items-center gap-1.5 rounded-full bg-gradient-to-br from-[var(--color-primary)] to-[var(--color-primary-dark)] text-white px-3 py-1.5 text-sm font-medium shadow-sm shadow-[var(--color-primary)]/40 transition-transform active:scale-95"
+        >
+          <Plus size={14} strokeWidth={2.5} /> Order
+        </button>
+      </div>
 
       <div className="relative">
         <Search
@@ -195,7 +203,7 @@ export function Canteen() {
 
       {filtered.length === 0 ? (
         <p className="text-center text-sm text-[var(--color-text-faint)] py-16">
-          {isToday ? "No orders yet today. Tap + to start." : "No orders on this day."}
+          {isToday ? "No orders yet today. Tap + Order to start." : "No orders on this day."}
         </p>
       ) : (
         <div className="space-y-3">
@@ -315,14 +323,6 @@ export function Canteen() {
           })}
         </div>
       )}
-
-      <button
-        onClick={() => setShowNew(true)}
-        aria-label="New order"
-        className="fixed bottom-24 right-4 h-14 w-14 rounded-full bg-gradient-to-br from-[var(--color-primary)] to-[var(--color-primary-dark)] text-white flex items-center justify-center shadow-lg shadow-[var(--color-primary)]/50 ring-1 ring-white/15 transition-transform active:scale-90"
-      >
-        <Plus size={26} strokeWidth={2.5} />
-      </button>
 
       {showNew && <NewOrderModal onClose={() => setShowNew(false)} />}
       {editOrder && <OrderEditModal order={editOrder} onClose={() => setEditOrder(null)} />}
