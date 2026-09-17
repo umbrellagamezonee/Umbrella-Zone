@@ -10,7 +10,7 @@
  *     then click ▶ Run once. Google will ask you to authorize — approve it
  *     (it needs permission to edit this sheet and to make web requests).
  *  6. Done. On the 1st of every month at 6 AM IST, a new tab appears in
- *     this sheet with last month's paid bills.
+ *     this sheet with last month's paid bills, totalled at the bottom.
  *
  * To test right now without waiting for the 1st: run `generateMonthlyReport`
  * the same way (pick it in the dropdown, click ▶ Run).
@@ -55,19 +55,27 @@ function generateMonthlyReport() {
   const rows = [
     ["Date", "Time", "Table / Place", "Customer", "Total", "Amount Paid", "On Credit", "Payment Method"],
   ];
+  let sumTotal = 0, sumPaid = 0, sumCredit = 0;
   bills.forEach(function (b) {
     const ist = new Date(new Date(b.created_at).getTime() + IST_OFFSET_MS);
+    const total = Number(b.total);
+    const paid = Number(b.amount_paid);
+    const credit = Number(b.amount_due);
+    sumTotal += total;
+    sumPaid += paid;
+    sumCredit += credit;
     rows.push([
       Utilities.formatDate(ist, "UTC", "dd MMM yyyy"),
       Utilities.formatDate(ist, "UTC", "hh:mm a"),
       b.table_name || "Canteen",
       nameById[b.customer_id] || "Walk-in",
-      Number(b.total),
-      Number(b.amount_paid),
-      Number(b.amount_due),
+      total,
+      paid,
+      credit,
       b.payment_method || "",
     ]);
   });
+  rows.push(["", "", "", "TOTAL", sumTotal, sumPaid, sumCredit, ""]);
 
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   let sheetName = monthLabel;
@@ -76,6 +84,7 @@ function generateMonthlyReport() {
   sheet = ss.insertSheet(sheetName);
   sheet.getRange(1, 1, rows.length, rows[0].length).setValues(rows);
   sheet.getRange(1, 1, 1, rows[0].length).setFontWeight("bold");
+  sheet.getRange(rows.length, 1, 1, rows[0].length).setFontWeight("bold"); // TOTAL row
   sheet.autoResizeColumns(1, rows[0].length);
 }
 
