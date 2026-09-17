@@ -11,7 +11,7 @@ import { sendCreditReminder } from "../lib/reminderApi";
 import { customerLabel } from "../lib/customerName";
 import { CustomerDetailModal, SettleCreditModal } from "./Customers";
 import type { Customer } from "../types";
-import { BellRing, Wallet } from "lucide-react";
+import { BellRing, Wallet, Search } from "lucide-react";
 
 // Everyone who owes money and the tools to chase it down — kept separate
 // from the plain Customers directory so day-to-day lookups aren't buried
@@ -34,6 +34,7 @@ export function Credits() {
   const [notice, setNotice] = useState<{ id: string; ok: boolean } | null>(null);
   const [settleCustomer, setSettleCustomer] = useState<Customer | null>(null);
   const [detailCustomer, setDetailCustomer] = useState<Customer | null>(null);
+  const [search, setSearch] = useState("");
 
   const pendingTotalFor = (customerId: string) =>
     customerPendingOrders(orders, bills, customerId).reduce((sum, o) => sum + orderTotal(o), 0);
@@ -80,6 +81,10 @@ export function Credits() {
     .filter(({ customer: c, pendingTotal }) => c.creditBalance > 0 || pendingTotal > 0)
     .sort((a, b) => (b.customer.creditBalance + b.pendingTotal) - (a.customer.creditBalance + a.pendingTotal));
   const totalDue = dueCustomers.reduce((sum, { customer: c, pendingTotal }) => sum + c.creditBalance + pendingTotal, 0);
+  const visibleDueCustomers = dueCustomers.filter(
+    ({ customer: c }) =>
+      c.name.toLowerCase().includes(search.toLowerCase()) || c.phone.includes(search)
+  );
 
   async function handleRemindNow(id: string) {
     const c = customers.find((x) => x.id === id);
@@ -109,13 +114,32 @@ export function Credits() {
         </p>
       </div>
 
+      {dueCustomers.length > 0 && (
+        <div className="relative">
+          <Search
+            size={16}
+            className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-text-faint)]"
+          />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search name, phone"
+            className="w-full rounded-xl bg-[var(--color-surface)] border border-[var(--color-border)] pl-9 pr-3 py-2.5 text-sm outline-none focus:border-[var(--color-primary)]"
+          />
+        </div>
+      )}
+
       {dueCustomers.length === 0 ? (
         <p className="text-center text-sm text-[var(--color-text-faint)] py-16">
           Nobody's on credit right now.
         </p>
+      ) : visibleDueCustomers.length === 0 ? (
+        <p className="text-center text-sm text-[var(--color-text-faint)] py-16">
+          No match for "{search}".
+        </p>
       ) : (
         <div className="space-y-2">
-          {dueCustomers.map(({ customer: c, pendingTotal }) => (
+          {visibleDueCustomers.map(({ customer: c, pendingTotal }) => (
             <Card
               key={c.id}
               onClick={() => setDetailCustomer(c)}
