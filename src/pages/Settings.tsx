@@ -1,7 +1,8 @@
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useState } from "react";
 import { AppShell } from "../components/layout/AppShell";
 import { Card } from "../components/ui/Card";
 import { Modal } from "../components/ui/Modal";
+import { AdminPinGate } from "../components/AdminPinGate";
 import { useTablesStore, orderedTables } from "../store/useTablesStore";
 import { useMenuStore } from "../store/useMenuStore";
 import { useGamesStore } from "../store/useGamesStore";
@@ -31,7 +32,6 @@ import {
   Sun,
   AlertTriangle,
   FileSpreadsheet,
-  Lock,
 } from "lucide-react";
 
 type Panel =
@@ -149,84 +149,29 @@ export function Settings() {
       {panel === "rates" && <TableRatesModal onClose={() => setPanel(null)} />}
       {panel === "games" && <GamesRatesModal onClose={() => setPanel(null)} />}
       {panel === "menu" && (
-        <AdminGate title="Menu Management" onClose={() => setPanel(null)}>
+        <AdminPinGate title="Menu Management" onClose={() => setPanel(null)}>
           <MenuManagementModal onClose={() => setPanel(null)} />
-        </AdminGate>
+        </AdminPinGate>
       )}
       {panel === "store" && <StoreSettingsModal onClose={() => setPanel(null)} />}
       {panel === "trash" && (
-        <AdminGate title="Deleted Bills" onClose={() => setPanel(null)}>
+        <AdminPinGate title="Deleted Bills" onClose={() => setPanel(null)}>
           <DeletedBillsModal onClose={() => setPanel(null)} />
-        </AdminGate>
+        </AdminPinGate>
       )}
       {panel === "backup" && (
-        <AdminGate title="Backup & Restore" onClose={() => setPanel(null)}>
+        <AdminPinGate title="Backup & Restore" onClose={() => setPanel(null)}>
           <BackupModal onClose={() => setPanel(null)} />
-        </AdminGate>
+        </AdminPinGate>
       )}
       {panel === "export" && <ExportExcelModal onClose={() => setPanel(null)} />}
       {panel === "theme" && <ThemeModal onClose={() => setPanel(null)} />}
       {panel === "danger" && (
-        <AdminGate title="Reset Data" onClose={() => setPanel(null)}>
+        <AdminPinGate title="Reset Data" onClose={() => setPanel(null)}>
           <ResetAllDataModal onClose={() => setPanel(null)} />
-        </AdminGate>
+        </AdminPinGate>
       )}
     </AppShell>
-  );
-}
-
-// Second PIN check in front of Menu Management / Deleted Bills / Backup &
-// Restore / Reset Data — staff who know the shared app password (needed
-// just to open the app at all) can't touch these without also knowing this
-// separate PIN, set from within Backup & Restore itself. Doesn't persist
-// "unlocked" — asks fresh every time one of these is opened.
-function AdminGate({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
-  const adminPin = useSettingsStore((s) => s.adminPin);
-  const [unlocked, setUnlocked] = useState(false);
-  const [input, setInput] = useState("");
-  const [error, setError] = useState("");
-
-  if (unlocked) return <>{children}</>;
-
-  function handleSubmit(e: FormEvent) {
-    e.preventDefault();
-    if (input === adminPin) {
-      setUnlocked(true);
-    } else {
-      setError("Wrong PIN");
-      setInput("");
-    }
-  }
-
-  return (
-    <Modal title={title} onClose={onClose}>
-      <form onSubmit={handleSubmit} className="space-y-4 py-2 text-center">
-        <div className="mx-auto h-14 w-14 rounded-2xl bg-[var(--color-primary)]/15 text-[var(--color-primary)] flex items-center justify-center">
-          <Lock size={24} />
-        </div>
-        <p className="text-sm text-[var(--color-text-dim)]">Admin PIN required to open this.</p>
-        <input
-          type="password"
-          inputMode="numeric"
-          autoFocus
-          value={input}
-          onChange={(e) => {
-            setInput(e.target.value);
-            setError("");
-          }}
-          placeholder="Admin PIN"
-          className="w-full rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] px-4 py-3 text-center text-lg tracking-widest outline-none focus:border-[var(--color-primary)]"
-        />
-        {error && <p className="text-xs text-[var(--color-danger)]">{error}</p>}
-        <button
-          type="submit"
-          disabled={!input}
-          className="w-full rounded-xl bg-[var(--color-primary)] disabled:opacity-40 text-white font-semibold py-3"
-        >
-          Unlock
-        </button>
-      </form>
-    </Modal>
   );
 }
 
@@ -235,6 +180,7 @@ function TableManagementModal({ onClose }: { onClose: () => void }) {
   const addTable = useTablesStore((s) => s.addTable);
   const removeTable = useTablesStore((s) => s.removeTable);
   const moveTable = useTablesStore((s) => s.moveTable);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [kind, setKind] = useState("PlayStation");
   const [rate, setRate] = useState("60");
@@ -277,7 +223,7 @@ function TableManagementModal({ onClose }: { onClose: () => void }) {
                 <ChevronDown size={15} />
               </button>
               <button
-                onClick={() => removeTable(t.id)}
+                onClick={() => setConfirmDeleteId(t.id)}
                 disabled={t.status !== "available"}
                 aria-label="Delete table"
                 className="h-8 w-8 flex items-center justify-center rounded-full bg-[var(--color-danger)]/10 text-[var(--color-danger)] disabled:opacity-30"
@@ -325,6 +271,14 @@ function TableManagementModal({ onClose }: { onClose: () => void }) {
           <Plus size={16} /> Add table
         </button>
       </div>
+
+      {confirmDeleteId && (
+        <AdminPinGate
+          title="Delete table"
+          onClose={() => setConfirmDeleteId(null)}
+          onConfirm={() => removeTable(confirmDeleteId)}
+        />
+      )}
     </Modal>
   );
 }

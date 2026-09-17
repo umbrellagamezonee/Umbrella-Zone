@@ -4,6 +4,7 @@ import { Card } from "../components/ui/Card";
 import { Modal } from "../components/ui/Modal";
 import { CheckoutModal } from "../components/Checkout";
 import { BillDetailModal } from "../components/BillDetailModal";
+import { AdminPinGate } from "../components/AdminPinGate";
 import { CustomerNameInput } from "../components/ui/CustomerNameInput";
 import { useOrdersStore } from "../store/useOrdersStore";
 import { useMenuStore } from "../store/useMenuStore";
@@ -44,6 +45,7 @@ export function Canteen() {
   const [editOrder, setEditOrder] = useState<CanteenOrder | null>(null);
   const [checkoutBill, setCheckoutBill] = useState<Bill | null>(null);
   const [detailBill, setDetailBill] = useState<Bill | null>(null);
+  const [confirmDeleteOrderId, setConfirmDeleteOrderId] = useState<string | null>(null);
 
   const isToday = selectedDate === toDateInputValue(Date.now());
 
@@ -289,7 +291,7 @@ export function Canteen() {
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
-                        removeOrder(order.id);
+                        setConfirmDeleteOrderId(order.id);
                       }}
                       title="Delete this order"
                       className="h-8 w-8 flex items-center justify-center rounded-full bg-[var(--color-danger)]/10 text-[var(--color-danger)] shrink-0"
@@ -325,6 +327,13 @@ export function Canteen() {
       {editOrder && <OrderEditModal order={editOrder} onClose={() => setEditOrder(null)} />}
       {checkoutBill && <CheckoutModal bill={checkoutBill} onDone={() => setCheckoutBill(null)} />}
       {detailBill && <BillDetailModal bill={detailBill} onClose={() => setDetailBill(null)} />}
+      {confirmDeleteOrderId && (
+        <AdminPinGate
+          title="Delete order"
+          onClose={() => setConfirmDeleteOrderId(null)}
+          onConfirm={() => removeOrder(confirmDeleteOrderId)}
+        />
+      )}
     </AppShell>
   );
 }
