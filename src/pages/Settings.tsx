@@ -1016,7 +1016,16 @@ function ExportExcelModal({ onClose }: { onClose: () => void }) {
       const XLSX = await import("xlsx");
       const wb = XLSX.utils.book_new();
 
-      const billRows = [...bills]
+      type Row = Record<string, string | number>;
+      const sum = (rows: Row[], key: string) =>
+        rows.reduce((s, r) => s + (typeof r[key] === "number" ? (r[key] as number) : 0), 0);
+
+      // A cancelled bill's numbers stay in its own row for the record, but
+      // it never really happened as a sale — every TOTAL below, and the
+      // Stock & Profit sheet, is based only on real (non-cancelled) bills.
+      const activeBills = bills.filter((b) => b.status !== "cancelled");
+
+      const billRows: Row[] = [...bills]
         .sort((a, b) => a.createdAt - b.createdAt)
         .map((b) => {
           const customer = customers.find((c) => c.id === b.customerId);
@@ -1043,9 +1052,32 @@ function ExportExcelModal({ onClose }: { onClose: () => void }) {
             "Amount on Credit": b.amountDue,
           };
         });
+      if (billRows.length > 0) {
+        const activeRows = billRows.filter((r) => r.Status !== "cancelled");
+        billRows.push({
+          Date: "TOTAL (cancelled excluded)",
+          "Started At": "",
+          "Ended At": "",
+          Table: "",
+          Game: "",
+          Customer: "",
+          "Who Played": "",
+          "Who Lost": "",
+          "Table Charge": sum(activeRows, "Table Charge"),
+          "Canteen Charge": sum(activeRows, "Canteen Charge"),
+          Discount: sum(activeRows, "Discount"),
+          Total: sum(activeRows, "Total"),
+          Status: "",
+          "Payment Method": "",
+          "Amount Paid": sum(activeRows, "Amount Paid"),
+          Cash: sum(activeRows, "Cash"),
+          Account: sum(activeRows, "Account"),
+          "Amount on Credit": sum(activeRows, "Amount on Credit"),
+        });
+      }
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(billRows), "Bills");
 
-      const itemRows = [...bills]
+      const itemRows: Row[] = [...activeBills]
         .sort((a, b) => a.createdAt - b.createdAt)
         .flatMap((b) =>
           b.canteenItems.map((item) => ({
@@ -1059,10 +1091,19 @@ function ExportExcelModal({ onClose }: { onClose: () => void }) {
           }))
         );
       if (itemRows.length > 0) {
+        itemRows.push({
+          Date: "TOTAL",
+          Table: "",
+          Item: "",
+          Qty: sum(itemRows, "Qty"),
+          Price: "",
+          Amount: sum(itemRows, "Amount"),
+          "Ordered For": "",
+        });
         XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(itemRows), "Canteen Items");
       }
 
-      const customerRows = customers
+      const customerRows: Row[] = customers
         .filter((c) => !c.isWalkIn)
         .map((c) => ({
           Name: c.name,
@@ -1070,9 +1111,17 @@ function ExportExcelModal({ onClose }: { onClose: () => void }) {
           "Credit Balance": c.creditBalance,
           "Added On": new Date(c.createdAt).toLocaleDateString([], { timeZone: IST_TIME_ZONE }),
         }));
+      if (customerRows.length > 0) {
+        customerRows.push({
+          Name: "TOTAL",
+          Phone: "",
+          "Credit Balance": sum(customerRows, "Credit Balance"),
+          "Added On": "",
+        });
+      }
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(customerRows), "Customers");
 
-      const expenseRows = [...expenses]
+      const expenseRows: Row[] = [...expenses]
         .sort((a, b) => a.createdAt - b.createdAt)
         .map((e) => ({
           Date: new Date(e.createdAt).toLocaleDateString([], { timeZone: IST_TIME_ZONE }),
@@ -1080,15 +1129,74 @@ function ExportExcelModal({ onClose }: { onClose: () => void }) {
           Amount: e.amount,
           Note: e.note,
         }));
+      if (expenseRows.length > 0) {
+        expenseRows.push({ Date: "TOTAL", Category: "", Amount: sum(expenseRows, "Amount"), Note: "" });
+      }
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(expenseRows), "Expenses");
 
-      const menuRows = items.map((i) => ({
-        Item: i.name,
-        Category: categories.find((c) => c.id === i.categoryId)?.name ?? "",
-        Price: i.price,
-        Stock: i.stockQty ?? "not tracked",
-      }));
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(menuRows), "Menu");
+      // Real sales per item name — how much of each item actually sold, and
+      // for how much — so it can be lined up against cost price for profit
+      // and against current stock for what's still pending.
+      const soldByName = new Map<string, { qty: number; revenue: number }>();
+      for (const b of activeBills) {
+        for (const line of b.canteenItems) {
+          const existing = soldByName.get(line.name) ?? { qty: 0, revenue: 0 };
+          existing.qty += line.qty;
+          existing.revenue += line.price * line.qty;
+          soldByName.set(line.name, existing);
+        }
+      }
+
+      const stockRows: Row[] = items.map((i) => {
+        const sold = soldByName.get(i.name) ?? { qty: 0, revenue: 0 };
+        soldByName.delete(i.name);
+        const cost = i.costPrice;
+        const cogs = cost != null ? cost * sold.qty : null;
+        return {
+          Item: i.name,
+          Category: categories.find((c) => c.id === i.categoryId)?.name ?? "",
+          "Selling Price": i.price,
+          "Cost Price": cost ?? "Not set",
+          "Profit / Unit": cost != null ? i.price - cost : "",
+          "Qty Sold": sold.qty,
+          "Qty In Stock (Pending)": i.stockQty ?? "Not tracked",
+          Revenue: sold.revenue,
+          "Total Cost": cogs ?? "",
+          "Total Profit": cogs != null ? sold.revenue - cogs : "",
+        };
+      });
+      // Anything left here sold under a name no longer in the current menu
+      // (renamed/deleted item) — still counted so the totals below match
+      // the Canteen Items sheet exactly.
+      for (const [name, sold] of soldByName) {
+        stockRows.push({
+          Item: name,
+          Category: "(removed from menu)",
+          "Selling Price": "",
+          "Cost Price": "",
+          "Profit / Unit": "",
+          "Qty Sold": sold.qty,
+          "Qty In Stock (Pending)": "",
+          Revenue: sold.revenue,
+          "Total Cost": "",
+          "Total Profit": "",
+        });
+      }
+      if (stockRows.length > 0) {
+        stockRows.push({
+          Item: "TOTAL",
+          Category: "",
+          "Selling Price": "",
+          "Cost Price": "",
+          "Profit / Unit": "",
+          "Qty Sold": sum(stockRows, "Qty Sold"),
+          "Qty In Stock (Pending)": "",
+          Revenue: sum(stockRows, "Revenue"),
+          "Total Cost": sum(stockRows, "Total Cost"),
+          "Total Profit": sum(stockRows, "Total Profit"),
+        });
+      }
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(stockRows), "Stock & Profit");
 
       XLSX.writeFile(wb, `cuebill-data-${new Date().toISOString().slice(0, 10)}.xlsx`);
     } finally {
@@ -1101,8 +1209,14 @@ function ExportExcelModal({ onClose }: { onClose: () => void }) {
       <div className="space-y-4">
         <p className="text-sm text-[var(--color-text-dim)]">
           Ek Excel file (.xlsx) mein sab kuch — Bills, Canteen Items, Customers, Expenses, aur
-          Menu — alag-alag sheets mein. Isse tum Excel/Google Sheets mein khol kar dekh, filter,
-          ya print kar sakte ho. Amounts {currency} mein hain.
+          Stock & Profit — alag-alag sheets mein, har sheet ke aakhri row mein TOTAL ke saath.
+          Stock & Profit sheet mein har item ki cost price, per-unit aur total profit, kitna bika
+          aur kitna stock abhi pending hai — sab ek saath. Isse tum Excel/Google Sheets mein khol
+          kar dekh, filter, ya print kar sakte ho. Amounts {currency} mein hain.
+        </p>
+        <p className="text-xs text-[var(--color-text-faint)]">
+          Profit sirf un items ka aayega jinki Cost Price Menu Management mein bhari ho — baaki
+          ke liye Cost Price column mein "Not set" dikhega.
         </p>
         <button
           onClick={handleExport}
