@@ -166,16 +166,20 @@ export function Settings() {
       )}
       {panel === "export" && <ExportExcelModal onClose={() => setPanel(null)} />}
       {panel === "theme" && <ThemeModal onClose={() => setPanel(null)} />}
-      {panel === "danger" && <ResetAllDataModal onClose={() => setPanel(null)} />}
+      {panel === "danger" && (
+        <AdminGate title="Reset Data" onClose={() => setPanel(null)}>
+          <ResetAllDataModal onClose={() => setPanel(null)} />
+        </AdminGate>
+      )}
     </AppShell>
   );
 }
 
 // Second PIN check in front of Menu Management / Deleted Bills / Backup &
-// Restore — staff who know the shared app password (needed just to open the
-// app at all) can't touch these without also knowing this separate PIN, set
-// from within Backup & Restore itself. Doesn't persist "unlocked" — asks
-// fresh every time one of these is opened.
+// Restore / Reset Data — staff who know the shared app password (needed
+// just to open the app at all) can't touch these without also knowing this
+// separate PIN, set from within Backup & Restore itself. Doesn't persist
+// "unlocked" — asks fresh every time one of these is opened.
 function AdminGate({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
   const adminPin = useSettingsStore((s) => s.adminPin);
   const [unlocked, setUnlocked] = useState(false);
