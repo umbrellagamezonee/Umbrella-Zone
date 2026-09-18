@@ -345,7 +345,7 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
                   <Card key={order.id} className="border-[var(--color-warning)]/40">
                     <div className="flex items-center justify-between gap-2">
                       <div>
-                        <p className="text-sm">{order.items.map((i) => `${i.name} x${i.qty}`).join(", ")}</p>
+                        <p className="text-sm">Pending order</p>
                         <p className="text-xs text-[var(--color-text-dim)] mt-0.5">
                           {formatTime(order.createdAt)}
                         </p>
@@ -487,13 +487,6 @@ function DayGroup({
   const matches = counted.filter((b) => b.tableId).length;
   const daySpent = dayBills.reduce((sum, b) => sum + billCollectedFor(b, nameKey), 0);
 
-  // What they ate that day, rolled up across every session (qty summed).
-  const food = new Map<string, number>();
-  for (const b of counted) {
-    for (const item of b.canteenItems) food.set(item.name, (food.get(item.name) ?? 0) + item.qty);
-  }
-  const foodList = [...food.entries()];
-
   return (
     <details open={defaultOpen} className="rounded-xl bg-[var(--color-surface-2)] overflow-hidden">
       <summary className="flex items-center justify-between gap-2 px-3 py-2.5 cursor-pointer select-none list-none">
@@ -506,19 +499,6 @@ function DayGroup({
         <span className="text-sm font-semibold">{formatMoney(daySpent, currency)}</span>
       </summary>
       <div className="px-3 pb-3 space-y-2">
-        {foodList.length > 0 && (
-          <div className="flex flex-wrap gap-1.5">
-            {foodList.map(([name, qty]) => (
-              <span
-                key={name}
-                className="text-xs rounded-full bg-[var(--color-surface)] border border-[var(--color-border)] px-2 py-0.5 text-[var(--color-text-dim)]"
-              >
-                {name}
-                {qty > 1 ? ` ×${qty}` : ""}
-              </span>
-            ))}
-          </div>
-        )}
         {dayBills.map((b) => (
           <Card
             key={b.id}
@@ -538,11 +518,6 @@ function DayGroup({
                     ? `${formatTime(b.createdAt - b.tableChargeMinutes * 60000)} – ${formatTime(b.createdAt)}`
                     : formatTime(b.createdAt)}
                 </p>
-                {b.canteenItems.length > 0 && (
-                  <p className="text-xs text-[var(--color-text-faint)] mt-0.5">
-                    {b.canteenItems.map((i) => i.name).join(", ")}
-                  </p>
-                )}
               </div>
               <div className="text-right shrink-0">
                 <p className="text-sm font-semibold">{formatMoney(b.total, currency)}</p>
