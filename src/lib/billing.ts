@@ -59,6 +59,39 @@ export function billCollectedFor(bill: Bill, payerNameKey: string): number {
     .reduce((sum, s) => sum + s.amount, 0);
 }
 
+export interface PersonBillView {
+  total: number;
+  paidFully: boolean;
+  onCredit: number;
+  pending: boolean;
+}
+
+// How a bill should read on ONE person's own profile — for a split bill,
+// only their own shares (their portion of the total, whether they've paid
+// it, how much of it is sitting on credit), not the whole group's numbers.
+// A non-split bill is already entirely theirs, so this just mirrors its own
+// fields. Used anywhere a bill gets listed on a specific customer's history
+// — showing the full group total there (e.g. "₹34 on credit" on a page
+// split two ways) reads as if this one person owes all of it.
+export function personBillView(bill: Bill, payerNameKey: string): PersonBillView {
+  if (!bill.shares) {
+    return {
+      total: bill.total,
+      paidFully: bill.status === "paid" && bill.amountPaid > 0 && bill.amountDue === 0,
+      onCredit: bill.amountDue,
+      pending: bill.status === "open",
+    };
+  }
+  const mine = bill.shares.filter((s) => normalizeName(s.payerName) === payerNameKey);
+  const total = mine.reduce((sum, s) => sum + s.amount, 0);
+  const onCredit = mine
+    .filter((s) => s.status === "paid" && s.paymentMethod === "credit")
+    .reduce((sum, s) => sum + s.amount, 0);
+  const paidCashOrUpi = mine.some((s) => s.status === "paid" && s.paymentMethod !== "credit");
+  const pending = mine.some((s) => s.status !== "paid");
+  return { total, paidFully: !pending && onCredit === 0 && paidCashOrUpi, onCredit, pending };
+}
+
 // Splits a bill's collected (cash+upi) total between its table and canteen
 // portions, for the POS/Canteen "today's amount" widgets. A split bill's
 // "Table charge" and "Food" shares (see TableDetailModal's handleStopAndBill)

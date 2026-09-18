@@ -10,7 +10,7 @@ import { useBillsStore } from "../store/useBillsStore";
 import { useOrdersStore } from "../store/useOrdersStore";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { formatMoney, formatTime, toDateInputValue, formatDateKey } from "../lib/format";
-import { billCollectedFor, customerPendingOrders, orderTotal } from "../lib/billing";
+import { billCollectedFor, customerPendingOrders, orderTotal, personBillView } from "../lib/billing";
 import { cleanName, customerLabel, findCustomerByName, normalizeName } from "../lib/customerName";
 import type { Customer, Bill } from "../types";
 import { Search, Footprints, Check, ChevronRight, Wallet, Users } from "lucide-react";
@@ -499,48 +499,54 @@ function DayGroup({
         <span className="text-sm font-semibold">{formatMoney(daySpent, currency)}</span>
       </summary>
       <div className="px-3 pb-3 space-y-2">
-        {dayBills.map((b) => (
-          <Card
-            key={b.id}
-            onClick={() => onOpenBill(b)}
-            className={b.status === "cancelled" || b.deletedAt ? "opacity-50" : ""}
-          >
-            <div className="flex items-center justify-between gap-2">
-              <div>
-                <p className="text-sm font-medium">
-                  {b.tableName ?? "Canteen order"}
-                  {b.deletedAt && (
-                    <span className="text-[var(--color-danger)] font-normal"> · Deleted</span>
+        {dayBills.map((b) => {
+          // What THIS person owes/paid from this bill — not the whole
+          // group's total, which a split table bill would otherwise show
+          // in full on every single payer's own history.
+          const view = personBillView(b, nameKey);
+          return (
+            <Card
+              key={b.id}
+              onClick={() => onOpenBill(b)}
+              className={b.status === "cancelled" || b.deletedAt ? "opacity-50" : ""}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <p className="text-sm font-medium">
+                    {b.tableName ?? "Canteen order"}
+                    {b.deletedAt && (
+                      <span className="text-[var(--color-danger)] font-normal"> · Deleted</span>
+                    )}
+                  </p>
+                  <p className="text-xs text-[var(--color-text-dim)]">
+                    {b.tableId
+                      ? `${formatTime(b.createdAt - b.tableChargeMinutes * 60000)} – ${formatTime(b.createdAt)}`
+                      : formatTime(b.createdAt)}
+                  </p>
+                </div>
+                <div className="text-right shrink-0">
+                  <p className="text-sm font-semibold">{formatMoney(view.total, currency)}</p>
+                  {b.status !== "cancelled" && view.paidFully && (
+                    <p className="text-xs text-[var(--color-success)] flex items-center gap-1 justify-end">
+                      <Check size={11} /> Paid
+                    </p>
                   )}
-                </p>
-                <p className="text-xs text-[var(--color-text-dim)]">
-                  {b.tableId
-                    ? `${formatTime(b.createdAt - b.tableChargeMinutes * 60000)} – ${formatTime(b.createdAt)}`
-                    : formatTime(b.createdAt)}
-                </p>
+                  {view.onCredit > 0 && (
+                    <p className="text-xs text-[var(--color-warning)]">
+                      {formatMoney(view.onCredit, currency)} on credit
+                    </p>
+                  )}
+                  {view.pending && view.onCredit === 0 && b.status !== "cancelled" && (
+                    <p className="text-xs text-[var(--color-warning)]">Open</p>
+                  )}
+                  {b.status === "cancelled" && (
+                    <p className="text-xs text-[var(--color-text-faint)]">Cancelled</p>
+                  )}
+                </div>
               </div>
-              <div className="text-right shrink-0">
-                <p className="text-sm font-semibold">{formatMoney(b.total, currency)}</p>
-                {b.status === "paid" && b.amountPaid > 0 && (
-                  <p className="text-xs text-[var(--color-success)] flex items-center gap-1 justify-end">
-                    <Check size={11} /> Paid
-                  </p>
-                )}
-                {b.amountDue > 0 && (
-                  <p className="text-xs text-[var(--color-warning)]">
-                    {formatMoney(b.amountDue, currency)} on credit
-                  </p>
-                )}
-                {b.status === "open" && (
-                  <p className="text-xs text-[var(--color-warning)]">Open</p>
-                )}
-                {b.status === "cancelled" && (
-                  <p className="text-xs text-[var(--color-text-faint)]">Cancelled</p>
-                )}
-              </div>
-            </div>
-          </Card>
-        ))}
+            </Card>
+          );
+        })}
       </div>
     </details>
   );
