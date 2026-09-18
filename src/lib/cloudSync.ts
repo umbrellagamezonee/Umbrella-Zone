@@ -1,5 +1,44 @@
 import { supabase } from "./supabaseClient";
 
+// Set right before a Backup & Restore reload (see markRestoreInProgress in
+// Settings.tsx's BackupModal) — tells every store's initial fetch below that
+// local state (just rehydrated from the restored backup, migrations and
+// all) is authoritative this one time, so it should be *pushed* to the
+// cloud instead of merged with whatever's currently there. Otherwise a
+// restore is a no-op for any record still present in the cloud: the normal
+// initial fetch treats the cloud as the source of truth, so Tuesday's data
+// silently wins right back over Monday's restored backup the instant this
+// reload's fetch resolves.
+//
+// Cleared a few seconds after this module loads — every store's initial
+// fetch fires at module-load time, well inside that window, so a later,
+// completely unrelated reload never mistakes itself for a pending restore.
+const RESTORE_FLAG = "cuebill-restore-in-progress";
+export function markRestoreInProgress() {
+  try {
+    sessionStorage.setItem(RESTORE_FLAG, "1");
+  } catch {
+    // Private browsing / storage disabled — restore still works locally,
+    // it just won't also push to the cloud.
+  }
+}
+function isRestoreInProgress(): boolean {
+  try {
+    return sessionStorage.getItem(RESTORE_FLAG) === "1";
+  } catch {
+    return false;
+  }
+}
+if (typeof window !== "undefined") {
+  setTimeout(() => {
+    try {
+      sessionStorage.removeItem(RESTORE_FLAG);
+    } catch {
+      // ignore
+    }
+  }, 5000);
+}
+
 // Shared plumbing every synced store uses: on load, pull the table down and
 // replace local state with it; from then on, a realtime subscription keeps
 // local state in sync with whatever any other device writes. Each store's
@@ -28,6 +67,11 @@ export function setupSync<TRow extends { id: string }, TItem>(
     .then(({ data, error }) => {
       if (error) {
         console.error(`[cloudSync] initial fetch of "${table}" failed`, error);
+        return;
+      }
+      if (isRestoreInProgress()) {
+        const local = getLocal();
+        if (local.length > 0) bulkUpsertWithRetry(table, local.map(toRow) as Record<string, unknown>[]);
         return;
       }
       if (data && data.length > 0) {
@@ -143,6 +187,27 @@ function bulkInsertWithRetry(table: string, rows: Record<string, unknown>[]) {
 export function pushBulkInsert<TRow extends object>(table: string, rows: TRow[]) {
   if (!supabase || rows.length === 0) return;
   bulkInsertWithRetry(table, rows as Record<string, unknown>[]);
+}
+
+function bulkUpsertWithRetry(table: string, rows: Record<string, unknown>[]) {
+  supabase!
+    .from(table)
+    .upsert(rows)
+    .then(({ error }) => {
+      const col = missingColumn(error?.message);
+      if (col) {
+        bulkUpsertWithRetry(
+          table,
+          rows.map((r) => {
+            const rest = { ...r };
+            delete rest[col];
+            return rest;
+          })
+        );
+      } else {
+        logError("bulk upsert (restore)", table, error);
+      }
+    });
 }
 
 export function pushInsert<TRow extends object>(table: string, row: TRow) {

@@ -11,6 +11,7 @@ import { useOrdersStore } from "../store/useOrdersStore";
 import { useCustomersStore } from "../store/useCustomersStore";
 import { useExpensesStore } from "../store/useExpensesStore";
 import { useSettingsStore } from "../store/useSettingsStore";
+import { markRestoreInProgress } from "../lib/cloudSync";
 import { formatMoney, formatDateTime, IST_TIME_ZONE } from "../lib/format";
 import {
   LayoutGrid,
@@ -928,6 +929,10 @@ function BackupModal({ onClose }: { onClose: () => void }) {
     Object.entries(pending).forEach(([key, value]) => {
       if (key.startsWith("cuebill")) localStorage.setItem(key, value);
     });
+    // Otherwise this reload's own cloud fetch treats the cloud as the
+    // source of truth and silently overwrites the restored data right back
+    // for any record still there — see markRestoreInProgress's own comment.
+    markRestoreInProgress();
     window.location.reload();
   }
 
@@ -950,7 +955,9 @@ function BackupModal({ onClose }: { onClose: () => void }) {
         <div className="pt-4 border-t border-[var(--color-border)]">
           <p className="text-sm text-[var(--color-text-dim)] mb-3">
             Pehle ki backup file se data wapas laane ke liye file choose karo.{" "}
-            <span className="text-[var(--color-warning)]">Isse abhi ka data replace ho jayega.</span>
+            <span className="text-[var(--color-warning)]">
+              Isse sab devices ka abhi ka live data replace ho jayega.
+            </span>
           </p>
           <label className="w-full flex items-center justify-center rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] font-medium py-3 cursor-pointer">
             Choose Backup File
@@ -993,8 +1000,11 @@ function BackupModal({ onClose }: { onClose: () => void }) {
       {pending && (
         <Modal title="Restore this backup?" onClose={() => setPending(null)}>
           <p className="text-sm text-[var(--color-text-dim)] mb-4">
-            Is device ka current data mit jayega aur backup file wale data se replace ho jayega.
-            Restore hone ke baad app reload ho jayega.
+            <span className="text-[var(--color-danger)] font-medium">
+              Ye sirf is device ka nahi — sab devices ka abhi ka live data mit jayega
+            </span>{" "}
+            aur backup file wale data se replace ho jayega. Restore hone ke baad app reload ho
+            jayega.
           </p>
           <div className="grid grid-cols-2 gap-2">
             <button
