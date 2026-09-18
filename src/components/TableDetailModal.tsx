@@ -108,7 +108,34 @@ export function TableDetailModal({
       accumulatedMs: table.accumulatedMs,
       plannedDurationMs: table.plannedDurationMs,
     };
-    const shares = payers.length > 1 ? splitEqually(total, payers.map((p) => p.name)) : undefined;
+    // Food tagged to a specific person (via Canteen → Edit order → "Adding
+    // for") is billed straight to them, not folded into the group's
+    // table-charge split — only untagged/shared food follows the same
+    // split as the table charge, same as every canteen item did before
+    // per-person tagging existed.
+    const taggedFood = new Map<string, number>();
+    let sharedFood = 0;
+    for (const item of order?.items ?? []) {
+      const amount = item.price * item.qty;
+      if (item.personName) taggedFood.set(item.personName, (taggedFood.get(item.personName) ?? 0) + amount);
+      else sharedFood += amount;
+    }
+    // The discount can only reduce the shared pool, never someone's own
+    // tagged food — clamp it here too (not just effectiveDiscount's own
+    // clamp against the *whole* bill) so bill.total (computed from this
+    // same discount inside createOpenBill) always lines up with what the
+    // shares below actually sum to, even when the discount is bigger than
+    // the shared pool alone.
+    const appliedDiscount = Math.min(effectiveDiscount, tableCharge + sharedFood);
+    const sharedPool = tableCharge + sharedFood - appliedDiscount;
+    // A shares-based bill is needed whenever there's more than one payer, OR
+    // someone has their own tagged food to bill on top of (or instead of)
+    // the group split — a single-payer bill with no tagged food keeps the
+    // simple customerId path, unchanged from before.
+    const needsShares = payers.length > 1 || taggedFood.size > 0;
+    const sharedShares = needsShares && payers.length > 0 ? splitEqually(sharedPool, payers.map((p) => p.name)) : [];
+    const foodShares = [...taggedFood.entries()].map(([name, amount]) => ({ label: "Food", payerName: name, amount }));
+    const shares = needsShares ? [...sharedShares, ...foodShares] : undefined;
     // A strict subset paying (not everyone) is the "someone else played
     // free" case — worth recording as who lost, same as before.
     const partial = payers.length > 0 && payers.length < participants.length;
@@ -118,13 +145,13 @@ export function TableDetailModal({
       tableName: table.name,
       gameId: game?.id ?? null,
       gameName: game?.name ?? null,
-      customerId: payers.length === 1 ? payers[0].id : table.customerId,
+      customerId: !needsShares && payers.length === 1 ? payers[0].id : table.customerId,
       tableChargeMinutes: minutesBilled,
       tableCharge,
       canteenCharge: canteenTotal,
       canteenItems:
         order?.items.map((i) => ({ name: i.name, price: i.price, qty: i.qty, personName: i.personName ?? null })) ?? [],
-      discount: effectiveDiscount,
+      discount: appliedDiscount,
       shares,
       matchParticipants: participantNames.length > 1 ? participantNames : null,
       matchLosers: partial ? payers.map((p) => p.name) : null,

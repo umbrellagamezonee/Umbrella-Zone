@@ -101,9 +101,7 @@ export const useOrdersStore = create<OrdersState>()(
             if (existing) {
               return {
                 ...o,
-                items: o.items.map((i) =>
-                  i.menuItemId === item.menuItemId ? { ...i, qty: i.qty + item.qty } : i
-                ),
+                items: o.items.map((i) => (i.id === existing.id ? { ...i, qty: i.qty + item.qty } : i)),
               };
             }
             return { ...o, items: [...o.items, { ...item, id: crypto.randomUUID() }] };
