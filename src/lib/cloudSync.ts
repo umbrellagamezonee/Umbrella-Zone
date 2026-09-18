@@ -155,6 +155,35 @@ export function pushUpsert<TRow extends object>(table: string, row: TRow) {
   upsertWithRetry(table, row as Record<string, unknown>);
 }
 
+// For a running counter (credit balance, stock quantity) that can get
+// updated several times within milliseconds (e.g. billing a customer's
+// three pending orders onto credit back to back) — pushUpsert sends each
+// update as an absolute snapshot, and those requests can land at Supabase
+// out of order over the network, leaving the row on some earlier, smaller
+// value instead of the true final total. An atomic "+= delta" on the
+// server can't lose updates that way regardless of arrival order, so use
+// this for any field that's incremented/decremented rather than just set.
+//
+// Falls back to the old absolute-snapshot upsert if the increment function
+// hasn't been created yet (see supabase/migration-atomic-counters.sql) —
+// same "keep working before the migration runs" pattern as insertWithRetry.
+export function pushIncrement<TRow extends object>(
+  fn: string,
+  args: Record<string, unknown>,
+  fallbackTable: string,
+  fallbackRow: TRow
+) {
+  if (!supabase) return;
+  supabase.rpc(fn, args).then(({ error }) => {
+    if (!error) return;
+    if (/function .* does not exist/i.test(error.message ?? "")) {
+      upsertWithRetry(fallbackTable, fallbackRow as Record<string, unknown>);
+      return;
+    }
+    logError(`rpc ${fn}`, fn, error);
+  });
+}
+
 export function pushDelete(table: string, id: string) {
   if (!supabase) return;
   supabase

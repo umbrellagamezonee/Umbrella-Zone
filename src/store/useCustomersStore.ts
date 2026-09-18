@@ -3,7 +3,15 @@ import { persist } from "zustand/middleware";
 import type { Customer } from "../types";
 import { cleanName, normalizeName } from "../lib/customerName";
 import { syncCreditLedger } from "../lib/reminderApi";
-import { setupSync, pushInsert, pushUpsert, pushDelete, pushDeleteAll, keepLocalOnly } from "../lib/cloudSync";
+import {
+  setupSync,
+  pushInsert,
+  pushUpsert,
+  pushIncrement,
+  pushDelete,
+  pushDeleteAll,
+  keepLocalOnly,
+} from "../lib/cloudSync";
 
 const walkIn: Customer = {
   id: "walk-in",
@@ -114,7 +122,10 @@ export const useCustomersStore = create<CustomersState>()(
         const c = get().customers.find((x) => x.id === id);
         if (c) {
           syncCreditLedger({ customerId: c.id, name: c.name, phone: c.phone, amountDue: c.creditBalance });
-          if (c.id !== "walk-in") pushUpsert(TABLE, toRow(c));
+          // An atomic "+= delta" on the server — several of these can fire
+          // within the same second (e.g. billing a customer's whole pending
+          // list onto credit) without any risk of one overwriting another.
+          if (c.id !== "walk-in") pushIncrement("increment_credit_balance", { p_id: id, p_delta: delta }, TABLE, toRow(c));
         }
       },
 

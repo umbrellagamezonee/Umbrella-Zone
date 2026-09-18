@@ -1,7 +1,15 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { MenuCategory, MenuItem } from "../types";
-import { setupSync, pushInsert, pushUpsert, pushDelete, pushDeleteAll, keepLocalOnly } from "../lib/cloudSync";
+import {
+  setupSync,
+  pushInsert,
+  pushUpsert,
+  pushIncrement,
+  pushDelete,
+  pushDeleteAll,
+  keepLocalOnly,
+} from "../lib/cloudSync";
 
 // The shop only wants exactly these three, fixed — no more freeform add/
 // remove of categories. Ids are stable strings (not random) so every device
@@ -149,6 +157,8 @@ export const useMenuStore = create<MenuState>()(
       },
 
       deductStock: (id, qty) => {
+        const before = get().items.find((i) => i.id === id);
+        if (!before || before.stockQty == null) return;
         set((state) => ({
           items: state.items.map((i) =>
             i.id === id && i.stockQty != null
@@ -157,17 +167,22 @@ export const useMenuStore = create<MenuState>()(
           ),
         }));
         const updated = get().items.find((i) => i.id === id);
-        if (updated) pushUpsert(ITEM_TABLE, itemToRow(updated));
+        // Atomic "-= qty" on the server — several orders for the same item
+        // within the same second (busy canteen) can't lose a deduction to
+        // the network delivering requests out of order.
+        if (updated) pushIncrement("increment_stock_qty", { p_id: id, p_delta: -qty }, ITEM_TABLE, itemToRow(updated));
       },
 
       restock: (id, qty) => {
+        const before = get().items.find((i) => i.id === id);
+        if (!before || before.stockQty == null) return;
         set((state) => ({
           items: state.items.map((i) =>
             i.id === id && i.stockQty != null ? { ...i, stockQty: i.stockQty + qty } : i
           ),
         }));
         const updated = get().items.find((i) => i.id === id);
-        if (updated) pushUpsert(ITEM_TABLE, itemToRow(updated));
+        if (updated) pushIncrement("increment_stock_qty", { p_id: id, p_delta: qty }, ITEM_TABLE, itemToRow(updated));
       },
 
       resetAll: () => {
