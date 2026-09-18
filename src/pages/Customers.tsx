@@ -11,7 +11,7 @@ import { useOrdersStore } from "../store/useOrdersStore";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { formatMoney, formatTime, toDateInputValue, formatDateKey } from "../lib/format";
 import { billCollectedFor, customerPendingOrders, orderTotal } from "../lib/billing";
-import { customerLabel, findCustomerByName, normalizeName } from "../lib/customerName";
+import { cleanName, customerLabel, findCustomerByName, normalizeName } from "../lib/customerName";
 import type { Customer, Bill } from "../types";
 import { Search, Footprints, Check, ChevronRight, Wallet, Users } from "lucide-react";
 
@@ -162,6 +162,7 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
   const currency = useSettingsStore((s) => s.currencySymbol);
   const allCustomers = useCustomersStore((s) => s.customers);
   const mergeCustomer = useCustomersStore((s) => s.mergeCustomer);
+  const updateCustomer = useCustomersStore((s) => s.updateCustomer);
   const [detailBill, setDetailBill] = useState<Bill | null>(null);
   const [checkoutBill, setCheckoutBill] = useState<Bill | null>(null);
   const [showSettle, setShowSettle] = useState(false);
@@ -171,6 +172,22 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
   // reopening this modal.
   const customer =
     useCustomersStore((s) => s.customers.find((c) => c.id === initialCustomer.id)) ?? initialCustomer;
+
+  // Buffered locally and only committed on blur, unlike phone below — every
+  // past bill that named this person gets rewritten on a real name change
+  // (see reassignCustomer below), which isn't something to redo on every
+  // keystroke.
+  const [nameInput, setNameInput] = useState(customer.name);
+
+  function commitName() {
+    const cleaned = cleanName(nameInput);
+    if (!cleaned || cleaned === customer.name) {
+      setNameInput(customer.name);
+      return;
+    }
+    reassignCustomer(customer.id, customer.name, customer.id, cleaned);
+    updateCustomer(customer.id, { name: cleaned });
+  }
 
   const nameKey = normalizeName(customer.name);
   // Only bills this person actually owes/paid for — not every match they
@@ -256,6 +273,26 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
   return (
     <Modal title={customerLabel(customer, allCustomers)} onClose={onClose}>
       <div className="space-y-4">
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs text-[var(--color-text-dim)] shrink-0">Name</span>
+            <input
+              value={nameInput}
+              onChange={(e) => setNameInput(e.target.value)}
+              onBlur={commitName}
+              className="flex-1 min-w-0 text-right bg-[var(--color-surface-2)] rounded-lg px-2 py-1.5 text-sm outline-none"
+            />
+          </div>
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs text-[var(--color-text-dim)] shrink-0">Phone</span>
+            <PhoneInput
+              value={customer.phone}
+              onChange={(v) => updateCustomer(customer.id, { phone: v })}
+              className="flex-1"
+            />
+          </div>
+        </div>
+
         <div className="grid grid-cols-2 gap-3">
           <Card>
             <p className="text-xs text-[var(--color-text-dim)]">MATCHES</p>

@@ -64,6 +64,7 @@ interface CustomersState {
   customers: Customer[];
   addCustomer: (data: { name: string; phone: string; email: string }) => Customer;
   findOrCreateCustomer: (data: { name: string; phone: string }) => Customer;
+  updateCustomer: (id: string, patch: { name?: string; phone?: string; email?: string }) => void;
   adjustCredit: (id: string, delta: number) => void;
   markReminded: (id: string) => void;
   removeCustomer: (id: string) => void;
@@ -93,6 +94,23 @@ export const useCustomersStore = create<CustomersState>()(
         set((state) => ({ customers: [...state.customers, customer] }));
         pushInsert(TABLE, toRow(customer));
         return customer;
+      },
+
+      updateCustomer: (id, patch) => {
+        set((state) => ({
+          customers: state.customers.map((c) =>
+            c.id === id
+              ? {
+                  ...c,
+                  ...(patch.name !== undefined ? { name: cleanName(patch.name) } : {}),
+                  ...(patch.phone !== undefined ? { phone: patch.phone } : {}),
+                  ...(patch.email !== undefined ? { email: patch.email } : {}),
+                }
+              : c
+          ),
+        }));
+        const c = get().customers.find((x) => x.id === id);
+        if (c && c.id !== "walk-in") pushUpsert(TABLE, toRow(c));
       },
 
       // Phone is optional. If given and it matches an existing customer, that
