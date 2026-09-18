@@ -20,7 +20,7 @@ export function PhoneInput({
       <input
         value={value}
         onChange={(e) => onChange(e.target.value.replace(/\D/g, "").slice(0, 10))}
-        placeholder="98765 43210"
+        placeholder="Phone number"
         inputMode="numeric"
         className="flex-1 min-w-0 bg-transparent px-3 py-2.5 text-sm outline-none"
       />
