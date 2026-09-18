@@ -60,18 +60,26 @@ export function billCollectedFor(bill: Bill, payerNameKey: string): number {
 }
 
 // Splits a bill's collected (cash+upi) total between its table and canteen
-// portions, for the POS/Canteen "today's amount" widgets — prorated by the
-// bill's own table:canteen ratio against however much has actually been
-// collected so far (a partial payment, split or not, could be any mix of
-// the two, so this is the fairest approximation without itemizing).
+// portions, for the POS/Canteen "today's amount" widgets. A split bill's
+// "Table charge" and "Food" shares (see TableDetailModal's handleStopAndBill)
+// are independently payable — someone might settle their food and leave the
+// table charge pending, or vice versa — so this reads each share's own
+// label rather than assuming collected money splits in the bill's overall
+// ratio. A non-split bill has no such distinction, so it prorates by
+// however much of the total has been collected so far.
 export function billCollectedByPart(bill: Bill): { table: number; canteen: number } {
+  if (bill.shares) {
+    let table = 0;
+    let canteen = 0;
+    for (const s of bill.shares) {
+      if (s.status !== "paid" || !s.paymentMethod || s.paymentMethod === "credit") continue;
+      if (s.label === "Table charge") table += s.amount;
+      else canteen += s.amount;
+    }
+    return { table, canteen };
+  }
   if (bill.total <= 0) return { table: 0, canteen: 0 };
-  const collected = bill.shares
-    ? bill.shares
-        .filter((s) => s.status === "paid" && s.paymentMethod && s.paymentMethod !== "credit")
-        .reduce((sum, s) => sum + s.amount, 0)
-    : billCollected(bill);
-  const paidFraction = collected / bill.total;
+  const paidFraction = billCollected(bill) / bill.total;
   return {
     table: bill.tableCharge * paidFraction,
     canteen: bill.canteenCharge * paidFraction,

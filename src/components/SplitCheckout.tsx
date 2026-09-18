@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { Modal } from "./ui/Modal";
-import { Card } from "./ui/Card";
 import { useBillsStore } from "../store/useBillsStore";
 import { useCustomersStore } from "../store/useCustomersStore";
 import { useTablesStore } from "../store/useTablesStore";
@@ -9,7 +8,17 @@ import { useSettingsStore } from "../store/useSettingsStore";
 import { formatMoney } from "../lib/format";
 import type { Bill, BillShare, PaymentMethod } from "../types";
 import { QRCodeSVG } from "qrcode.react";
-import { Check, ArrowLeft, Repeat } from "lucide-react";
+import { Check, ArrowLeft, Repeat, Gamepad2, UtensilsCrossed, Wallet } from "lucide-react";
+
+// A small visual cue for what each share is for — falls back to a generic
+// wallet icon for any label that isn't "Table charge" or "Food" (e.g. the
+// plain "Share" label an older, single-pool split bill might still have).
+function shareIcon(label: string) {
+  const l = label.toLowerCase();
+  if (l.includes("table")) return Gamepad2;
+  if (l.includes("food")) return UtensilsCrossed;
+  return Wallet;
+}
 
 type RowStep = "idle" | "upi-qr";
 
@@ -36,6 +45,15 @@ export function SplitCheckout({ bill: initialBill, onDone }: { bill: Bill; onDon
   const allPaid = shares.length > 0 && shares.every((s) => s.status === "paid");
   const anyPaid = shares.some((s) => s.status === "paid");
   const pendingShares = shares.filter((s) => s.status !== "paid");
+  // Grouped by payer for a cleaner, per-person view — table charge and food
+  // stay independently payable, just visually kept under the one person
+  // they both belong to instead of scattered as separate flat cards.
+  const groupedByPayer: { payerName: string; shares: BillShare[] }[] = [];
+  for (const share of shares) {
+    const group = groupedByPayer.find((g) => g.payerName === share.payerName);
+    if (group) group.shares.push(share);
+    else groupedByPayer.push({ payerName: share.payerName, shares: [share] });
+  }
   // Once someone's paid and left, whoever's still playing can carry on on
   // the same table — a fresh session for just them, timer back at zero,
   // billed properly whenever they actually finish.
@@ -91,114 +109,141 @@ export function SplitCheckout({ bill: initialBill, onDone }: { bill: Bill; onDon
   }
 
   return (
-    <Modal title={`Split bill · ${formatMoney(bill.total, currency)}`} onClose={onDone}>
-      <div className="space-y-3">
-        {shares.map((share) => {
-          const step = steps[share.id] ?? "idle";
-          const upiUri = `upi://pay?pa=${encodeURIComponent(upiId)}&pn=${encodeURIComponent(
-            storeName
-          )}&am=${share.amount.toFixed(2)}&cu=INR&tn=${encodeURIComponent(share.label)}`;
+    <Modal title="Split bill" onClose={onDone}>
+      <div className="space-y-4">
+        <div className="flex items-center justify-between rounded-xl bg-[var(--color-surface-2)] px-4 py-3">
+          <span className="text-sm text-[var(--color-text-dim)]">Total</span>
+          <span className="text-lg font-bold">{formatMoney(bill.total, currency)}</span>
+        </div>
 
-          if (share.status === "paid") {
-            const onCredit = share.paymentMethod === "credit";
-            return (
-              <Card
-                key={share.id}
-                className={onCredit ? "border-[var(--color-warning)]/40" : "border-[var(--color-success)]/40"}
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <div
-                      className={
-                        "h-7 w-7 rounded-full flex items-center justify-center " +
-                        (onCredit
-                          ? "bg-[var(--color-warning)]/15 text-[var(--color-warning)]"
-                          : "bg-[var(--color-success)]/15 text-[var(--color-success)]")
-                      }
-                    >
-                      <Check size={14} />
-                    </div>
-                    <div>
-                      <p className="text-sm font-medium">{share.label}</p>
-                      <p className="text-xs text-[var(--color-text-dim)]">{share.payerName}</p>
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-sm font-semibold">{formatMoney(share.amount, currency)}</p>
-                    <p
-                      className={
-                        "text-xs capitalize " +
-                        (onCredit ? "text-[var(--color-warning)]" : "text-[var(--color-text-faint)]")
-                      }
-                    >
-                      {onCredit ? "on credit" : share.paymentMethod}
-                    </p>
-                  </div>
-                </div>
-              </Card>
-            );
-          }
-
-          if (step === "upi-qr") {
-            return (
-              <Card key={share.id}>
-                <div className="flex items-center gap-2 mb-2">
-                  <button
-                    onClick={() => setStep(share.id, "idle")}
-                    className="h-7 w-7 flex items-center justify-center rounded-full bg-[var(--color-surface-2)]"
-                  >
-                    <ArrowLeft size={12} />
-                  </button>
-                  <p className="text-xs text-[var(--color-text-dim)]">
-                    {share.label} · {share.payerName}
-                  </p>
-                </div>
-                <div className="flex flex-col items-center gap-2 py-3">
-                  <div className="rounded-xl bg-white p-2">
-                    <QRCodeSVG value={upiUri} size={150} />
-                  </div>
-                  <p className="text-xl font-bold">{formatMoney(share.amount, currency)}</p>
-                </div>
-                <button
-                  onClick={() => settle(share, "upi")}
-                  className="w-full rounded-xl bg-[var(--color-success)]/15 text-[var(--color-success)] font-semibold py-2.5 text-sm"
-                >
-                  Payment received
-                </button>
-              </Card>
-            );
-          }
-
+        {groupedByPayer.map(({ payerName, shares: payerShares }) => {
+          const payerTotal = payerShares.reduce((sum, s) => sum + s.amount, 0);
+          const payerFullyPaid = payerShares.every((s) => s.status === "paid");
           return (
-            <Card key={share.id}>
-              <div className="flex items-center justify-between mb-2">
-                <div>
-                  <p className="text-sm font-medium">{share.label}</p>
-                  <p className="text-xs text-[var(--color-text-dim)]">{share.payerName}</p>
+            <div
+              key={payerName}
+              className={
+                "rounded-2xl border overflow-hidden " +
+                (payerFullyPaid
+                  ? "border-[var(--color-success)]/40"
+                  : "border-[var(--color-border)]")
+              }
+            >
+              <div className="flex items-center justify-between gap-2 px-4 py-3 bg-[var(--color-surface-2)]">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="h-8 w-8 shrink-0 rounded-full bg-[var(--color-primary)]/15 text-[var(--color-primary)] flex items-center justify-center text-sm font-semibold">
+                    {payerName.charAt(0).toUpperCase()}
+                  </div>
+                  <p className="text-sm font-semibold truncate">{payerName}</p>
                 </div>
-                <p className="text-sm font-semibold">{formatMoney(share.amount, currency)}</p>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {payerFullyPaid && <Check size={14} className="text-[var(--color-success)]" />}
+                  <span className="text-sm font-bold">{formatMoney(payerTotal, currency)}</span>
+                </div>
               </div>
-              <div className="grid grid-cols-3 gap-2">
-                <button
-                  onClick={() => settle(share, "cash")}
-                  className="rounded-xl bg-[var(--color-success)]/15 text-[var(--color-success)] font-medium py-2 text-xs"
-                >
-                  Cash
-                </button>
-                <button
-                  onClick={() => (upiId ? setStep(share.id, "upi-qr") : settle(share, "upi"))}
-                  className="rounded-xl bg-[var(--color-primary)]/15 text-[var(--color-primary)] font-medium py-2 text-xs"
-                >
-                  Account
-                </button>
-                <button
-                  onClick={() => settle(share, "credit")}
-                  className="rounded-xl bg-[var(--color-warning)]/15 text-[var(--color-warning)] font-medium py-2 text-xs"
-                >
-                  Credit
-                </button>
+
+              <div className="divide-y divide-[var(--color-border)] bg-[var(--color-surface)]">
+                {payerShares.map((share) => {
+                  const step = steps[share.id] ?? "idle";
+                  const Icon = shareIcon(share.label);
+                  const upiUri = `upi://pay?pa=${encodeURIComponent(upiId)}&pn=${encodeURIComponent(
+                    storeName
+                  )}&am=${share.amount.toFixed(2)}&cu=INR&tn=${encodeURIComponent(share.label)}`;
+
+                  if (share.status === "paid") {
+                    const onCredit = share.paymentMethod === "credit";
+                    return (
+                      <div key={share.id} className="flex items-center justify-between gap-2 px-4 py-3">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <div
+                            className={
+                              "h-7 w-7 shrink-0 rounded-full flex items-center justify-center " +
+                              (onCredit
+                                ? "bg-[var(--color-warning)]/15 text-[var(--color-warning)]"
+                                : "bg-[var(--color-success)]/15 text-[var(--color-success)]")
+                            }
+                          >
+                            <Check size={13} />
+                          </div>
+                          <p className="text-sm truncate">{share.label}</p>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <p className="text-sm font-medium">{formatMoney(share.amount, currency)}</p>
+                          <p
+                            className={
+                              "text-xs capitalize " +
+                              (onCredit ? "text-[var(--color-warning)]" : "text-[var(--color-text-faint)]")
+                            }
+                          >
+                            {onCredit ? "on credit" : share.paymentMethod}
+                          </p>
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  if (step === "upi-qr") {
+                    return (
+                      <div key={share.id} className="px-4 py-3">
+                        <div className="flex items-center gap-2 mb-2">
+                          <button
+                            onClick={() => setStep(share.id, "idle")}
+                            className="h-7 w-7 flex items-center justify-center rounded-full bg-[var(--color-surface-2)]"
+                          >
+                            <ArrowLeft size={12} />
+                          </button>
+                          <p className="text-xs text-[var(--color-text-dim)]">{share.label}</p>
+                        </div>
+                        <div className="flex flex-col items-center gap-2 py-3">
+                          <div className="rounded-xl bg-white p-2">
+                            <QRCodeSVG value={upiUri} size={150} />
+                          </div>
+                          <p className="text-xl font-bold">{formatMoney(share.amount, currency)}</p>
+                        </div>
+                        <button
+                          onClick={() => settle(share, "upi")}
+                          className="w-full rounded-xl bg-[var(--color-success)]/15 text-[var(--color-success)] font-semibold py-2.5 text-sm"
+                        >
+                          Payment received
+                        </button>
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div key={share.id} className="px-4 py-3">
+                      <div className="flex items-center justify-between gap-2 mb-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <Icon size={14} className="text-[var(--color-text-faint)] shrink-0" />
+                          <p className="text-sm truncate">{share.label}</p>
+                        </div>
+                        <p className="text-sm font-semibold shrink-0">{formatMoney(share.amount, currency)}</p>
+                      </div>
+                      <div className="grid grid-cols-3 gap-1.5">
+                        <button
+                          onClick={() => settle(share, "cash")}
+                          className="rounded-lg bg-[var(--color-success)]/15 text-[var(--color-success)] font-medium py-2 text-xs active:scale-95 transition-transform"
+                        >
+                          Cash
+                        </button>
+                        <button
+                          onClick={() => (upiId ? setStep(share.id, "upi-qr") : settle(share, "upi"))}
+                          className="rounded-lg bg-[var(--color-primary)]/15 text-[var(--color-primary)] font-medium py-2 text-xs active:scale-95 transition-transform"
+                        >
+                          Account
+                        </button>
+                        <button
+                          onClick={() => settle(share, "credit")}
+                          className="rounded-lg bg-[var(--color-warning)]/15 text-[var(--color-warning)] font-medium py-2 text-xs active:scale-95 transition-transform"
+                        >
+                          Credit
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-            </Card>
+            </div>
           );
         })}
 

@@ -350,69 +350,14 @@ function OrderEditModal({ order, onClose }: { order: CanteenOrder; onClose: () =
   const changeQty = useOrdersStore((s) => s.changeQty);
   const setNote = useOrdersStore((s) => s.setNote);
   const currency = useSettingsStore((s) => s.currencySymbol);
-  const tables = useTablesStore((s) => s.tables);
-  const customers = useCustomersStore((s) => s.customers);
   const [activeCategory, setActiveCategory] = useState(categories[0]?.id ?? "");
-  // Who the next item tapped below is for — "" means shared/unspecified
-  // (splits with the table charge at billing time, same as before this
-  // existed). Only matters when this order's table has more than one
-  // person on it; each person then pays for their own food instead of it
-  // getting lumped into the group split.
-  const [forPerson, setForPerson] = useState("");
 
   const live = orders.find((o) => o.id === order.id) ?? order;
   const total = live.items.reduce((sum, i) => sum + i.price * i.qty, 0);
 
-  const table = live.tableId ? tables.find((t) => t.id === live.tableId) : null;
-  const participants = table
-    ? [table.customerId, ...table.extraCustomerIds]
-        .map((id) => customers.find((c) => c.id === id))
-        .filter((c): c is NonNullable<typeof c> => !!c && !c.isWalkIn)
-    : [];
-
   return (
     <Modal title="Edit order" onClose={onClose}>
       <div className="space-y-4">
-        {participants.length > 1 && (
-          <div>
-            <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-2">
-              ADDING FOR
-            </p>
-            <div className="flex flex-wrap gap-1.5">
-              <button
-                onClick={() => setForPerson("")}
-                className={
-                  "rounded-full px-3 py-1.5 text-sm font-medium " +
-                  (forPerson === ""
-                    ? "bg-[var(--color-primary)] text-white"
-                    : "bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[var(--color-text-dim)]")
-                }
-              >
-                Shared
-              </button>
-              {participants.map((p) => (
-                <button
-                  key={p.id}
-                  onClick={() => setForPerson(p.name)}
-                  className={
-                    "rounded-full px-3 py-1.5 text-sm font-medium " +
-                    (forPerson === p.name
-                      ? "bg-[var(--color-primary)] text-white"
-                      : "bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[var(--color-text-dim)]")
-                  }
-                >
-                  {p.name}
-                </button>
-              ))}
-            </div>
-            <p className="text-xs text-[var(--color-text-faint)] mt-1.5">
-              {forPerson
-                ? `New items go on ${forPerson}'s own bill, not the group split.`
-                : "New items split with the table charge, like before."}
-            </p>
-          </div>
-        )}
-
         {live.items.length > 0 && (
           <div>
             <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-2">
@@ -424,12 +369,7 @@ function OrderEditModal({ order, onClose }: { order: CanteenOrder; onClose: () =
                 const atStockLimit = menuItem?.stockQty != null && menuItem.stockQty <= 0;
                 return (
                   <div key={line.id} className="flex items-center justify-between">
-                    <p className="text-sm">
-                      {line.name}
-                      {line.personName && (
-                        <span className="text-[var(--color-text-faint)]"> · {line.personName}</span>
-                      )}
-                    </p>
+                    <p className="text-sm">{line.name}</p>
                     <div className="flex items-center gap-2">
                       <button
                         onClick={() => changeQty(live.id, line.id, line.qty - 1)}
@@ -485,13 +425,7 @@ function OrderEditModal({ order, onClose }: { order: CanteenOrder; onClose: () =
                   <button
                     key={item.id}
                     onClick={() =>
-                      addItem(live.id, {
-                        menuItemId: item.id,
-                        name: item.name,
-                        price: item.price,
-                        qty: 1,
-                        personName: forPerson || null,
-                      })
+                      addItem(live.id, { menuItemId: item.id, name: item.name, price: item.price, qty: 1 })
                     }
                     disabled={outOfStock}
                     className="text-left rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2 disabled:opacity-40"

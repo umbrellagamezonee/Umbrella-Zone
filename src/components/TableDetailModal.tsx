@@ -108,34 +108,26 @@ export function TableDetailModal({
       accumulatedMs: table.accumulatedMs,
       plannedDurationMs: table.plannedDurationMs,
     };
-    // Food tagged to a specific person (via Canteen → Edit order → "Adding
-    // for") is billed straight to them, not folded into the group's
-    // table-charge split — only untagged/shared food follows the same
-    // split as the table charge, same as every canteen item did before
-    // per-person tagging existed.
-    const taggedFood = new Map<string, number>();
-    let sharedFood = 0;
-    for (const item of order?.items ?? []) {
-      const amount = item.price * item.qty;
-      if (item.personName) taggedFood.set(item.personName, (taggedFood.get(item.personName) ?? 0) + amount);
-      else sharedFood += amount;
-    }
-    // The discount can only reduce the shared pool, never someone's own
-    // tagged food — clamp it here too (not just effectiveDiscount's own
-    // clamp against the *whole* bill) so bill.total (computed from this
-    // same discount inside createOpenBill) always lines up with what the
-    // shares below actually sum to, even when the discount is bigger than
-    // the shared pool alone.
-    const appliedDiscount = Math.min(effectiveDiscount, tableCharge + sharedFood);
-    const sharedPool = tableCharge + sharedFood - appliedDiscount;
+    // Table charge and food are billed (and so payable) separately rather
+    // than as one lump sum — discount comes off the table charge first,
+    // spilling over into food only if it's bigger than the table charge
+    // alone. Same split among `payers` either way; this just keeps the two
+    // kinds of cost visibly and individually settleable, even for a single
+    // payer.
+    const tableAfterDiscount = Math.max(0, tableCharge - effectiveDiscount);
+    const discountSpillover = Math.max(0, effectiveDiscount - tableCharge);
+    const foodAfterDiscount = Math.max(0, canteenTotal - discountSpillover);
     // A shares-based bill is needed whenever there's more than one payer, OR
-    // someone has their own tagged food to bill on top of (or instead of)
-    // the group split — a single-payer bill with no tagged food keeps the
-    // simple customerId path, unchanged from before.
-    const needsShares = payers.length > 1 || taggedFood.size > 0;
-    const sharedShares = needsShares && payers.length > 0 ? splitEqually(sharedPool, payers.map((p) => p.name)) : [];
-    const foodShares = [...taggedFood.entries()].map(([name, amount]) => ({ label: "Food", payerName: name, amount }));
-    const shares = needsShares ? [...sharedShares, ...foodShares] : undefined;
+    // there's food alongside the table charge to keep separate — a
+    // table-only single-payer bill keeps the simple customerId path.
+    const needsShares = payers.length > 1 || canteenTotal > 0;
+    const shares =
+      needsShares && payers.length > 0
+        ? [
+            ...splitEqually(tableAfterDiscount, payers.map((p) => p.name), "Table charge"),
+            ...(canteenTotal > 0 ? splitEqually(foodAfterDiscount, payers.map((p) => p.name), "Food") : []),
+          ]
+        : undefined;
     // A strict subset paying (not everyone) is the "someone else played
     // free" case — worth recording as who lost, same as before.
     const partial = payers.length > 0 && payers.length < participants.length;
@@ -151,7 +143,7 @@ export function TableDetailModal({
       canteenCharge: canteenTotal,
       canteenItems:
         order?.items.map((i) => ({ name: i.name, price: i.price, qty: i.qty, personName: i.personName ?? null })) ?? [],
-      discount: appliedDiscount,
+      discount: effectiveDiscount,
       shares,
       matchParticipants: participantNames.length > 1 ? participantNames : null,
       matchLosers: partial ? payers.map((p) => p.name) : null,
