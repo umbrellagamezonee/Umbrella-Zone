@@ -1,5 +1,5 @@
 /**
- * CueBill — Monthly Paid Bills Report
+ * CueBill — Monthly Paid Bills Report + Live Stock & Profit Report
  *
  * SETUP (one time):
  *  1. Open (or create) a Google Sheet.
@@ -7,13 +7,23 @@
  *  3. Delete whatever is in the editor, paste this whole file.
  *  4. Save (the disk icon / Ctrl+S).
  *  5. In the toolbar dropdown next to "Debug", pick `setupMonthlyTrigger`,
- *     then click ▶ Run once. Google will ask you to authorize — approve it
- *     (it needs permission to edit this sheet and to make web requests).
- *  6. Done. On the 1st of every month at 6 AM IST, a new tab appears in
- *     this sheet with last month's paid bills, totalled at the bottom.
+ *     then click ▶ Run once — approve the authorization prompt. Repeat for
+ *     `setupStockProfitTrigger`. (Two separate one-time runs, two separate
+ *     triggers — only needed once each, ever.)
+ *  6. Done:
+ *     - On the 1st of every month at 6 AM IST, a new tab appears with last
+ *       month's paid bills, totalled at the bottom.
+ *     - A "Stock & Profit" tab refreshes every hour, and also the moment
+ *       anyone opens this spreadsheet — always showing current cost price,
+ *       profit, units sold, and pending stock per item.
  *
- * To test right now without waiting for the 1st: run `generateMonthlyReport`
- * the same way (pick it in the dropdown, click ▶ Run).
+ * To test right now instead of waiting: run `generateMonthlyReport` or
+ * `updateStockProfitReport` directly (pick it in the dropdown, click ▶ Run).
+ *
+ * Note: Cost Price / Profit columns only fill in once the "cost_price"
+ * column exists on the live Supabase "menu_items" table (see
+ * supabase/migration-all-pending.sql) — until then they show "Not set",
+ * same as in the app's own Excel export.
  */
 
 // Same public URL + anon key already used by the live CueBill site — these
@@ -99,6 +109,111 @@ function setupMonthlyTrigger() {
     .onMonthDay(1)
     .atHour(6)
     .create();
+}
+
+// Live "what do we have, what did it cost, what did it make" snapshot —
+// unlike the monthly report, this has no date range: it's always the
+// current state of every menu item. Re-running replaces the sheet in
+// place (same tab every time) rather than adding a new one.
+function updateStockProfitReport() {
+  const items = fetchSupabase("menu_items", "select=*");
+  const categories = fetchSupabase("menu_categories", "select=id,name");
+  const bills = fetchSupabase("bills", "select=canteen_items&status=neq.cancelled");
+
+  const categoryNameById = {};
+  categories.forEach(function (c) { categoryNameById[c.id] = c.name; });
+
+  // Real sales per item name, cancelled bills excluded — matches the app's
+  // own Excel export so the two always agree.
+  const soldByName = {};
+  bills.forEach(function (b) {
+    (b.canteen_items || []).forEach(function (line) {
+      const entry = soldByName[line.name] || { qty: 0, revenue: 0 };
+      entry.qty += line.qty;
+      entry.revenue += line.price * line.qty;
+      soldByName[line.name] = entry;
+    });
+  });
+
+  const rows = [[
+    "Item", "Category", "Selling Price", "Cost Price", "Profit / Unit",
+    "Qty Sold", "Qty In Stock (Pending)", "Revenue", "Total Cost", "Total Profit",
+  ]];
+  let totalQty = 0, totalRevenue = 0, totalCost = 0, totalProfit = 0;
+  const seenNames = {};
+
+  items.forEach(function (i) {
+    seenNames[i.name] = true;
+    const sold = soldByName[i.name] || { qty: 0, revenue: 0 };
+    const hasCost = i.cost_price !== null && i.cost_price !== undefined;
+    const cost = hasCost ? Number(i.cost_price) : null;
+    const cogs = hasCost ? cost * sold.qty : null;
+    const profit = hasCost ? sold.revenue - cogs : null;
+    totalQty += sold.qty;
+    totalRevenue += sold.revenue;
+    if (hasCost) {
+      totalCost += cogs;
+      totalProfit += profit;
+    }
+    rows.push([
+      i.name,
+      categoryNameById[i.category_id] || "",
+      Number(i.price),
+      hasCost ? cost : "Not set",
+      hasCost ? Number(i.price) - cost : "",
+      sold.qty,
+      i.stock_qty === null || i.stock_qty === undefined ? "Not tracked" : i.stock_qty,
+      sold.revenue,
+      hasCost ? cogs : "",
+      hasCost ? profit : "",
+    ]);
+  });
+
+  // Sold under a name no longer in the current menu (renamed/deleted item)
+  // — kept so totals still match the app's Canteen Items sheet exactly.
+  Object.keys(soldByName).forEach(function (name) {
+    if (seenNames[name]) return;
+    const sold = soldByName[name];
+    totalQty += sold.qty;
+    totalRevenue += sold.revenue;
+    rows.push([name, "(removed from menu)", "", "", "", sold.qty, "", sold.revenue, "", ""]);
+  });
+
+  rows.push(["TOTAL", "", "", "", "", totalQty, "", totalRevenue, totalCost, totalProfit]);
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheetName = "Stock & Profit";
+  let sheet = ss.getSheetByName(sheetName);
+  if (!sheet) sheet = ss.insertSheet(sheetName);
+  sheet.clear();
+  sheet.getRange(1, 1, rows.length, rows[0].length).setValues(rows);
+  sheet.getRange(1, 1, 1, rows[0].length).setFontWeight("bold");
+  sheet.getRange(rows.length, 1, 1, rows[0].length).setFontWeight("bold"); // TOTAL row
+  sheet.autoResizeColumns(1, rows[0].length);
+
+  const stamp = "Last updated " + Utilities.formatDate(new Date(), "Asia/Kolkata", "dd MMM yyyy, hh:mm a") + " IST";
+  sheet.getRange(rows.length + 2, 1).setValue(stamp);
+}
+
+// Run this once from the Apps Script editor to keep Stock & Profit fresh —
+// see the setup steps at the top of this file. Refreshes hourly, and also
+// immediately whenever this spreadsheet is opened (see onOpen below).
+function setupStockProfitTrigger() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === "updateStockProfitReport") ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger("updateStockProfitReport")
+    .timeBased()
+    .everyHours(1)
+    .create();
+  updateStockProfitReport(); // fills the tab in immediately instead of waiting an hour
+}
+
+// Google calls this automatically whenever a person opens this spreadsheet
+// in the Sheets UI — keeps Stock & Profit current without waiting for the
+// next hourly run.
+function onOpen() {
+  updateStockProfitReport();
 }
 
 function fetchSupabase(table, query) {
