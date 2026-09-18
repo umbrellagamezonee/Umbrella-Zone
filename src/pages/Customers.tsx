@@ -273,24 +273,14 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
   return (
     <Modal title={customerLabel(customer, allCustomers)} onClose={onClose}>
       <div className="space-y-4">
-        <div className="space-y-2">
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-xs text-[var(--color-text-dim)] shrink-0">Name</span>
-            <input
-              value={nameInput}
-              onChange={(e) => setNameInput(e.target.value)}
-              onBlur={commitName}
-              className="flex-1 min-w-0 text-right bg-[var(--color-surface-2)] rounded-lg px-2 py-1.5 text-sm outline-none"
-            />
-          </div>
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-xs text-[var(--color-text-dim)] shrink-0">Phone</span>
-            <PhoneInput
-              value={customer.phone}
-              onChange={(v) => updateCustomer(customer.id, { phone: v })}
-              className="flex-1"
-            />
-          </div>
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs text-[var(--color-text-dim)] shrink-0">Name</span>
+          <input
+            value={nameInput}
+            onChange={(e) => setNameInput(e.target.value)}
+            onBlur={commitName}
+            className="flex-1 min-w-0 text-right bg-[var(--color-surface-2)] rounded-lg px-2 py-1.5 text-sm outline-none"
+          />
         </div>
 
         <div className="grid grid-cols-2 gap-3">
