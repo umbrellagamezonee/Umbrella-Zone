@@ -199,6 +199,13 @@ export const useOrdersStore = create<OrdersState>()(
       },
 
       removeOrder: (orderId) => {
+        const order = get().orders.find((o) => o.id === orderId);
+        // Only a billed order's items were actually sold (this is then just
+        // clearing out a stuck ticket with no bill behind it, per above) —
+        // a pending/served order never became a sale, so its items go back.
+        if (order && order.status !== "billed") {
+          for (const item of order.items) useMenuStore.getState().restock(item.menuItemId, item.qty);
+        }
         set((state) => ({ orders: state.orders.filter((o) => o.id !== orderId) }));
         pushDelete(TABLE, orderId);
       },

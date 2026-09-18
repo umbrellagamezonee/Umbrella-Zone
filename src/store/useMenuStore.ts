@@ -106,7 +106,10 @@ const itemFromRow = (row: ItemRow): MenuItem => ({
   price: Number(row.price),
   costPrice: row.cost_price != null ? Number(row.cost_price) : null,
   inStock: row.in_stock,
-  stockQty: row.stock_qty,
+  // Defensive floor — a row written before increment_stock_qty's own floor
+  // existed (two devices selling the last unit at once) could still hold a
+  // negative count; never show that as if less-than-zero stock were real.
+  stockQty: row.stock_qty != null ? Math.max(0, row.stock_qty) : null,
   lowStockThreshold: row.low_stock_threshold,
 });
 const itemToRow = (i: MenuItem): ItemRow => ({

@@ -13,10 +13,13 @@ as $$
   returning credit_balance;
 $$;
 
+-- Floored at 0 — two devices selling the last unit(s) at nearly the same
+-- moment could otherwise each independently see enough stock locally and
+-- both deduct, leaving the real count permanently negative on the server.
 create or replace function increment_stock_qty(p_id text, p_delta numeric)
 returns numeric
 language sql
 as $$
-  update menu_items set stock_qty = stock_qty + p_delta where id = p_id
+  update menu_items set stock_qty = greatest(0, stock_qty + p_delta) where id = p_id
   returning stock_qty;
 $$;
