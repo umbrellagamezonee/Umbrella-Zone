@@ -124,7 +124,7 @@ export function TableDetailModal({
       canteenCharge: canteenTotal,
       canteenItems:
         order?.items.map((i) => ({ name: i.name, price: i.price, qty: i.qty, personName: i.personName ?? null })) ?? [],
-      discount: shares ? 0 : effectiveDiscount,
+      discount: effectiveDiscount,
       shares,
       matchParticipants: participantNames.length > 1 ? participantNames : null,
       matchLosers: partial ? payers.map((p) => p.name) : null,
@@ -149,8 +149,21 @@ export function TableDetailModal({
           ? liveBill.shares.some((s) => s.status === "paid")
           : liveBill.status === "paid" || liveBill.amountPaid > 0
         : true;
-      if (!anyPaid) {
+      // Same idea for the table itself — Stop & Bill freed it up the instant
+      // it was pressed, so someone on another device could already have
+      // started a brand new session on it while this checkout screen was
+      // open. Restoring the pre-stop snapshot in that case would stomp their
+      // live session. Only safe to restore while the table's still exactly
+      // as Stop & Bill left it (available, nobody on it).
+      const liveTable = useTablesStore.getState().tables.find((t) => t.id === table.id);
+      const reoccupied = !!liveTable && (liveTable.status !== "available" || liveTable.customerId != null);
+      if (!anyPaid && !reoccupied) {
         updateTable(table.id, undo.tableSnapshot);
+        if (undo.orderId) unmarkBilled(undo.orderId);
+        deleteBill(undo.billId);
+      } else if (!anyPaid) {
+        // Table's back in use by someone else — still clean up this
+        // abandoned bill/order rather than leaving it dangling.
         if (undo.orderId) unmarkBilled(undo.orderId);
         deleteBill(undo.billId);
       }
@@ -164,6 +177,10 @@ export function TableDetailModal({
   // right away for the same players, same game, timer back at zero.
   function doRestart() {
     if (!checkoutBill?.tableId || !checkoutBill.matchParticipants?.length) return;
+    // The table could have been picked up by someone else while this bill
+    // was being paid (it's shown "available" since Stop & Bill) — never
+    // stomp a session already running on it.
+    if (table.status !== "available") return;
     const [primaryName, ...restNames] = checkoutBill.matchParticipants;
     const primary = findOrCreateCustomer({ name: primaryName, phone: "" });
     const extraCustomerIds = restNames.map((name) => findOrCreateCustomer({ name, phone: "" }).id);
@@ -365,7 +382,9 @@ export function TableDetailModal({
           onCancel={undo ? cancelCheckout : undefined}
           onSettled={() => setUndo(null)}
           onRestart={
-            checkoutBill.matchParticipants && checkoutBill.matchParticipants.length > 1
+            checkoutBill.matchParticipants &&
+            checkoutBill.matchParticipants.length > 1 &&
+            table.status === "available"
               ? doRestart
               : undefined
           }

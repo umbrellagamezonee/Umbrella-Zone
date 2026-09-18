@@ -10,7 +10,7 @@ import { useBillsStore } from "../store/useBillsStore";
 import { useOrdersStore } from "../store/useOrdersStore";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { formatMoney, formatTime, toDateInputValue, formatDateKey } from "../lib/format";
-import { billCollected, customerPendingOrders, orderTotal } from "../lib/billing";
+import { billCollectedFor, customerPendingOrders, orderTotal } from "../lib/billing";
 import { customerLabel, findCustomerByName, normalizeName } from "../lib/customerName";
 import type { Customer, Bill } from "../types";
 import { Search, Footprints, Check, ChevronRight, Wallet, Users } from "lucide-react";
@@ -241,7 +241,7 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
   // credit settlements, cancellations and trashed sessions don't.
   const isMatch = (b: Bill) => !!b.tableId && !b.deletedAt && b.status !== "cancelled";
   const totalMatches = customerBills.filter(isMatch).length;
-  const totalSpent = customerBills.reduce((sum, b) => sum + billCollected(b), 0);
+  const totalSpent = customerBills.reduce((sum, b) => sum + billCollectedFor(b, nameKey), 0);
 
   // Newest day first; bills within each day stay newest-first (customerBills
   // is already sorted that way).
@@ -356,6 +356,7 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
                   currency={currency}
                   defaultOpen={i === 0}
                   onOpenBill={setDetailBill}
+                  nameKey={nameKey}
                 />
               ))}
             </div>
@@ -437,12 +438,14 @@ function DayGroup({
   currency,
   defaultOpen,
   onOpenBill,
+  nameKey,
 }: {
   dateKey: string;
   dayBills: Bill[];
   currency: string;
   defaultOpen: boolean;
   onOpenBill: (b: Bill) => void;
+  nameKey: string;
 }) {
   const todayKey = toDateInputValue(Date.now());
   const yesterdayKey = toDateInputValue(Date.now() - 86_400_000);
@@ -455,7 +458,7 @@ function DayGroup({
 
   const counted = dayBills.filter((b) => !b.deletedAt && b.status !== "cancelled");
   const matches = counted.filter((b) => b.tableId).length;
-  const daySpent = dayBills.reduce((sum, b) => sum + billCollected(b), 0);
+  const daySpent = dayBills.reduce((sum, b) => sum + billCollectedFor(b, nameKey), 0);
 
   // What they ate that day, rolled up across every session (qty summed).
   const food = new Map<string, number>();

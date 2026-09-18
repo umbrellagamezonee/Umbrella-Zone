@@ -1,4 +1,5 @@
 import type { Bill, CanteenOrder, PaymentMethod } from "../types";
+import { normalizeName } from "./customerName";
 
 export interface BillMoney {
   cash: number;
@@ -41,24 +42,36 @@ export function billCollected(bill: Bill): number {
   return m.cash + m.upi;
 }
 
+// How much of a bill THIS specific person paid — for a split bill, only
+// their own share; for a non-split bill, the whole thing (it's entirely
+// theirs). Used for a customer's own "total spent" so splitting a table bill
+// among several people doesn't attribute the full amount to each of them.
+export function billCollectedFor(bill: Bill, payerNameKey: string): number {
+  if (!bill.shares) return billCollected(bill);
+  return bill.shares
+    .filter(
+      (s) =>
+        s.status === "paid" &&
+        s.paymentMethod &&
+        s.paymentMethod !== "credit" &&
+        normalizeName(s.payerName) === payerNameKey
+    )
+    .reduce((sum, s) => sum + s.amount, 0);
+}
+
 // Splits a bill's collected (cash+upi) total between its table and canteen
-// portions, for the POS/Canteen "today's amount" widgets. Split bills
-// attribute by each share's label; simple bills prorate by how much of the
-// total has actually been collected so far (a partial payment could be any
-// mix of the two, so this is the fairest approximation without itemizing).
+// portions, for the POS/Canteen "today's amount" widgets — prorated by the
+// bill's own table:canteen ratio against however much has actually been
+// collected so far (a partial payment, split or not, could be any mix of
+// the two, so this is the fairest approximation without itemizing).
 export function billCollectedByPart(bill: Bill): { table: number; canteen: number } {
-  if (bill.shares) {
-    let table = 0;
-    let canteen = 0;
-    for (const s of bill.shares) {
-      if (s.status !== "paid" || s.paymentMethod === "credit" || !s.paymentMethod) continue;
-      if (s.label === "Table charge") table += s.amount;
-      else canteen += s.amount;
-    }
-    return { table, canteen };
-  }
   if (bill.total <= 0) return { table: 0, canteen: 0 };
-  const paidFraction = billCollected(bill) / bill.total;
+  const collected = bill.shares
+    ? bill.shares
+        .filter((s) => s.status === "paid" && s.paymentMethod && s.paymentMethod !== "credit")
+        .reduce((sum, s) => sum + s.amount, 0)
+    : billCollected(bill);
+  const paidFraction = collected / bill.total;
   return {
     table: bill.tableCharge * paidFraction,
     canteen: bill.canteenCharge * paidFraction,

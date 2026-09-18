@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { BillingTable, TableStatus } from "../types";
-import { setupSync, pushInsert, pushUpsert, pushDelete, keepLocalOnly } from "../lib/cloudSync";
+import { setupSync, pushInsert, pushUpsert, pushUpdate, pushDelete, keepLocalOnly } from "../lib/cloudSync";
 
 const DEFAULT_SESSION_MINUTES = 60;
 
@@ -185,9 +185,13 @@ export const useTablesStore = create<TablesState>()(
         set((state) => ({
           tables: state.tables.map((t) => ({ ...t, sortOrder: orderMap.get(t.id) ?? t.sortOrder })),
         }));
-        // Every table got renumbered above, not just the swapped pair —
-        // push all of them so this order shows up the same on every device.
-        for (const t of get().tables) pushTable(t.id);
+        // Every table got renumbered above, not just the swapped pair — push
+        // all of them so this order shows up the same on every device. Only
+        // sortOrder, though (not the whole row via pushTable/pushUpsert) —
+        // otherwise this could overwrite a session someone just started or
+        // stopped on an unrelated table from another device with this
+        // device's stale local copy of it.
+        for (const t of get().tables) pushUpdate(TABLE, t.id, { sort_order: t.sortOrder });
       },
 
       removeTable: (id) => {

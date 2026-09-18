@@ -184,6 +184,21 @@ export function pushIncrement<TRow extends object>(
   });
 }
 
+// A scoped column update — touches only the given fields, unlike pushUpsert
+// which writes the whole row. Use this whenever a change only concerns a
+// few fields unrelated to the rest of the row (e.g. reordering touches every
+// table's sortOrder), so it can't clobber some other field a concurrent
+// write on the same row just changed (e.g. a session someone just started
+// on that table from another device).
+export function pushUpdate(table: string, id: string, patch: Record<string, unknown>) {
+  if (!supabase) return;
+  supabase
+    .from(table)
+    .update(patch)
+    .eq("id", id)
+    .then(({ error }) => logError("update", table, error));
+}
+
 export function pushDelete(table: string, id: string) {
   if (!supabase) return;
   supabase
