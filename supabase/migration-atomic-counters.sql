@@ -5,7 +5,7 @@
 -- an update to the network delivering requests out of order. Safe to run
 -- even if these already exist.
 
-create or replace function increment_credit_balance(p_id uuid, p_delta numeric)
+create or replace function increment_credit_balance(p_id text, p_delta numeric)
 returns numeric
 language sql
 as $$
@@ -13,7 +13,7 @@ as $$
   returning credit_balance;
 $$;
 
-create or replace function increment_stock_qty(p_id uuid, p_delta numeric)
+create or replace function increment_stock_qty(p_id text, p_delta numeric)
 returns numeric
 language sql
 as $$
