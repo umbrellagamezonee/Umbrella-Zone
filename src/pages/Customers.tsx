@@ -173,10 +173,16 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
     useCustomersStore((s) => s.customers.find((c) => c.id === initialCustomer.id)) ?? initialCustomer;
 
   const nameKey = normalizeName(customer.name);
+  // Only bills this person actually owes/paid for — not every match they
+  // happened to play in. A split "loser pays" bill's shares name the real
+  // payers; anyone playing but not in shares (they won, or paid free) never
+  // owed anything and shouldn't see it on their own profile. For a
+  // single-payer bill customerId is always the real payer (see
+  // TableDetailModal's handleStopAndBill), so that alone is enough.
   const matchesCustomer = (b: Bill) =>
-    b.customerId === customer.id ||
-    b.matchParticipants?.some((n) => normalizeName(n) === nameKey) ||
-    b.shares?.some((s) => normalizeName(s.payerName) === nameKey);
+    b.shares
+      ? b.shares.some((s) => normalizeName(s.payerName) === nameKey)
+      : b.customerId === customer.id;
 
   // Other real customers this one could be merged into — same-name profiles
   // first, since those are the accidental duplicates worth cleaning up.
@@ -497,14 +503,11 @@ function DayGroup({
                     <span className="text-[var(--color-danger)] font-normal"> · Deleted</span>
                   )}
                 </p>
-                <p className="text-xs text-[var(--color-text-dim)]">{formatTime(b.createdAt)}</p>
-                {b.matchParticipants && b.matchParticipants.length > 1 && (
-                  <p className="text-xs text-[var(--color-text-faint)] mt-0.5">
-                    {b.matchParticipants.join(" vs ")}
-                    {b.matchLosers && b.matchLosers.length > 0 &&
-                      ` · ${b.matchLosers.join(", ")} lost`}
-                  </p>
-                )}
+                <p className="text-xs text-[var(--color-text-dim)]">
+                  {b.tableId
+                    ? `${formatTime(b.createdAt - b.tableChargeMinutes * 60000)} – ${formatTime(b.createdAt)}`
+                    : formatTime(b.createdAt)}
+                </p>
                 {b.canteenItems.length > 0 && (
                   <p className="text-xs text-[var(--color-text-faint)] mt-0.5">
                     {b.canteenItems.map((i) => i.name).join(", ")}
