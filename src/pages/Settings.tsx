@@ -178,6 +178,7 @@ export function Settings() {
 function TableManagementModal({ onClose }: { onClose: () => void }) {
   const tables = useTablesStore((s) => s.tables);
   const addTable = useTablesStore((s) => s.addTable);
+  const updateTable = useTablesStore((s) => s.updateTable);
   const removeTable = useTablesStore((s) => s.removeTable);
   const moveTable = useTablesStore((s) => s.moveTable);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
@@ -202,7 +203,11 @@ function TableManagementModal({ onClose }: { onClose: () => void }) {
         {ordered.map((t, i) => (
           <Card key={t.id} className="flex items-center justify-between gap-2">
             <div className="min-w-0">
-              <p className="text-sm font-medium truncate">{t.name}</p>
+              <input
+                value={t.name}
+                onChange={(e) => updateTable(t.id, { name: e.target.value })}
+                className="w-full bg-transparent text-sm font-medium outline-none rounded px-1 -mx-1 focus:bg-[var(--color-surface-2)]"
+              />
               <p className="text-xs text-[var(--color-text-dim)]">{t.kind}</p>
             </div>
             <div className="flex items-center gap-1 shrink-0">
@@ -556,24 +561,38 @@ function MenuManagementModal({ onClose }: { onClose: () => void }) {
           const margin = item.costPrice != null ? item.price - item.costPrice : null;
           return (
             <Card key={item.id}>
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium">{item.name}</p>
-                  <p className="text-xs text-[var(--color-text-dim)]">
-                    {cat?.name} · {formatMoney(item.price, currency)}
-                    {margin != null && (
-                      <span className="text-[var(--color-success)]"> · +{formatMoney(margin, currency)} margin</span>
-                    )}
-                  </p>
-                </div>
+              <div className="flex items-center justify-between gap-2">
+                <input
+                  value={item.name}
+                  onChange={(e) => updateItem(item.id, { name: e.target.value })}
+                  className="flex-1 min-w-0 bg-transparent text-sm font-medium outline-none rounded px-1 -mx-1 focus:bg-[var(--color-surface-2)]"
+                />
                 <button
                   onClick={() => removeItem(item.id)}
-                  className="h-8 w-8 flex items-center justify-center rounded-full bg-[var(--color-danger)]/10 text-[var(--color-danger)]"
+                  className="h-8 w-8 flex items-center justify-center rounded-full bg-[var(--color-danger)]/10 text-[var(--color-danger)] shrink-0"
                 >
                   <Trash2 size={14} />
                 </button>
               </div>
+              {(cat || margin != null) && (
+                <p className="text-xs text-[var(--color-text-dim)] mt-0.5">
+                  {cat?.name}
+                  {margin != null && (
+                    <span className="text-[var(--color-success)]"> · +{formatMoney(margin, currency)} margin</span>
+                  )}
+                </p>
+              )}
               <div className="flex items-center justify-between mt-2 pt-2 border-t border-[var(--color-border)]">
+                <span className="text-xs text-[var(--color-text-dim)]">Price</span>
+                <input
+                  type="number"
+                  min={0}
+                  value={item.price}
+                  onChange={(e) => updateItem(item.id, { price: Math.max(0, Number(e.target.value) || 0) })}
+                  className="w-16 bg-[var(--color-surface-2)] rounded-lg px-2 py-1 text-sm outline-none text-right"
+                />
+              </div>
+              <div className="flex items-center justify-between mt-1.5">
                 <span className="text-xs text-[var(--color-text-dim)]">Category</span>
                 <select
                   value={item.categoryId}
