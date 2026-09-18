@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState } from "react";
 import { AppShell } from "../components/layout/AppShell";
 import { Card } from "../components/ui/Card";
 import { Modal } from "../components/ui/Modal";
@@ -9,7 +9,7 @@ import { CustomerNameInput } from "../components/ui/CustomerNameInput";
 import { useOrdersStore } from "../store/useOrdersStore";
 import { useMenuStore } from "../store/useMenuStore";
 import { useCustomersStore } from "../store/useCustomersStore";
-import { useTablesStore, orderedTables } from "../store/useTablesStore";
+import { useTablesStore } from "../store/useTablesStore";
 import { useBillsStore } from "../store/useBillsStore";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { formatMoney, toDateInputValue, formatTime } from "../lib/format";
@@ -479,22 +479,13 @@ function NewOrderModal({ onClose }: { onClose: () => void }) {
   const findOrCreateCustomer = useCustomersStore((s) => s.findOrCreateCustomer);
   const createOrder = useOrdersStore((s) => s.createOrder);
   const addItem = useOrdersStore((s) => s.addItem);
-  const getOpenOrderForTable = useOrdersStore((s) => s.getOpenOrderForTable);
-  const rawTables = useTablesStore((s) => s.tables);
-  const tables = useMemo(() => orderedTables(rawTables), [rawTables]);
   const currency = useSettingsStore((s) => s.currencySymbol);
 
   const [name, setName] = useState("");
-  const [tableId, setTableId] = useState("");
   const [note, setNote] = useState("");
   const [cart, setCart] = useState<Record<string, number>>({});
   const [itemSearch, setItemSearch] = useState("");
   const [activeCategory, setActiveCategory] = useState(categories[0]?.id ?? "");
-
-  // Food for someone already playing goes straight onto their table's tab —
-  // billed together when the session stops — instead of the customer-name
-  // flow below, which is for standalone/walk-in canteen orders.
-  const runningTables = tables.filter((t) => t.status !== "available");
 
   const setQty = (id: string, qty: number) =>
     setCart((c) => ({ ...c, [id]: Math.max(0, qty) }));
@@ -502,20 +493,15 @@ function NewOrderModal({ onClose }: { onClose: () => void }) {
   const total = menuItems.reduce((sum, i) => sum + (cart[i.id] ?? 0) * i.price, 0);
   const setNoteStore = useOrdersStore((s) => s.setNote);
 
+  // Always a standalone order under its own name/walk-in — never attached
+  // to a table, so it can never end up billed together with (and read as
+  // "merged into") someone else's table session. Food for someone actually
+  // playing at a table goes through that table's own "Edit order" instead.
   function handleSave() {
     const items = menuItems.filter((i) => (cart[i.id] ?? 0) > 0);
     if (items.length === 0) return;
-    let orderId: string;
-    if (tableId) {
-      const table = tables.find((t) => t.id === tableId);
-      const order = getOpenOrderForTable(tableId) ?? createOrder(tableId, table?.customerId ?? null);
-      orderId = order.id;
-    } else {
-      // A typed name attaches the order (and its bill) to that customer's
-      // profile — same rule as starting a table session. Blank = walk-in.
-      const customerId = name.trim() ? findOrCreateCustomer({ name: name.trim(), phone: "" }).id : "walk-in";
-      orderId = createOrder(null, customerId, null).id;
-    }
+    const customerId = name.trim() ? findOrCreateCustomer({ name: name.trim(), phone: "" }).id : "walk-in";
+    const orderId = createOrder(null, customerId, null).id;
     items.forEach((item) => {
       addItem(orderId, {
         menuItemId: item.id,
@@ -531,38 +517,16 @@ function NewOrderModal({ onClose }: { onClose: () => void }) {
   return (
     <Modal title="New order" onClose={onClose}>
       <div className="space-y-4">
-        {runningTables.length > 0 && (
-          <div>
-            <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-1.5">
-              TABLE
-            </p>
-            <select
-              value={tableId}
-              onChange={(e) => setTableId(e.target.value)}
-              className="w-full rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] px-3 py-2.5 text-sm outline-none"
-            >
-              <option value="">Not at a table (standalone order)</option>
-              {runningTables.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
-
-        {!tableId && (
-          <div>
-            <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-1.5">
-              CUSTOMER NAME
-            </p>
-            <CustomerNameInput
-              value={name}
-              onChange={setName}
-              placeholder="Name — leave blank for walk-in"
-            />
-          </div>
-        )}
+        <div>
+          <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-1.5">
+            CUSTOMER NAME
+          </p>
+          <CustomerNameInput
+            value={name}
+            onChange={setName}
+            placeholder="Name — leave blank for walk-in"
+          />
+        </div>
 
         <div className="relative">
           <Search
