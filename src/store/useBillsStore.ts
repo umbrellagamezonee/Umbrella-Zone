@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { Bill, BillCanteenItem, BillShare, PaymentMethod } from "../types";
-import { setupSync, pushInsert, pushUpsert, pushDelete, pushDeleteAll } from "../lib/cloudSync";
+import { setupSync, pushInsert, pushUpsert, pushDelete, pushDeleteAll, keepLocalOnly } from "../lib/cloudSync";
 import { useOrdersStore } from "./useOrdersStore";
 import { isToday } from "../lib/format";
 
@@ -520,11 +520,16 @@ setupSync<BillRow, Bill>(
   () => [...useBillsStore.getState().bills, ...useBillsStore.getState().deletedBills],
   (allBills) => {
     useBillsStore.setState((state) => {
-      const byId = new Map([...state.bills, ...state.deletedBills].map((b) => [b.id, b]));
+      const localAll = [...state.bills, ...state.deletedBills];
+      const byId = new Map(localAll.map((b) => [b.id, b]));
       const merged = allBills.map((b) => keepLocalPaymentSplit(b, byId.get(b.id)));
+      // A bill created in the gap between this fetch starting and resolving
+      // (typically: right after opening/reloading the app) must not vanish
+      // — see keepLocalOnly's own comment for why.
+      const full = [...merged, ...keepLocalOnly(allBills, localAll)];
       return {
-        bills: merged.filter((b) => !b.deletedAt),
-        deletedBills: merged.filter((b) => !!b.deletedAt),
+        bills: full.filter((b) => !b.deletedAt),
+        deletedBills: full.filter((b) => !!b.deletedAt),
       };
     });
   },

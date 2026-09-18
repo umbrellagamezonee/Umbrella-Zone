@@ -55,6 +55,21 @@ export function setupSync<TRow extends { id: string }, TItem>(
     .subscribe();
 }
 
+// The initial fetch is a snapshot from whenever its query ran — if a local
+// write (a brand-new row) landed in the gap between that snapshot and this
+// resolving, it would otherwise vanish the instant applyInitial replaces
+// local state with it. This is most likely right after a page load/reopen,
+// while that fetch is still in flight and someone creates an order, a
+// customer, a bill, etc. Every store's applyInitial should union its cloud
+// result with whatever's local-only (not yet in the cloud snapshot) rather
+// than blindly replacing — the next fetch or realtime event reconciles it
+// properly once the cloud catches up (or a delete elsewhere removes it for
+// real).
+export function keepLocalOnly<T extends { id: string }>(cloudItems: T[], localItems: T[]): T[] {
+  const cloudIds = new Set(cloudItems.map((i) => i.id));
+  return localItems.filter((i) => !cloudIds.has(i.id));
+}
+
 function logError(action: string, table: string, error: unknown) {
   if (error) console.error(`[cloudSync] ${action} on "${table}" failed`, error);
 }

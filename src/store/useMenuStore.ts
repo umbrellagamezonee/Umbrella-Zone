@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { MenuCategory, MenuItem } from "../types";
-import { setupSync, pushInsert, pushUpsert, pushDelete, pushDeleteAll } from "../lib/cloudSync";
+import { setupSync, pushInsert, pushUpsert, pushDelete, pushDeleteAll, keepLocalOnly } from "../lib/cloudSync";
 
 // The shop only wants exactly these three, fixed — no more freeform add/
 // remove of categories. Ids are stable strings (not random) so every device
@@ -228,7 +228,9 @@ setupSync<CategoryRow, MenuCategory>(
   catToRow,
   () => useMenuStore.getState().categories,
   (categories) => {
-    useMenuStore.setState({ categories });
+    useMenuStore.setState((state) => ({
+      categories: [...categories, ...keepLocalOnly(categories, state.categories)],
+    }));
     ensureFixedCategories();
   },
   (cat) =>
@@ -266,7 +268,10 @@ setupSync<ItemRow, MenuItem>(
   (items) => {
     useMenuStore.setState((state) => {
       const byId = new Map(state.items.map((i) => [i.id, i]));
-      return { items: items.map((i) => keepLocalCostPrice(i, byId.get(i.id))) };
+      const merged = items.map((i) => keepLocalCostPrice(i, byId.get(i.id)));
+      // An item added in the gap between this fetch starting and resolving
+      // must not vanish — same reasoning as keepLocalOnly's own comment.
+      return { items: [...merged, ...keepLocalOnly(items, state.items)] };
     });
     ensureFixedCategories();
   },

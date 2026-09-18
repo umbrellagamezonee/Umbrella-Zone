@@ -3,7 +3,7 @@ import { persist } from "zustand/middleware";
 import type { Customer } from "../types";
 import { cleanName, normalizeName } from "../lib/customerName";
 import { syncCreditLedger } from "../lib/reminderApi";
-import { setupSync, pushInsert, pushUpsert, pushDelete, pushDeleteAll } from "../lib/cloudSync";
+import { setupSync, pushInsert, pushUpsert, pushDelete, pushDeleteAll, keepLocalOnly } from "../lib/cloudSync";
 
 const walkIn: Customer = {
   id: "walk-in",
@@ -194,7 +194,18 @@ setupSync<CustomerRow, Customer>(
   fromRow,
   toRow,
   () => useCustomersStore.getState().customers.filter((c) => c.id !== "walk-in"),
-  (customers) => useCustomersStore.setState({ customers: [walkIn, ...customers] }),
+  // A customer profile created in the gap between this fetch starting and
+  // resolving (e.g. typing a name for a new order right after reload) must
+  // not vanish — losing it here is exactly what makes that order fall back
+  // to showing "Walk-in" (its customerId no longer resolves to anyone).
+  (customers) =>
+    useCustomersStore.setState((state) => ({
+      customers: [
+        walkIn,
+        ...customers,
+        ...keepLocalOnly(customers, state.customers.filter((c) => c.id !== "walk-in")),
+      ],
+    })),
   (customer) =>
     useCustomersStore.setState((state) => {
       const exists = state.customers.some((c) => c.id === customer.id);

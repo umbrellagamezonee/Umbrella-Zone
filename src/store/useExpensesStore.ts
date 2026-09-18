@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { Expense } from "../types";
-import { setupSync, pushInsert, pushDelete, pushDeleteAll } from "../lib/cloudSync";
+import { setupSync, pushInsert, pushDelete, pushDeleteAll, keepLocalOnly } from "../lib/cloudSync";
 
 interface ExpenseRow {
   id: string;
@@ -73,9 +73,11 @@ setupSync<ExpenseRow, Expense>(
   toRow,
   () => useExpensesStore.getState().expenses,
   (expenses) =>
-    useExpensesStore.setState({
-      expenses: [...expenses].sort((a, b) => b.createdAt - a.createdAt),
-    }),
+    useExpensesStore.setState((state) => ({
+      expenses: [...expenses, ...keepLocalOnly(expenses, state.expenses)].sort(
+        (a, b) => b.createdAt - a.createdAt
+      ),
+    })),
   (expense) =>
     useExpensesStore.setState((state) => {
       const exists = state.expenses.some((e) => e.id === expense.id);

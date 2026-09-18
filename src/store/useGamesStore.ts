@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { Game } from "../types";
-import { setupSync, pushInsert, pushUpsert, pushDelete } from "../lib/cloudSync";
+import { setupSync, pushInsert, pushUpsert, pushDelete, keepLocalOnly } from "../lib/cloudSync";
 
 const seedGames: Game[] = [
   { id: crypto.randomUUID(), name: "FIFA / EA FC", kind: "PlayStation", ratePerHour: 60 },
@@ -74,7 +74,10 @@ setupSync<GameRow, Game>(
   fromRow,
   toRow,
   () => useGamesStore.getState().games,
-  (games) => useGamesStore.setState({ games }),
+  (games) =>
+    useGamesStore.setState((state) => ({
+      games: [...games, ...keepLocalOnly(games, state.games)],
+    })),
   (game) =>
     useGamesStore.setState((state) => {
       const exists = state.games.some((g) => g.id === game.id);

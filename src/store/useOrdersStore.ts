@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { CanteenOrder, OrderLineItem } from "../types";
 import { useMenuStore } from "./useMenuStore";
-import { setupSync, pushInsert, pushUpsert, pushDelete, pushDeleteAll } from "../lib/cloudSync";
+import { setupSync, pushInsert, pushUpsert, pushDelete, pushDeleteAll, keepLocalOnly } from "../lib/cloudSync";
 
 interface OrderRow {
   id: string;
@@ -235,7 +235,13 @@ setupSync<OrderRow, CanteenOrder>(
   fromRow,
   toRow,
   () => useOrdersStore.getState().orders,
-  (orders) => useOrdersStore.setState({ orders }),
+  // A order created in the gap between this fetch starting and resolving
+  // (typically: right after opening/reloading the app) must not vanish —
+  // see keepLocalOnly's own comment for why.
+  (orders) =>
+    useOrdersStore.setState((state) => ({
+      orders: [...orders, ...keepLocalOnly(orders, state.orders)],
+    })),
   (order) =>
     useOrdersStore.setState((state) => {
       const exists = state.orders.some((o) => o.id === order.id);

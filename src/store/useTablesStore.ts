@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { BillingTable, TableStatus } from "../types";
-import { setupSync, pushInsert, pushUpsert, pushDelete } from "../lib/cloudSync";
+import { setupSync, pushInsert, pushUpsert, pushDelete, keepLocalOnly } from "../lib/cloudSync";
 
 const DEFAULT_SESSION_MINUTES = 60;
 
@@ -331,16 +331,15 @@ setupSync<TableRow, BillingTable>(
     useTablesStore.setState((state) => {
       const byId = new Map(state.tables.map((t) => [t.id, t]));
       const maxLocal = state.tables.reduce((m, t) => Math.max(m, t.sortOrder), -1);
-      return {
-        tables: tables.map((t, i) => {
-          const merged = keepLocalSortOrder(t, byId.get(t.id));
-          // Neither this device nor the cloud has a real order for it — new
-          // table, seed it in at the end instead of leaving the sentinel.
-          return merged.sortOrder === Number.MAX_SAFE_INTEGER
-            ? { ...merged, sortOrder: maxLocal + 1 + i }
-            : merged;
-        }),
-      };
+      const merged = tables.map((t, i) => {
+        const m = keepLocalSortOrder(t, byId.get(t.id));
+        // Neither this device nor the cloud has a real order for it — new
+        // table, seed it in at the end instead of leaving the sentinel.
+        return m.sortOrder === Number.MAX_SAFE_INTEGER ? { ...m, sortOrder: maxLocal + 1 + i } : m;
+      });
+      // A table added in the gap between this fetch starting and resolving
+      // must not vanish — same reasoning as keepLocalOnly's own comment.
+      return { tables: [...merged, ...keepLocalOnly(tables, state.tables)] };
     }),
   (table) =>
     useTablesStore.setState((state) => {
