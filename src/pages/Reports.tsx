@@ -283,7 +283,7 @@ export function Reports() {
         <input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search table, note, amount, customer"
+          placeholder="Search table, customer, players"
           className="w-full rounded-xl bg-[var(--color-surface)] border border-[var(--color-border)] pl-9 pr-10 py-2.5 text-sm outline-none focus:border-[var(--color-primary)]"
         />
         <button

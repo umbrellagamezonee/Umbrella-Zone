@@ -7,6 +7,7 @@ import {
   setupSync,
   pushInsert,
   pushUpsert,
+  pushUpdate,
   pushIncrement,
   pushDelete,
   pushDeleteAll,
@@ -167,7 +168,20 @@ export const useCustomersStore = create<CustomersState>()(
           phone: merged.phone,
           amountDue: merged.creditBalance,
         });
-        pushUpsert(TABLE, toRow(merged));
+        // Credit moves via the same atomic "+= delta" as adjustCredit —
+        // pushing the merged total as an absolute snapshot could otherwise
+        // race with some other credit change to the target landing at the
+        // same moment and clobber it (the exact bug adjustCredit itself
+        // already had to be fixed for).
+        pushUpdate(TABLE, targetId, { phone: merged.phone, email: merged.email });
+        if (source.creditBalance !== 0) {
+          pushIncrement(
+            "increment_credit_balance",
+            { p_id: targetId, p_delta: source.creditBalance },
+            TABLE,
+            toRow(merged)
+          );
+        }
         pushDelete(TABLE, sourceId);
       },
 
