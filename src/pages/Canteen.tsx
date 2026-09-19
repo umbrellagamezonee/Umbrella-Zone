@@ -351,6 +351,7 @@ function OrderEditModal({ order, onClose }: { order: CanteenOrder; onClose: () =
   const setNote = useOrdersStore((s) => s.setNote);
   const currency = useSettingsStore((s) => s.currencySymbol);
   const [activeCategory, setActiveCategory] = useState(categories[0]?.id ?? "");
+  const [itemSearch, setItemSearch] = useState("");
 
   const live = orders.find((o) => o.id === order.id) ?? order;
   const total = live.items.reduce((sum, i) => sum + i.price * i.qty, 0);
@@ -400,49 +401,72 @@ function OrderEditModal({ order, onClose }: { order: CanteenOrder; onClose: () =
           <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-2">
             ADD ITEM
           </p>
-          <div className="flex gap-2 mb-3">
-            {categories.map((cat) => (
-              <button
-                key={cat.id}
-                onClick={() => setActiveCategory(cat.id)}
-                className={
-                  "flex-1 rounded-full px-3 py-1.5 text-sm font-medium " +
-                  (activeCategory === cat.id
-                    ? "bg-[var(--color-primary)] text-white"
-                    : "bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[var(--color-text-dim)]")
-                }
-              >
-                {cat.name}
-              </button>
-            ))}
+          <div className="relative mb-3">
+            <Search
+              size={15}
+              className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-text-faint)]"
+            />
+            <input
+              value={itemSearch}
+              onChange={(e) => setItemSearch(e.target.value)}
+              placeholder="Search menu..."
+              className="w-full rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] pl-9 pr-3 py-2.5 text-sm outline-none"
+            />
           </div>
-          <div className="grid grid-cols-2 gap-2">
-            {menuItems
-              .filter((i) => i.categoryId === activeCategory)
-              .map((item) => {
-                const outOfStock = item.stockQty != null && item.stockQty <= 0;
-                return (
-                  <button
-                    key={item.id}
-                    onClick={() =>
-                      addItem(live.id, { menuItemId: item.id, name: item.name, price: item.price, qty: 1 })
-                    }
-                    disabled={outOfStock}
-                    className="text-left rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2 disabled:opacity-40"
-                  >
-                    <p className="text-sm font-medium">{item.name}</p>
-                    <p className="text-xs text-[var(--color-text-dim)]">
-                      {outOfStock ? "Out of stock" : formatMoney(item.price, currency)}
-                    </p>
-                  </button>
-                );
-              })}
-            {menuItems.filter((i) => i.categoryId === activeCategory).length === 0 && (
-              <p className="col-span-2 text-sm text-[var(--color-text-faint)] text-center py-4">
-                No items in this category yet.
-              </p>
-            )}
-          </div>
+          {!itemSearch.trim() && (
+            <div className="flex gap-2 mb-3">
+              {categories.map((cat) => (
+                <button
+                  key={cat.id}
+                  onClick={() => setActiveCategory(cat.id)}
+                  className={
+                    "flex-1 rounded-full px-3 py-1.5 text-sm font-medium " +
+                    (activeCategory === cat.id
+                      ? "bg-[var(--color-primary)] text-white"
+                      : "bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[var(--color-text-dim)]")
+                  }
+                >
+                  {cat.name}
+                </button>
+              ))}
+            </div>
+          )}
+          {(() => {
+            const filteredMenuItems = menuItems.filter((i) =>
+              itemSearch.trim()
+                ? i.name.toLowerCase().includes(itemSearch.trim().toLowerCase())
+                : i.categoryId === activeCategory
+            );
+            if (filteredMenuItems.length === 0) {
+              return (
+                <p className="text-sm text-[var(--color-text-faint)] text-center py-4">
+                  {itemSearch.trim() ? `No items match "${itemSearch.trim()}"` : "No items in this category yet."}
+                </p>
+              );
+            }
+            return (
+              <div className="grid grid-cols-2 gap-2">
+                {filteredMenuItems.map((item) => {
+                  const outOfStock = item.stockQty != null && item.stockQty <= 0;
+                  return (
+                    <button
+                      key={item.id}
+                      onClick={() =>
+                        addItem(live.id, { menuItemId: item.id, name: item.name, price: item.price, qty: 1 })
+                      }
+                      disabled={outOfStock}
+                      className="text-left rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2 disabled:opacity-40"
+                    >
+                      <p className="text-sm font-medium">{item.name}</p>
+                      <p className="text-xs text-[var(--color-text-dim)]">
+                        {outOfStock ? "Out of stock" : formatMoney(item.price, currency)}
+                      </p>
+                    </button>
+                  );
+                })}
+              </div>
+            );
+          })()}
         </div>
 
         <div>

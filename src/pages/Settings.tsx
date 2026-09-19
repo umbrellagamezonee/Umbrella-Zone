@@ -33,6 +33,7 @@ import {
   Sun,
   AlertTriangle,
   FileSpreadsheet,
+  Search,
 } from "lucide-react";
 
 type Panel =
@@ -464,6 +465,9 @@ function MenuManagementModal({ onClose }: { onClose: () => void }) {
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<{ added: number; skipped: number } | null>(null);
   const [importError, setImportError] = useState("");
+  const [search, setSearch] = useState("");
+
+  const filteredItems = items.filter((i) => i.name.toLowerCase().includes(search.trim().toLowerCase()));
 
   function handleAddItem() {
     if (!name.trim() || !categoryId) return;
@@ -555,8 +559,25 @@ function MenuManagementModal({ onClose }: { onClose: () => void }) {
 
   return (
     <Modal title="Menu Management" onClose={onClose}>
+      <div className="relative mb-3">
+        <Search
+          size={15}
+          className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-text-faint)]"
+        />
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search items..."
+          className="w-full rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] pl-9 pr-3 py-2.5 text-sm outline-none focus:border-[var(--color-primary)]"
+        />
+      </div>
       <div className="space-y-2 mb-4 max-h-64 overflow-y-auto">
-        {items.map((item) => {
+        {filteredItems.length === 0 && (
+          <p className="text-sm text-[var(--color-text-faint)] text-center py-4">
+            No items match "{search}".
+          </p>
+        )}
+        {filteredItems.map((item) => {
           const cat = categories.find((c) => c.id === item.categoryId);
           const low = item.stockQty != null && item.stockQty <= item.lowStockThreshold;
           const margin = item.costPrice != null ? item.price - item.costPrice : null;
