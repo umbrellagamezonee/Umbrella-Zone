@@ -9,10 +9,11 @@ import { useCustomersStore } from "../store/useCustomersStore";
 import { useBillsStore } from "../store/useBillsStore";
 import { useOrdersStore } from "../store/useOrdersStore";
 import { useSettingsStore } from "../store/useSettingsStore";
-import { formatMoney, formatTime, toDateInputValue, formatDateKey } from "../lib/format";
+import { formatMoney, formatDateTime } from "../lib/format";
 import { billCollectedFor, customerPendingOrders, orderTotal, personBillView } from "../lib/billing";
 import { cleanName, customerLabel, findCustomerByName, normalizeName } from "../lib/customerName";
-import type { Customer, Bill } from "../types";
+import { isCreditSettlement } from "../lib/billLabel";
+import type { Customer, Bill, CanteenOrder } from "../types";
 import { Search, Footprints, Check, ChevronRight, Wallet, Users } from "lucide-react";
 
 // Plain day-to-day directory — look someone up, add a new profile, open
@@ -145,10 +146,87 @@ export function Customers() {
   );
 }
 
-// Everything this one customer has done, grouped by day — each day shows how
-// many matches they played, what they spent and what they ate, with every
-// session tappable for the full breakdown. Answers "how often do they come in,
-// what do they usually order" at a glance instead of scrolling through Reports.
+interface LedgerEntry {
+  id: string;
+  date: number;
+  particulars: string;
+  debit: number; // charged onto their running balance
+  credit: number; // paid off their running balance
+  paidNow: boolean; // settled in cash/account on the spot — never touched the balance at all
+  balanceAfter: number;
+  bill: Bill | null; // set for anything tappable through to the full receipt
+  order: CanteenOrder | null; // set only for a still-pending (unbilled) order
+}
+
+// One running-balance account for this customer — every bill that's ever
+// touched their credit, plus whatever's served but not yet billed, in
+// time order. Processed oldest-first so the balance accumulates correctly
+// (a credit settlement pays down exactly what came before it), then handed
+// back newest-first to display, each row keeping the balance as it stood
+// right after that entry.
+function buildLedger(customerBills: Bill[], pendingOrders: CanteenOrder[], nameKey: string): LedgerEntry[] {
+  type RawEvent =
+    | { date: number; kind: "bill"; bill: Bill }
+    | { date: number; kind: "pending"; order: CanteenOrder };
+  const rawEvents: RawEvent[] = [
+    ...customerBills.map((b): RawEvent => ({ date: b.createdAt, kind: "bill", bill: b })),
+    ...pendingOrders.map((o): RawEvent => ({ date: o.createdAt, kind: "pending", order: o })),
+  ].sort((a, b) => a.date - b.date);
+
+  let balance = 0;
+  const entries = rawEvents.map((ev): LedgerEntry => {
+    if (ev.kind === "pending") {
+      const amount = orderTotal(ev.order);
+      balance += amount;
+      return {
+        id: `pending-${ev.order.id}`,
+        date: ev.date,
+        particulars: "Pending order",
+        debit: amount,
+        credit: 0,
+        paidNow: false,
+        balanceAfter: balance,
+        bill: null,
+        order: ev.order,
+      };
+    }
+    const b = ev.bill;
+    if (isCreditSettlement(b)) {
+      const amount = b.amountPaid + b.discount;
+      balance -= amount;
+      return {
+        id: b.id,
+        date: b.createdAt,
+        particulars: "Credit settled",
+        debit: 0,
+        credit: amount,
+        paidNow: false,
+        balanceAfter: balance,
+        bill: b,
+        order: null,
+      };
+    }
+    const view = personBillView(b, nameKey);
+    if (view.onCredit > 0) balance += view.onCredit;
+    return {
+      id: b.id,
+      date: b.createdAt,
+      particulars: b.tableName ?? "Canteen order",
+      debit: view.onCredit,
+      credit: 0,
+      paidNow: view.onCredit === 0,
+      balanceAfter: balance,
+      bill: b,
+      order: null,
+    };
+  });
+
+  return entries.reverse();
+}
+
+// Every bill/order that's touched this customer, in ledger form — date,
+// particulars, amount, running balance — instead of separate "pending"
+// cards and day-grouped history cards.
 export function CustomerDetailModal({ customer: initialCustomer, onClose }: { customer: Customer; onClose: () => void }) {
   const bills = useBillsStore((s) => s.bills);
   // Deleted bills too — a credit balance doesn't get reversed when the bill
@@ -260,15 +338,13 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
   const totalMatches = customerBills.filter(isMatch).length;
   const totalSpent = customerBills.reduce((sum, b) => sum + billCollectedFor(b, nameKey), 0);
 
-  // Newest day first; bills within each day stay newest-first (customerBills
-  // is already sorted that way).
-  const dayGroups: [string, Bill[]][] = [];
-  for (const b of customerBills) {
-    const key = toDateInputValue(b.createdAt);
-    const existing = dayGroups.find(([k]) => k === key);
-    if (existing) existing[1].push(b);
-    else dayGroups.push([key, [b]]);
-  }
+  // A running-balance ledger — every bill that's ever touched this
+  // customer's credit, plus whatever's served but not yet billed, in one
+  // time-ordered account instead of separate "pending" cards and
+  // day-grouped history. Built oldest-first so the balance accumulates
+  // correctly, then shown newest-first (each row keeps the balance as it
+  // stood right after that entry).
+  const ledgerEntries = buildLedger(customerBills, pendingOrders, nameKey);
 
   return (
     <Modal title={customerLabel(customer, allCustomers)} onClose={onClose}>
@@ -333,59 +409,83 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
           </Card>
         )}
 
-        {pendingOrders.length > 0 && (
-          <div>
-            <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-2">
-              PENDING ORDERS
-            </p>
-            <div className="space-y-2">
-              {pendingOrders.map((order) => {
-                const total = orderTotal(order);
-                return (
-                  <Card key={order.id} className="border-[var(--color-warning)]/40">
-                    <div className="flex items-center justify-between gap-2">
-                      <div>
-                        <p className="text-sm">Pending order</p>
-                        <p className="text-xs text-[var(--color-text-dim)] mt-0.5">
-                          {formatTime(order.createdAt)}
-                        </p>
-                      </div>
-                      <p className="text-sm font-semibold shrink-0">{formatMoney(total, currency)}</p>
-                    </div>
-                    <button
-                      onClick={() => handleBillOrder(order)}
-                      className="mt-2 w-full flex items-center justify-center gap-2 rounded-xl bg-[var(--color-primary)] text-white text-sm font-medium py-2"
-                    >
-                      <Wallet size={14} /> Bill this order
-                    </button>
-                  </Card>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
         <div>
           <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-2">
-            HISTORY
+            LEDGER
           </p>
-          {dayGroups.length === 0 ? (
+          {ledgerEntries.length === 0 ? (
             <p className="text-sm text-[var(--color-text-faint)] text-center py-6">
               No sessions yet.
             </p>
           ) : (
-            <div className="space-y-2">
-              {dayGroups.map(([dateKey, dayBills], i) => (
-                <DayGroup
-                  key={dateKey}
-                  dateKey={dateKey}
-                  dayBills={dayBills}
-                  currency={currency}
-                  defaultOpen={i === 0}
-                  onOpenBill={setDetailBill}
-                  nameKey={nameKey}
-                />
-              ))}
+            <div className="rounded-xl border border-[var(--color-border)] overflow-hidden">
+              <div className="grid grid-cols-[1fr,auto,auto] gap-2 px-3 py-2 bg-[var(--color-surface-2)]">
+                <span className="text-[10px] font-semibold tracking-wide text-[var(--color-text-dim)]">
+                  PARTICULARS
+                </span>
+                <span className="text-[10px] font-semibold tracking-wide text-[var(--color-text-dim)] text-right">
+                  AMOUNT
+                </span>
+                <span className="text-[10px] font-semibold tracking-wide text-[var(--color-text-dim)] text-right">
+                  BALANCE
+                </span>
+              </div>
+              {ledgerEntries.map((entry) => {
+                const dimmed = entry.bill && (entry.bill.deletedAt || entry.bill.status === "cancelled");
+                return (
+                  <div
+                    key={entry.id}
+                    onClick={entry.bill ? () => setDetailBill(entry.bill!) : undefined}
+                    className={
+                      "grid grid-cols-[1fr,auto,auto] gap-2 px-3 py-2.5 border-t border-[var(--color-border)] items-center " +
+                      (entry.bill ? "cursor-pointer active:bg-[var(--color-surface-2)] " : "") +
+                      (dimmed ? "opacity-50" : "")
+                    }
+                  >
+                    <div className="min-w-0">
+                      <p className="text-sm truncate">
+                        {entry.particulars}
+                        {entry.bill?.deletedAt && (
+                          <span className="text-[var(--color-danger)] font-normal"> · Deleted</span>
+                        )}
+                        {entry.bill?.status === "cancelled" && (
+                          <span className="text-[var(--color-text-faint)] font-normal"> · Cancelled</span>
+                        )}
+                      </p>
+                      <p className="text-xs text-[var(--color-text-faint)]">{formatDateTime(entry.date)}</p>
+                    </div>
+                    <div className="text-right shrink-0">
+                      {entry.debit > 0 ? (
+                        <span className="text-sm text-[var(--color-warning)]">
+                          +{formatMoney(entry.debit, currency)}
+                        </span>
+                      ) : entry.credit > 0 ? (
+                        <span className="text-sm text-[var(--color-success)]">
+                          −{formatMoney(entry.credit, currency)}
+                        </span>
+                      ) : (
+                        <span className="text-xs text-[var(--color-text-faint)]">Paid</span>
+                      )}
+                    </div>
+                    <span className="text-sm font-semibold text-right shrink-0">
+                      {formatMoney(entry.balanceAfter, currency)}
+                    </span>
+                    {entry.order && (
+                      <div className="col-span-3 mt-1">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleBillOrder(entry.order!);
+                          }}
+                          className="w-full flex items-center justify-center gap-1.5 rounded-lg bg-[var(--color-primary)]/15 text-[var(--color-primary)] text-xs font-medium py-1.5"
+                        >
+                          <Wallet size={12} /> Bill this order
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
@@ -453,102 +553,6 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
         </Modal>
       )}
     </Modal>
-  );
-}
-
-// One collapsible day inside a customer's history: a header with the match
-// count and what they spent, then the food they had that day and every
-// session, each tappable for the full bill.
-function DayGroup({
-  dateKey,
-  dayBills,
-  currency,
-  defaultOpen,
-  onOpenBill,
-  nameKey,
-}: {
-  dateKey: string;
-  dayBills: Bill[];
-  currency: string;
-  defaultOpen: boolean;
-  onOpenBill: (b: Bill) => void;
-  nameKey: string;
-}) {
-  const todayKey = toDateInputValue(Date.now());
-  const yesterdayKey = toDateInputValue(Date.now() - 86_400_000);
-  const label =
-    dateKey === todayKey
-      ? "Today"
-      : dateKey === yesterdayKey
-        ? "Yesterday"
-        : formatDateKey(dateKey, { weekday: "short", day: "numeric", month: "short" });
-
-  const counted = dayBills.filter((b) => !b.deletedAt && b.status !== "cancelled");
-  const matches = counted.filter((b) => b.tableId).length;
-  const daySpent = dayBills.reduce((sum, b) => sum + billCollectedFor(b, nameKey), 0);
-
-  return (
-    <details open={defaultOpen} className="rounded-xl bg-[var(--color-surface-2)] overflow-hidden">
-      <summary className="flex items-center justify-between gap-2 px-3 py-2.5 cursor-pointer select-none list-none">
-        <span className="flex items-center gap-2">
-          <span className="text-sm font-semibold">{label}</span>
-          <span className="text-xs rounded-full bg-[var(--color-primary)]/15 text-[var(--color-primary)] px-2 py-0.5">
-            {matches} {matches === 1 ? "match" : "matches"}
-          </span>
-        </span>
-        <span className="text-sm font-semibold">{formatMoney(daySpent, currency)}</span>
-      </summary>
-      <div className="px-3 pb-3 space-y-2">
-        {dayBills.map((b) => {
-          // What THIS person owes/paid from this bill — not the whole
-          // group's total, which a split table bill would otherwise show
-          // in full on every single payer's own history.
-          const view = personBillView(b, nameKey);
-          return (
-            <Card
-              key={b.id}
-              onClick={() => onOpenBill(b)}
-              className={b.status === "cancelled" || b.deletedAt ? "opacity-50" : ""}
-            >
-              <div className="flex items-center justify-between gap-2">
-                <div>
-                  <p className="text-sm font-medium">
-                    {b.tableName ?? "Canteen order"}
-                    {b.deletedAt && (
-                      <span className="text-[var(--color-danger)] font-normal"> · Deleted</span>
-                    )}
-                  </p>
-                  <p className="text-xs text-[var(--color-text-dim)]">
-                    {b.tableId
-                      ? `${formatTime(b.createdAt - b.tableChargeMinutes * 60000)} – ${formatTime(b.createdAt)}`
-                      : formatTime(b.createdAt)}
-                  </p>
-                </div>
-                <div className="text-right shrink-0">
-                  <p className="text-sm font-semibold">{formatMoney(view.total, currency)}</p>
-                  {b.status !== "cancelled" && view.paidFully && (
-                    <p className="text-xs text-[var(--color-success)] flex items-center gap-1 justify-end">
-                      <Check size={11} /> Paid
-                    </p>
-                  )}
-                  {view.onCredit > 0 && (
-                    <p className="text-xs text-[var(--color-warning)]">
-                      {formatMoney(view.onCredit, currency)} on credit
-                    </p>
-                  )}
-                  {view.pending && view.onCredit === 0 && b.status !== "cancelled" && (
-                    <p className="text-xs text-[var(--color-warning)]">Open</p>
-                  )}
-                  {b.status === "cancelled" && (
-                    <p className="text-xs text-[var(--color-text-faint)]">Cancelled</p>
-                  )}
-                </div>
-              </div>
-            </Card>
-          );
-        })}
-      </div>
-    </details>
   );
 }
 
