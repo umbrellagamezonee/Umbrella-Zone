@@ -7,10 +7,9 @@ import { CustomerNameInput } from "./ui/CustomerNameInput";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { formatMoney } from "../lib/format";
 import type { Bill } from "../types";
-import { QRCodeSVG } from "qrcode.react";
 import { Check, ArrowLeft, Repeat } from "lucide-react";
 
-type CheckoutStep = "select" | "upi-qr" | "success";
+type CheckoutStep = "select" | "success";
 
 interface CheckoutProps {
   bill: Bill;
@@ -44,8 +43,6 @@ export function CheckoutModal({ bill, onDone, onCancel, onSettled, onRestart }: 
 
 export function Checkout({ bill, onDone, onCancel, onSettled, onRestart }: CheckoutProps) {
   const currency = useSettingsStore((s) => s.currencySymbol);
-  const storeName = useSettingsStore((s) => s.storeName);
-  const upiId = useSettingsStore((s) => s.upiId);
   const settlePayment = useBillsStore((s) => s.settlePayment);
   const customers = useCustomersStore((s) => s.customers);
   const findOrCreateCustomer = useCustomersStore((s) => s.findOrCreateCustomer);
@@ -53,42 +50,29 @@ export function Checkout({ bill, onDone, onCancel, onSettled, onRestart }: Check
 
   const billCustomer = customers.find((c) => c.id === bill.customerId) ?? null;
   const isRegistered = !!billCustomer && !billCustomer.isWalkIn;
-  // Table/game sessions always settle to credit here — no on-the-spot
-  // cash/account collection, just the one action. Canteen bills are
-  // unaffected and keep the full cash/account/confirm flow below.
-  const isTableBill = !!bill.tableId;
+  // Every bill — table or canteen — settles straight to credit here. No
+  // on-the-spot cash/account collection at all; that happens later from the
+  // customer's own profile (Settle payment), so nobody has to stop and
+  // handle cash mid-session or mid-counter.
+  const needsContact = !isRegistered;
 
   const [step, setStep] = useState<CheckoutStep>("select");
-  const [cashInput, setCashInput] = useState(bill.total.toFixed(2));
-  const [accountInput, setAccountInput] = useState("0");
   const [payerName, setPayerName] = useState(
     billCustomer && !billCustomer.isWalkIn ? billCustomer.name : ""
   );
-  const [settled, setSettled] = useState<{
-    amountCash: number;
-    amountUpi: number;
-    amountDue: number;
-    creditTo: string | null;
-  } | null>(null);
+  const [settled, setSettled] = useState<{ creditTo: string | null } | null>(null);
   const [error, setError] = useState("");
 
-  const cash = Math.min(Math.max(0, Number(cashInput) || 0), bill.total);
-  const account = Math.min(Math.max(0, Number(accountInput) || 0), Math.max(0, bill.total - cash));
-  const amountPaid = cash + account;
-  const creditPortion = Math.round((bill.total - amountPaid) * 100) / 100;
-  const needsContact = !isRegistered;
-
-  function finalize(cashAmt: number, accountAmt: number) {
-    const paidNow = cashAmt + accountAmt;
-    const due = Math.round((bill.total - paidNow) * 100) / 100;
+  function handleConfirm() {
+    if (needsContact && !payerName.trim()) {
+      setError("Enter a name so this balance can be tracked.");
+      return;
+    }
+    setError("");
     let creditCustomerId = bill.customerId;
     let creditCustomerName = billCustomer?.name ?? null;
 
-    if (due > 0 && !isRegistered) {
-      if (!payerName.trim()) {
-        setError("Enter a name so this balance can be tracked.");
-        return;
-      }
+    if (!isRegistered) {
       // Matches an existing customer by name so the same person's credit
       // keeps landing on one profile instead of splintering into duplicates.
       const c = findOrCreateCustomer({ name: payerName.trim(), phone: "" });
@@ -96,56 +80,26 @@ export function Checkout({ bill, onDone, onCancel, onSettled, onRestart }: Check
       creditCustomerName = c.name;
     }
 
-    setError("");
-    const updated = settlePayment(bill.id, { amountCash: cashAmt, amountUpi: accountAmt });
-    if (updated && due > 0 && creditCustomerId) {
-      adjustCredit(creditCustomerId, due);
+    const updated = settlePayment(bill.id, { amountCash: 0, amountUpi: 0 });
+    if (updated && bill.total > 0 && creditCustomerId) {
+      adjustCredit(creditCustomerId, bill.total);
     }
     onSettled?.();
-    setSettled({
-      amountCash: cashAmt,
-      amountUpi: accountAmt,
-      amountDue: due,
-      creditTo: due > 0 ? creditCustomerName : null,
-    });
+    setSettled({ creditTo: bill.total > 0 ? creditCustomerName : null });
     setStep("success");
   }
 
-  function handleConfirm() {
-    if (needsContact && creditPortion > 0 && !payerName.trim()) {
-      setError("Enter a name so this balance can be tracked.");
-      return;
-    }
-    setError("");
-    if (account > 0 && upiId) setStep("upi-qr");
-    else finalize(cash, account);
-  }
-
-  const upiUri = `upi://pay?pa=${encodeURIComponent(upiId)}&pn=${encodeURIComponent(
-    storeName
-  )}&am=${account.toFixed(2)}&cu=INR&tn=${encodeURIComponent(bill.tableName ?? "Bill")}`;
-
   if (step === "success" && settled) {
-    const paidNow = settled.amountCash + settled.amountUpi;
     return (
       <div className="space-y-4 py-4 text-center">
         <div className="mx-auto h-16 w-16 rounded-full bg-[var(--color-success)]/15 text-[var(--color-success)] flex items-center justify-center">
           <Check size={32} />
         </div>
         <div>
-          {paidNow > 0 && <p className="text-2xl font-bold">{formatMoney(paidNow, currency)}</p>}
-          <p className="text-sm text-[var(--color-text-dim)] mt-1">
-            {settled.amountCash > 0 && settled.amountUpi > 0
-              ? `${formatMoney(settled.amountCash, currency)} cash + ${formatMoney(settled.amountUpi, currency)} account`
-              : settled.amountUpi > 0
-              ? "Received via Account"
-              : settled.amountCash > 0
-              ? "Received via Cash"
-              : "Fully on credit"}
-          </p>
-          {settled.amountDue > 0 && (
+          <p className="text-sm text-[var(--color-text-dim)] mt-1">Fully on credit</p>
+          {settled.creditTo && (
             <p className="text-sm text-[var(--color-warning)] mt-2">
-              {formatMoney(settled.amountDue, currency)} added to {settled.creditTo ?? "customer"}'s credit
+              {formatMoney(bill.total, currency)} added to {settled.creditTo}'s credit
             </p>
           )}
         </div>
@@ -163,35 +117,6 @@ export function Checkout({ bill, onDone, onCancel, onSettled, onRestart }: Check
             <Repeat size={15} /> Restart same session
           </button>
         )}
-      </div>
-    );
-  }
-
-  if (step === "upi-qr") {
-    return (
-      <div className="space-y-4">
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setStep("select")}
-            className="h-8 w-8 flex items-center justify-center rounded-full bg-[var(--color-surface-2)]"
-          >
-            <ArrowLeft size={14} />
-          </button>
-          <p className="text-sm text-[var(--color-text-dim)]">Scan to pay</p>
-        </div>
-        <Card className="flex flex-col items-center gap-3 py-6">
-          <div className="rounded-xl bg-white p-3">
-            <QRCodeSVG value={upiUri} size={200} />
-          </div>
-          <p className="text-2xl font-bold">{formatMoney(account, currency)}</p>
-          <p className="text-xs text-[var(--color-text-dim)]">Pay to {storeName}</p>
-        </Card>
-        <button
-          onClick={() => finalize(cash, account)}
-          className="w-full rounded-xl bg-[var(--color-success)]/15 text-[var(--color-success)] font-semibold py-3"
-        >
-          Payment received
-        </button>
       </div>
     );
   }
@@ -242,79 +167,20 @@ export function Checkout({ bill, onDone, onCancel, onSettled, onRestart }: Check
         </div>
       </Card>
 
-      {!isTableBill && (
-        <>
-          <div className="flex items-center justify-between">
-            <span className="text-sm text-[var(--color-text-dim)]">Cash</span>
-            <input
-              type="number"
-              min={0}
-              max={bill.total}
-              value={cashInput}
-              onChange={(e) => setCashInput(e.target.value)}
-              className="w-24 text-right bg-[var(--color-surface-2)] rounded-lg px-2 py-1.5 text-sm outline-none"
-            />
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="text-sm text-[var(--color-text-dim)]">Account (UPI)</span>
-            <input
-              type="number"
-              min={0}
-              max={Math.max(0, bill.total - cash)}
-              value={accountInput}
-              onChange={(e) => setAccountInput(e.target.value)}
-              className="w-24 text-right bg-[var(--color-surface-2)] rounded-lg px-2 py-1.5 text-sm outline-none"
-            />
-          </div>
-
-          {creditPortion > 0 && (
-            <p className="text-xs text-[var(--color-warning)] -mt-2">
-              {formatMoney(creditPortion, currency)} will be added to{" "}
-              {isRegistered ? `${billCustomer!.name}'s` : "their"} credit.
-            </p>
-          )}
-
-          {needsContact && (
-            <div className="space-y-2">
-              <p className="text-xs text-[var(--color-text-faint)]">
-                Only needed if you're leaving any balance unpaid. Same name reuses their existing
-                credit profile.
-              </p>
-              <CustomerNameInput value={payerName} onChange={setPayerName} placeholder="Name" />
-            </div>
-          )}
-
-          {error && <p className="text-xs text-[var(--color-danger)] -mt-2">{error}</p>}
-
-          <button
-            onClick={handleConfirm}
-            className="w-full rounded-xl bg-[var(--color-primary)] text-white font-semibold py-3"
-          >
-            Confirm payment
-          </button>
-          {account > 0 && !upiId && (
-            <p className="text-xs text-[var(--color-text-faint)] text-center -mt-2">
-              Add a UPI ID in Settings → Store Settings to show a scannable QR code.
-            </p>
-          )}
-        </>
+      {needsContact && (
+        <div className="space-y-2">
+          <p className="text-xs text-[var(--color-text-faint)]">
+            Whose credit should this go on? Same name reuses their existing profile.
+          </p>
+          <CustomerNameInput value={payerName} onChange={setPayerName} placeholder="Name" />
+        </div>
       )}
+
+      {error && <p className="text-xs text-[var(--color-danger)] -mt-2">{error}</p>}
+
       <button
-        onClick={() => {
-          setCashInput("0");
-          setAccountInput("0");
-          if (needsContact && !payerName.trim()) {
-            setError("Enter a name so this balance can be tracked.");
-            return;
-          }
-          setError("");
-          finalize(0, 0);
-        }}
-        className={
-          isTableBill
-            ? "w-full rounded-xl bg-[var(--color-primary)] text-white font-semibold py-3"
-            : "w-full rounded-xl bg-[var(--color-warning)]/15 text-[var(--color-warning)] font-semibold py-2.5 text-sm"
-        }
+        onClick={handleConfirm}
+        className="w-full rounded-xl bg-[var(--color-primary)] text-white font-semibold py-3"
       >
         Full amount on credit
       </button>

@@ -246,12 +246,14 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
   const deletedBills = useBillsStore((s) => s.deletedBills);
   const reassignCustomer = useBillsStore((s) => s.reassignCustomer);
   const createOpenBill = useBillsStore((s) => s.createOpenBill);
+  const settlePayment = useBillsStore((s) => s.settlePayment);
   const orders = useOrdersStore((s) => s.orders);
   const markOrderBilled = useOrdersStore((s) => s.markBilled);
   const currency = useSettingsStore((s) => s.currencySymbol);
   const allCustomers = useCustomersStore((s) => s.customers);
   const mergeCustomer = useCustomersStore((s) => s.mergeCustomer);
   const updateCustomer = useCustomersStore((s) => s.updateCustomer);
+  const adjustCredit = useCustomersStore((s) => s.adjustCredit);
   const [detailBill, setDetailBill] = useState<Bill | null>(null);
   const [checkoutBill, setCheckoutBill] = useState<Bill | null>(null);
   const [showSettle, setShowSettle] = useState(false);
@@ -338,6 +340,42 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
     setCheckoutBill(bill);
   }
 
+  // Settle needs a real credit balance to pay off — a customer whose total
+  // owed is entirely unbilled pending orders has creditBalance 0, so bill
+  // every pending order onto their credit first (same as Credits' own
+  // handleSettleClick and the 24h auto-credit sweep), then open Settle for
+  // the resulting real balance. Otherwise "Settle payment" would either stay
+  // hidden or pay off only part of what's owed, leaving the rest looking
+  // stuck as still-pending even right after a full settlement.
+  function handleSettleClick() {
+    for (const order of pendingOrders) {
+      const total = orderTotal(order);
+      if (total <= 0) continue;
+      const bill = createOpenBill({
+        tableId: null,
+        tableName: customer.name,
+        orderId: order.id,
+        gameId: null,
+        gameName: null,
+        customerId: customer.id,
+        tableChargeMinutes: 0,
+        tableCharge: 0,
+        canteenCharge: total,
+        canteenItems: order.items.map((i) => ({
+          name: i.name,
+          price: i.price,
+          qty: i.qty,
+          personName: i.personName ?? null,
+        })),
+        discount: 0,
+      });
+      markOrderBilled(order.id);
+      const settled = settlePayment(bill.id, { amountCash: 0, amountUpi: 0 });
+      if (settled) adjustCredit(customer.id, settled.amountDue);
+    }
+    setShowSettle(true);
+  }
+
   const customerBills = [...bills, ...deletedBills]
     .filter(matchesCustomer)
     .sort((a, b) => b.createdAt - a.createdAt);
@@ -409,14 +447,12 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
                 traced back further than that.
               </p>
             )}
-            {customer.creditBalance > 0 && (
-              <button
-                onClick={() => setShowSettle(true)}
-                className="mt-3 w-full flex items-center justify-center gap-2 rounded-xl bg-[var(--color-success)]/15 text-[var(--color-success)] text-sm font-medium py-2.5"
-              >
-                <Wallet size={14} /> Settle payment
-              </button>
-            )}
+            <button
+              onClick={handleSettleClick}
+              className="mt-3 w-full flex items-center justify-center gap-2 rounded-xl bg-[var(--color-success)]/15 text-[var(--color-success)] text-sm font-medium py-2.5"
+            >
+              <Wallet size={14} /> Settle payment
+            </button>
           </Card>
         )}
 
