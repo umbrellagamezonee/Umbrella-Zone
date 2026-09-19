@@ -315,9 +315,18 @@ export function Reports() {
               </p>
               {bill.matchParticipants && bill.matchParticipants.length > 1 && (
                 <p className="text-xs text-[var(--color-text-faint)] mt-0.5">
+                  {bill.gameName ? `${bill.gameName} · ` : ""}
                   {bill.matchParticipants.join(" vs ")}
                   {bill.matchLosers && bill.matchLosers.length > 0 &&
                     ` · ${bill.matchLosers.join(", ")} lost`}
+                </p>
+              )}
+              {bill.gameName && (!bill.matchParticipants || bill.matchParticipants.length <= 1) && (
+                <p className="text-xs text-[var(--color-text-faint)] mt-0.5">{bill.gameName}</p>
+              )}
+              {bill.canteenItems.length > 0 && (
+                <p className="text-xs text-[var(--color-text-faint)] mt-0.5">
+                  {bill.canteenItems.map((i) => `${i.name} x${i.qty}`).join(", ")}
                 </p>
               )}
             </div>
