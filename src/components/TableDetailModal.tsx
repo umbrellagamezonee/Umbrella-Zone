@@ -316,11 +316,6 @@ export function TableDetailModal({
             </button>
           )}
 
-          <p className="text-xs text-[var(--color-text-faint)]">
-            Add food from the Canteen page, picking this table — it joins the bill here
-            automatically.
-          </p>
-
           {order && order.items.length > 0 && (
             <div>
               <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-2">

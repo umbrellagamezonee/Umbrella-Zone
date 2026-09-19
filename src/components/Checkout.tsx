@@ -53,6 +53,10 @@ export function Checkout({ bill, onDone, onCancel, onSettled, onRestart }: Check
 
   const billCustomer = customers.find((c) => c.id === bill.customerId) ?? null;
   const isRegistered = !!billCustomer && !billCustomer.isWalkIn;
+  // Table/game sessions always settle to credit here — no on-the-spot
+  // cash/account collection, just the one action. Canteen bills are
+  // unaffected and keep the full cash/account/confirm flow below.
+  const isTableBill = !!bill.tableId;
 
   const [step, setStep] = useState<CheckoutStep>("select");
   const [cashInput, setCashInput] = useState(bill.total.toFixed(2));
@@ -238,58 +242,62 @@ export function Checkout({ bill, onDone, onCancel, onSettled, onRestart }: Check
         </div>
       </Card>
 
-      <div className="flex items-center justify-between">
-        <span className="text-sm text-[var(--color-text-dim)]">Cash</span>
-        <input
-          type="number"
-          min={0}
-          max={bill.total}
-          value={cashInput}
-          onChange={(e) => setCashInput(e.target.value)}
-          className="w-24 text-right bg-[var(--color-surface-2)] rounded-lg px-2 py-1.5 text-sm outline-none"
-        />
-      </div>
-      <div className="flex items-center justify-between">
-        <span className="text-sm text-[var(--color-text-dim)]">Account (UPI)</span>
-        <input
-          type="number"
-          min={0}
-          max={Math.max(0, bill.total - cash)}
-          value={accountInput}
-          onChange={(e) => setAccountInput(e.target.value)}
-          className="w-24 text-right bg-[var(--color-surface-2)] rounded-lg px-2 py-1.5 text-sm outline-none"
-        />
-      </div>
+      {!isTableBill && (
+        <>
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-[var(--color-text-dim)]">Cash</span>
+            <input
+              type="number"
+              min={0}
+              max={bill.total}
+              value={cashInput}
+              onChange={(e) => setCashInput(e.target.value)}
+              className="w-24 text-right bg-[var(--color-surface-2)] rounded-lg px-2 py-1.5 text-sm outline-none"
+            />
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-[var(--color-text-dim)]">Account (UPI)</span>
+            <input
+              type="number"
+              min={0}
+              max={Math.max(0, bill.total - cash)}
+              value={accountInput}
+              onChange={(e) => setAccountInput(e.target.value)}
+              className="w-24 text-right bg-[var(--color-surface-2)] rounded-lg px-2 py-1.5 text-sm outline-none"
+            />
+          </div>
 
-      {creditPortion > 0 && (
-        <p className="text-xs text-[var(--color-warning)] -mt-2">
-          {formatMoney(creditPortion, currency)} will be added to{" "}
-          {isRegistered ? `${billCustomer!.name}'s` : "their"} credit.
-        </p>
-      )}
+          {creditPortion > 0 && (
+            <p className="text-xs text-[var(--color-warning)] -mt-2">
+              {formatMoney(creditPortion, currency)} will be added to{" "}
+              {isRegistered ? `${billCustomer!.name}'s` : "their"} credit.
+            </p>
+          )}
 
-      {needsContact && (
-        <div className="space-y-2">
-          <p className="text-xs text-[var(--color-text-faint)]">
-            Only needed if you're leaving any balance unpaid. Same name reuses their existing
-            credit profile.
-          </p>
-          <CustomerNameInput value={payerName} onChange={setPayerName} placeholder="Name" />
-        </div>
-      )}
+          {needsContact && (
+            <div className="space-y-2">
+              <p className="text-xs text-[var(--color-text-faint)]">
+                Only needed if you're leaving any balance unpaid. Same name reuses their existing
+                credit profile.
+              </p>
+              <CustomerNameInput value={payerName} onChange={setPayerName} placeholder="Name" />
+            </div>
+          )}
 
-      {error && <p className="text-xs text-[var(--color-danger)] -mt-2">{error}</p>}
+          {error && <p className="text-xs text-[var(--color-danger)] -mt-2">{error}</p>}
 
-      <button
-        onClick={handleConfirm}
-        className="w-full rounded-xl bg-[var(--color-primary)] text-white font-semibold py-3"
-      >
-        Confirm payment
-      </button>
-      {account > 0 && !upiId && (
-        <p className="text-xs text-[var(--color-text-faint)] text-center -mt-2">
-          Add a UPI ID in Settings → Store Settings to show a scannable QR code.
-        </p>
+          <button
+            onClick={handleConfirm}
+            className="w-full rounded-xl bg-[var(--color-primary)] text-white font-semibold py-3"
+          >
+            Confirm payment
+          </button>
+          {account > 0 && !upiId && (
+            <p className="text-xs text-[var(--color-text-faint)] text-center -mt-2">
+              Add a UPI ID in Settings → Store Settings to show a scannable QR code.
+            </p>
+          )}
+        </>
       )}
       <button
         onClick={() => {
@@ -302,7 +310,11 @@ export function Checkout({ bill, onDone, onCancel, onSettled, onRestart }: Check
           setError("");
           finalize(0, 0);
         }}
-        className="w-full rounded-xl bg-[var(--color-warning)]/15 text-[var(--color-warning)] font-semibold py-2.5 text-sm"
+        className={
+          isTableBill
+            ? "w-full rounded-xl bg-[var(--color-primary)] text-white font-semibold py-3"
+            : "w-full rounded-xl bg-[var(--color-warning)]/15 text-[var(--color-warning)] font-semibold py-2.5 text-sm"
+        }
       >
         Full amount on credit
       </button>
