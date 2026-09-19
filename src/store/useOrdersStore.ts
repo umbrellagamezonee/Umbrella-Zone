@@ -53,7 +53,6 @@ interface OrdersState {
   markServed: (orderId: string) => void;
   markBilled: (orderId: string) => void;
   unmarkBilled: (orderId: string) => void;
-  reassignToTable: (orderId: string, tableId: string, customerId: string | null) => void;
   orderTotal: (orderId: string) => number;
   // Removes the order ticket itself — safe any time, since a bill already
   // made from it keeps its own snapshot of what was ordered and isn't
@@ -174,18 +173,6 @@ export const useOrdersStore = create<OrdersState>()(
       unmarkBilled: (orderId) => {
         set((state) => ({
           orders: state.orders.map((o) => (o.id === orderId ? { ...o, status: "served" } : o)),
-        }));
-        pushOrder(orderId);
-      },
-
-      // Folds a standalone order (food ordered before a table was picked)
-      // into a table's tab once a session starts, so it bills together
-      // instead of sitting separately.
-      reassignToTable: (orderId, tableId, customerId) => {
-        set((state) => ({
-          orders: state.orders.map((o) =>
-            o.id === orderId ? { ...o, tableId, customerId, guestName: null } : o
-          ),
         }));
         pushOrder(orderId);
       },

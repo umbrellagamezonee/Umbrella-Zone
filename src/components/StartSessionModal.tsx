@@ -4,7 +4,6 @@ import { CustomerNameInput } from "./ui/CustomerNameInput";
 import { useTablesStore } from "../store/useTablesStore";
 import { useGamesStore } from "../store/useGamesStore";
 import { useCustomersStore } from "../store/useCustomersStore";
-import { useOrdersStore } from "../store/useOrdersStore";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { formatMoney } from "../lib/format";
 import type { BillingTable } from "../types";
@@ -28,8 +27,6 @@ export function StartSessionModal({ table, onClose }: { table: BillingTable; onC
   const startSession = useTablesStore((s) => s.startSession);
   const games = useGamesStore((s) => s.games);
   const findOrCreateCustomer = useCustomersStore((s) => s.findOrCreateCustomer);
-  const orders = useOrdersStore((s) => s.orders);
-  const reassignToTable = useOrdersStore((s) => s.reassignToTable);
   const currency = useSettingsStore((s) => s.currencySymbol);
 
   const [people, setPeople] = useState<PersonRow[]>([newRow()]);
@@ -57,19 +54,6 @@ export function StartSessionModal({ table, onClose }: { table: BillingTable; onC
       ratePerHour: selectedGame?.ratePerHour ?? null,
       extraCustomerIds: extra.map((c) => c.id),
     });
-
-    // They may have eaten before picking a table — fold any of their
-    // unbilled standalone food orders into this table's tab automatically.
-    for (const c of customers) {
-      const pendingOrder = orders.find(
-        (o) =>
-          o.tableId === null &&
-          o.status !== "billed" &&
-          (o.customerId === c.id ||
-            (o.guestName && o.guestName.trim().toLowerCase() === c.name.trim().toLowerCase()))
-      );
-      if (pendingOrder) reassignToTable(pendingOrder.id, table.id, primary.id);
-    }
 
     onClose();
   }

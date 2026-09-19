@@ -52,15 +52,11 @@ export function Home() {
     return aAvail - bAvail || a.sortOrder - b.sortOrder || a.name.localeCompare(b.name);
   });
 
-  // Table sessions and standalone canteen orders for the picked day — but not
-  // credit settlements (no table, no order behind them), which belong on the
-  // customer's own page, not here.
+  // Table/game sessions only for the picked day — canteen orders live
+  // entirely on their own Canteen page, never mixed in here, so a session's
+  // history stays about who played what and when.
   const dateBills = bills
-    .filter(
-      (b) =>
-        (b.tableId != null || b.orderId != null) &&
-        toDateInputValue(b.createdAt) === selectedDate
-    )
+    .filter((b) => b.tableId != null && toDateInputValue(b.createdAt) === selectedDate)
     .sort((a, b) => b.createdAt - a.createdAt);
   const collectedForDate = dateBills
     .filter((b) => b.status !== "cancelled")
