@@ -5,6 +5,7 @@ import { Modal } from "../components/ui/Modal";
 import { PhoneInput } from "../components/ui/PhoneInput";
 import { BillDetailModal } from "../components/BillDetailModal";
 import { CheckoutModal } from "../components/Checkout";
+import { AdminPinGate } from "../components/AdminPinGate";
 import { useCustomersStore } from "../store/useCustomersStore";
 import { useBillsStore } from "../store/useBillsStore";
 import { useOrdersStore } from "../store/useOrdersStore";
@@ -14,7 +15,7 @@ import { billCollectedFor, customerPendingOrders, orderTotal, personBillView } f
 import { cleanName, customerLabel, findCustomerByName, normalizeName } from "../lib/customerName";
 import { isCreditSettlement } from "../lib/billLabel";
 import type { Customer, Bill, CanteenOrder } from "../types";
-import { Search, Footprints, Check, ChevronRight, Wallet, Users } from "lucide-react";
+import { Search, Footprints, Check, ChevronRight, Wallet, Users, Trash2 } from "lucide-react";
 
 // Plain day-to-day directory — look someone up, add a new profile, open
 // their history. Credit chasing (who's due, reminders, settling) lives on
@@ -22,6 +23,7 @@ import { Search, Footprints, Check, ChevronRight, Wallet, Users } from "lucide-r
 export function Customers() {
   const customers = useCustomersStore((s) => s.customers);
   const addCustomer = useCustomersStore((s) => s.addCustomer);
+  const removeCustomer = useCustomersStore((s) => s.removeCustomer);
   const currency = useSettingsStore((s) => s.currencySymbol);
   const [search, setSearch] = useState("");
   const [showAdd, setShowAdd] = useState(false);
@@ -29,6 +31,7 @@ export function Customers() {
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
   const [detailCustomer, setDetailCustomer] = useState<Customer | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   const filtered = customers.filter(
     (c) =>
@@ -107,6 +110,18 @@ export function Customers() {
               ) : (
                 !c.isWalkIn && <Check size={16} className="text-[var(--color-text-faint)]" />
               )}
+              {!c.isWalkIn && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setConfirmDeleteId(c.id);
+                  }}
+                  title="Delete this customer"
+                  className="h-7 w-7 flex items-center justify-center rounded-full bg-[var(--color-danger)]/10 text-[var(--color-danger)] shrink-0"
+                >
+                  <Trash2 size={13} />
+                </button>
+              )}
               {!c.isWalkIn && <ChevronRight size={16} className="text-[var(--color-text-faint)]" />}
             </div>
           </Card>
@@ -115,6 +130,14 @@ export function Customers() {
 
       {detailCustomer && (
         <CustomerDetailModal customer={detailCustomer} onClose={() => setDetailCustomer(null)} />
+      )}
+
+      {confirmDeleteId && (
+        <AdminPinGate
+          title="Delete customer"
+          onClose={() => setConfirmDeleteId(null)}
+          onConfirm={() => removeCustomer(confirmDeleteId)}
+        />
       )}
 
       {showAdd && (
