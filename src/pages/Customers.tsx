@@ -158,6 +158,17 @@ interface LedgerEntry {
   order: CanteenOrder | null; // set only for a still-pending (unbilled) order
 }
 
+// What this line is actually for. A table session (has a real tableId)
+// shows the table's name; anything canteen-only shows what was actually
+// ordered instead — a standalone order's bill.tableName is set to the
+// customer's own name (see handleBillOrder/Credits' handleSettleClick), not
+// a useful description, so falling back to it here would just repeat their
+// name for every line.
+function describeItems(items: { name: string; qty: number }[]): string {
+  if (items.length === 0) return "Canteen order";
+  return items.map((i) => (i.qty > 1 ? `${i.name} x${i.qty}` : i.name)).join(", ");
+}
+
 // One running-balance account for this customer — every bill that's ever
 // touched their credit, plus whatever's served but not yet billed, in
 // time order. Processed oldest-first so the balance accumulates correctly
@@ -181,7 +192,7 @@ function buildLedger(customerBills: Bill[], pendingOrders: CanteenOrder[], nameK
       return {
         id: `pending-${ev.order.id}`,
         date: ev.date,
-        particulars: "Pending order",
+        particulars: describeItems(ev.order.items),
         debit: amount,
         credit: 0,
         paidNow: false,
@@ -211,7 +222,7 @@ function buildLedger(customerBills: Bill[], pendingOrders: CanteenOrder[], nameK
     return {
       id: b.id,
       date: b.createdAt,
-      particulars: b.tableName ?? "Canteen order",
+      particulars: b.tableId ? (b.tableName ?? "Table") : describeItems(b.canteenItems),
       debit: view.onCredit,
       credit: 0,
       paidNow: view.onCredit === 0,
@@ -419,14 +430,14 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
             </p>
           ) : (
             <div className="rounded-xl border border-[var(--color-border)] overflow-hidden">
-              <div className="grid grid-cols-[1fr,auto,auto] gap-2 px-3 py-2 bg-[var(--color-surface-2)]">
-                <span className="text-[10px] font-semibold tracking-wide text-[var(--color-text-dim)]">
+              <div className="grid grid-cols-[1fr_72px_80px] gap-2 px-3 py-2 bg-[var(--color-surface-2)]">
+                <span className="text-[10px] font-semibold text-[var(--color-text-dim)]">
                   PARTICULARS
                 </span>
-                <span className="text-[10px] font-semibold tracking-wide text-[var(--color-text-dim)] text-right">
+                <span className="text-[10px] font-semibold text-[var(--color-text-dim)] text-right whitespace-nowrap">
                   AMOUNT
                 </span>
-                <span className="text-[10px] font-semibold tracking-wide text-[var(--color-text-dim)] text-right">
+                <span className="text-[10px] font-semibold text-[var(--color-text-dim)] text-right whitespace-nowrap">
                   BALANCE
                 </span>
               </div>
@@ -437,7 +448,7 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
                     key={entry.id}
                     onClick={entry.bill ? () => setDetailBill(entry.bill!) : undefined}
                     className={
-                      "grid grid-cols-[1fr,auto,auto] gap-2 px-3 py-2.5 border-t border-[var(--color-border)] items-center " +
+                      "grid grid-cols-[1fr_72px_80px] gap-2 px-3 py-2.5 border-t border-[var(--color-border)] items-center " +
                       (entry.bill ? "cursor-pointer active:bg-[var(--color-surface-2)] " : "") +
                       (dimmed ? "opacity-50" : "")
                     }
