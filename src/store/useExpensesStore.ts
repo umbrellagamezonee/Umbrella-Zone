@@ -39,7 +39,18 @@ export const useExpensesStore = create<ExpensesState>()(
   persist(
     (set) => ({
       expenses: [],
-      categories: ["Supplies", "Maintenance", "Electricity", "Staff", "Other"],
+      categories: [
+        "Table",
+        "Food",
+        "Drinks",
+        "Cigarette",
+        "Chocolate",
+        "Supplies",
+        "Maintenance",
+        "Electricity",
+        "Staff",
+        "Other",
+      ],
 
       addExpense: (data) => {
         const created: Expense = {
@@ -63,7 +74,23 @@ export const useExpensesStore = create<ExpensesState>()(
         pushDeleteAll(TABLE);
       },
     }),
-    { name: "cuebill-expenses" }
+    {
+      name: "cuebill-expenses",
+      version: 1,
+      // v1: added Table/Food/Drinks/Cigarette/Chocolate ahead of the
+      // original list, for the monthly business report — a device that
+      // already persisted the old category list otherwise keeps it forever,
+      // never picking up the new ones.
+      migrate: (persisted, version) => {
+        const state = persisted as ExpensesState;
+        if (version >= 1) return state;
+        const newOnes = ["Table", "Food", "Drinks", "Cigarette", "Chocolate"];
+        return {
+          ...state,
+          categories: [...newOnes, ...(state.categories ?? []).filter((c) => !newOnes.includes(c))],
+        };
+      },
+    }
   )
 );
 

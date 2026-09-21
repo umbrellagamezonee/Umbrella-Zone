@@ -46,6 +46,7 @@ export function Reports() {
   const [showGalla, setShowGalla] = useState(false);
   const [showInsights, setShowInsights] = useState(false);
   const [showTableReport, setShowTableReport] = useState(false);
+  const [showMonthlyReport, setShowMonthlyReport] = useState(false);
   const [checkDate, setCheckDate] = useState(() => toDateInputValue(Date.now()));
   const [detailBill, setDetailBill] = useState<Bill | null>(null);
 
@@ -230,6 +231,16 @@ export function Reports() {
         </p>
       </Card>
 
+      <Card onClick={() => setShowMonthlyReport(true)}>
+        <div className="flex items-center gap-2 text-[var(--color-primary)]">
+          <FileSpreadsheet size={16} />
+          <p className="text-sm font-semibold">Monthly Report</p>
+        </div>
+        <p className="text-xs text-[var(--color-text-faint)] mt-1">
+          Table, Food, Drinks, Cigarette, Chocolate — collection, expense, profit, ek Excel mein
+        </p>
+      </Card>
+
       <Card>
         <p className="text-xs text-[var(--color-text-dim)]">FILTERS APPLIED</p>
         <p className="text-sm mt-0.5">Today · All statuses · All payments</p>
@@ -363,6 +374,7 @@ export function Reports() {
       {showGalla && <GallaSummaryModal onClose={() => setShowGalla(false)} />}
       {showInsights && <InsightsModal onClose={() => setShowInsights(false)} />}
       {showTableReport && <TableReportModal onClose={() => setShowTableReport(false)} />}
+      {showMonthlyReport && <MonthlyReportModal onClose={() => setShowMonthlyReport(false)} />}
       {detailBill && <BillDetailModal bill={detailBill} onClose={() => setDetailBill(null)} />}
     </AppShell>
   );
@@ -492,6 +504,209 @@ function TableReportModal({ onClose }: { onClose: () => void }) {
         )}
       </div>
       {detailBill && <BillDetailModal bill={detailBill} onClose={() => setDetailBill(null)} />}
+    </Modal>
+  );
+}
+
+// A full business month in one Excel: how much each table brought in, and
+// for each of Food/Drinks/Cigarette/Chocolate — how much sold, how much was
+// spent restocking it (from Settings → Expenses, so it needs those logged to
+// mean anything), and what's left. "Profit" here is the shop's own simple
+// math — sale minus purchase for that category, not a per-item costing
+// model — matching how the owner already tracks it by hand.
+const REPORT_CATEGORIES: { sheet: string; categoryName: string; expenseCategory: string }[] = [
+  { sheet: "Food collection", categoryName: "Kitchen", expenseCategory: "Food" },
+  { sheet: "Cigarette collection", categoryName: "Cigarettes", expenseCategory: "Cigarette" },
+  { sheet: "Drinks collection", categoryName: "Fridge", expenseCategory: "Drinks" },
+  { sheet: "Chocolate collection", categoryName: "Chocolate", expenseCategory: "Chocolate" },
+];
+
+function MonthlyReportModal({ onClose }: { onClose: () => void }) {
+  const bills = useBillsStore((s) => s.bills);
+  const orders = useOrdersStore((s) => s.orders);
+  const expenses = useExpensesStore((s) => s.expenses);
+  const menuItems = useMenuStore((s) => s.items);
+  const menuCategories = useMenuStore((s) => s.categories);
+  const tables = useTablesStore((s) => s.tables);
+  const currency = useSettingsStore((s) => s.currencySymbol);
+  const storeName = useSettingsStore((s) => s.storeName);
+  const [working, setWorking] = useState(false);
+
+  const monthBills = useMemo(
+    () => bills.filter((b) => isThisMonth(b.createdAt) && b.status !== "cancelled"),
+    [bills]
+  );
+  const monthOrders = useMemo(() => orders.filter((o) => isThisMonth(o.createdAt)), [orders]);
+  const monthExpenses = useMemo(() => expenses.filter((e) => isThisMonth(e.createdAt)), [expenses]);
+  const expenseFor = (category: string) =>
+    monthExpenses.filter((e) => e.category === category).reduce((s, e) => s + e.amount, 0);
+
+  const orderedTablesList = useMemo(() => orderedTables(tables), [tables]);
+  const tableRows = orderedTablesList.map((t) => ({
+    name: t.name,
+    collection: monthBills.filter((b) => b.tableId === t.id).reduce((s, b) => s + b.tableCharge, 0),
+  }));
+  const totalTableCollection = tableRows.reduce((s, r) => s + r.collection, 0);
+  const tableExpense = expenseFor("Table");
+  const netTableIncome = totalTableCollection - tableExpense;
+
+  const categoryTotals = REPORT_CATEGORIES.map((rc) => {
+    const catId = menuCategories.find((c) => c.name === rc.categoryName)?.id;
+    const catItems = menuItems.filter((i) => i.categoryId === catId);
+    let sale = 0;
+    let remaining = 0;
+    for (const item of catItems) {
+      for (const order of monthOrders) {
+        const line = order.items.find((i) => i.menuItemId === item.id);
+        if (line) sale += line.price * line.qty;
+      }
+      if (item.stockQty != null) remaining += item.stockQty * item.price;
+    }
+    const purchase = expenseFor(rc.expenseCategory);
+    return { ...rc, sale, purchase, profit: sale - purchase, remaining, itemCount: catItems.length };
+  });
+  const totalSale = categoryTotals.reduce((s, c) => s + c.sale, 0);
+  const totalPurchase = categoryTotals.reduce((s, c) => s + c.purchase, 0);
+  const totalCollection = totalTableCollection + totalSale;
+  const totalExpense = tableExpense + totalPurchase;
+  const netIncome = totalCollection - totalExpense;
+
+  async function handleDownload() {
+    setWorking(true);
+    try {
+      const XLSX = await import("xlsx");
+      const wb = XLSX.utils.book_new();
+
+      const tableSheetRows = [
+        ...tableRows.map((r) => ({ Table: r.name, Collection: r.collection })),
+        { Table: "TOTAL TABLE COLLECTION", Collection: totalTableCollection },
+        { Table: "Table expense", Collection: tableExpense },
+        { Table: "NET TABLE INCOME", Collection: netTableIncome },
+      ];
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(tableSheetRows), "Table collection");
+
+      for (const c of categoryTotals) {
+        const rows = [
+          { Particulars: "Sale", Amount: c.sale },
+          { Particulars: "Purchase (expense)", Amount: c.purchase },
+          { Particulars: "Profit (sale - purchase)", Amount: c.profit },
+          { Particulars: "Remaining stock value", Amount: c.remaining },
+        ];
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), c.sheet.slice(0, 31));
+      }
+
+      const totalRows = [
+        { Particulars: "Total table collection", Amount: totalTableCollection },
+        { Particulars: "Table expense", Amount: tableExpense },
+        { Particulars: "Net table income", Amount: netTableIncome },
+        { Particulars: "", Amount: "" },
+        ...categoryTotals.flatMap((c) => [
+          { Particulars: `${c.sheet} — Sale`, Amount: c.sale },
+          { Particulars: `${c.sheet} — Purchase`, Amount: c.purchase },
+          { Particulars: `${c.sheet} — Profit`, Amount: c.profit },
+        ]),
+        { Particulars: "", Amount: "" },
+        { Particulars: "TOTAL COLLECTION", Amount: totalCollection },
+        { Particulars: "TOTAL EXPENSE", Amount: totalExpense },
+        { Particulars: "NET INCOME", Amount: netIncome },
+      ];
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(totalRows), "TOTAL");
+
+      XLSX.writeFile(
+        wb,
+        `${storeName.replace(/[^a-z0-9]+/gi, "-") || "cuebill"}-monthly-report-${new Date()
+          .toISOString()
+          .slice(0, 7)}.xlsx`
+      );
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  return (
+    <Modal title="Monthly Report" onClose={onClose}>
+      <div className="space-y-4">
+        <p className="text-xs text-[var(--color-text-faint)]">
+          Is mahine ka data. "Purchase" Settings → Expenses mein Table/Food/Drinks/Cigarette/
+          Chocolate category se dale gaye kharch se aata hai — jab tak wahan kharch daalna shuru
+          nahi karoge, Purchase aur Profit ₹0 dikhenge.
+        </p>
+
+        <div>
+          <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-2">
+            TABLE COLLECTION
+          </p>
+          <Card>
+            <div className="flex justify-between text-sm py-1">
+              <span className="text-[var(--color-text-dim)]">Total collection</span>
+              <span className="font-semibold">{formatMoney(totalTableCollection, currency)}</span>
+            </div>
+            <div className="flex justify-between text-sm py-1">
+              <span className="text-[var(--color-text-dim)]">Table expense</span>
+              <span>{formatMoney(tableExpense, currency)}</span>
+            </div>
+            <div className="flex justify-between text-sm py-1 border-t border-[var(--color-border)] mt-1 pt-2 font-semibold">
+              <span>Net table income</span>
+              <span className="text-[var(--color-success)]">{formatMoney(netTableIncome, currency)}</span>
+            </div>
+          </Card>
+        </div>
+
+        <div>
+          <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-2">
+            FOOD · DRINKS · CIGARETTE · CHOCOLATE
+          </p>
+          <div className="space-y-2">
+            {categoryTotals.map((c) => (
+              <Card key={c.sheet}>
+                <div className="flex items-center justify-between">
+                  <p className="text-sm font-semibold">{c.sheet}</p>
+                  <span className="text-xs text-[var(--color-text-faint)]">{c.itemCount} items</span>
+                </div>
+                <div className="grid grid-cols-3 gap-2 mt-2 pt-2 border-t border-[var(--color-border)] text-center">
+                  <div>
+                    <p className="text-[10px] text-[var(--color-text-faint)]">Sale</p>
+                    <p className="text-sm font-semibold">{formatMoney(c.sale, currency)}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-[var(--color-text-faint)]">Purchase</p>
+                    <p className="text-sm font-semibold">{formatMoney(c.purchase, currency)}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-[var(--color-text-faint)]">Profit</p>
+                    <p className="text-sm font-semibold text-[var(--color-success)]">
+                      {formatMoney(c.profit, currency)}
+                    </p>
+                  </div>
+                </div>
+              </Card>
+            ))}
+          </div>
+        </div>
+
+        <Card className="border-[var(--color-primary)]/40">
+          <div className="flex justify-between text-sm py-1">
+            <span className="text-[var(--color-text-dim)]">Total collection</span>
+            <span className="font-semibold">{formatMoney(totalCollection, currency)}</span>
+          </div>
+          <div className="flex justify-between text-sm py-1">
+            <span className="text-[var(--color-text-dim)]">Total expense</span>
+            <span>{formatMoney(totalExpense, currency)}</span>
+          </div>
+          <div className="flex justify-between text-sm py-1 border-t border-[var(--color-border)] mt-1 pt-2 font-semibold">
+            <span>Net income</span>
+            <span className="text-[var(--color-success)]">{formatMoney(netIncome, currency)}</span>
+          </div>
+        </Card>
+
+        <button
+          onClick={handleDownload}
+          disabled={working}
+          className="w-full flex items-center justify-center gap-2 rounded-xl bg-[var(--color-primary)] disabled:opacity-60 text-white font-semibold py-3"
+        >
+          <FileSpreadsheet size={16} /> {working ? "Preparing…" : "Download Monthly Report Excel"}
+        </button>
+      </div>
     </Modal>
   );
 }

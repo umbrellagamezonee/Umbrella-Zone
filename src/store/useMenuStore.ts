@@ -18,6 +18,7 @@ const seedCategories: MenuCategory[] = [
   { id: "cat-kitchen", name: "Kitchen" },
   { id: "cat-cigarettes", name: "Cigarettes" },
   { id: "cat-fridge", name: "Fridge" },
+  { id: "cat-chocolate", name: "Chocolate" },
 ];
 
 // Old freeform categories being folded into the fixed set below — anything
