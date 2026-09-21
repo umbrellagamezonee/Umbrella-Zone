@@ -10,7 +10,15 @@ import { useMenuStore } from "../store/useMenuStore";
 import { useGamesStore } from "../store/useGamesStore";
 import { useTablesStore } from "../store/useTablesStore";
 import { useSettingsStore } from "../store/useSettingsStore";
-import { formatMoney, formatTime, isToday, isThisMonth, toDateInputValue, formatDateKey } from "../lib/format";
+import {
+  formatMoney,
+  formatTime,
+  isToday,
+  isThisMonth,
+  toDateInputValue,
+  formatDateKey,
+  IST_TIME_ZONE,
+} from "../lib/format";
 import { billMoney, billCollected, billRemaining } from "../lib/billing";
 import { billPersonName, billPlace } from "../lib/billLabel";
 import { useCustomersStore } from "../store/useCustomersStore";
@@ -568,6 +576,7 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
       const remainingQty = item.stockQty;
       const remainingValue = remainingQty != null ? remainingQty * item.price : null;
       return {
+        id: item.id,
         name: item.name,
         price: item.price,
         costPrice: item.costPrice,
@@ -594,55 +603,83 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
     try {
       const XLSX = await import("xlsx");
       const wb = XLSX.utils.book_new();
+      const round = (n: number) => Math.round(n * 100) / 100;
+      const monthLabel = new Date().toLocaleDateString("en-IN", {
+        month: "long",
+        year: "numeric",
+        timeZone: IST_TIME_ZONE,
+      });
 
-      const tableSheetRows = [
-        ...tableRows.map((r) => ({ Table: r.name, Collection: r.collection })),
-        { Table: "TOTAL TABLE COLLECTION", Collection: totalTableCollection },
-        { Table: "Table expense", Collection: tableExpense },
-        { Table: "NET TABLE INCOME", Collection: netTableIncome },
-      ];
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(tableSheetRows), "Table collection");
+      // A plain round-number sheet (no decimals-heavy noise, sensible column
+      // widths so nothing gets clipped) reads like a real report instead of
+      // a raw data dump — the whole point of asking for this over the
+      // existing full export.
+      function addSheet(name: string, rows: Record<string, string | number>[], widths: number[]) {
+        const ws = XLSX.utils.json_to_sheet(rows);
+        ws["!cols"] = widths.map((wch) => ({ wch }));
+        XLSX.utils.book_append_sheet(wb, ws, name.slice(0, 31));
+      }
+
+      addSheet(
+        "Table collection",
+        [
+          { Table: `${storeName} — ${monthLabel}`, Collection: "" },
+          { Table: "", Collection: "" },
+          ...tableRows.map((r) => ({ Table: r.name, Collection: round(r.collection) })),
+          { Table: "Total collection", Collection: round(totalTableCollection) },
+          { Table: "Table expense", Collection: round(tableExpense) },
+          { Table: "Net table income", Collection: round(netTableIncome) },
+        ],
+        [24, 16]
+      );
 
       for (const c of categoryTotals) {
         type ItemRow = Record<string, string | number>;
-        const itemSheetRows: ItemRow[] = c.itemRows
-          .slice()
-          .sort((a, b) => b.revenue - a.revenue)
-          .map((r) => ({
-            Item: r.name,
-            "Selling Price": r.price,
-            "Cost Price": r.costPrice ?? "Not set",
-            "Margin / Unit": r.marginPerUnit ?? "",
-            "Qty Sold": r.qtySold,
-            Revenue: r.revenue,
-            "Pending / In Stock": r.remainingQty ?? "Not tracked",
-            "Stock Value": r.remainingValue ?? "",
-          }));
-        itemSheetRows.push(
-          { Item: "", "Selling Price": "", "Cost Price": "", "Margin / Unit": "", "Qty Sold": "", Revenue: "", "Pending / In Stock": "", "Stock Value": "" },
-          { Item: "TOTAL SALE", "Selling Price": "", "Cost Price": "", "Margin / Unit": "", "Qty Sold": "", Revenue: c.sale, "Pending / In Stock": "", "Stock Value": c.remaining },
-          { Item: "PURCHASE (expense)", "Selling Price": "", "Cost Price": "", "Margin / Unit": "", "Qty Sold": "", Revenue: c.purchase, "Pending / In Stock": "", "Stock Value": "" },
-          { Item: "PROFIT (sale - purchase)", "Selling Price": "", "Cost Price": "", "Margin / Unit": "", "Qty Sold": "", Revenue: c.profit, "Pending / In Stock": "", "Stock Value": "" }
-        );
-        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(itemSheetRows), c.sheet.slice(0, 31));
+        const blank: ItemRow = { Item: "", Price: "", Cost: "", Margin: "", Sold: "", Revenue: "", "In stock": "", "Stock value": "" };
+        const itemSheetRows: ItemRow[] = [
+          { Item: `${storeName} — ${monthLabel}`, Price: "", Cost: "", Margin: "", Sold: "", Revenue: "", "In stock": "", "Stock value": "" },
+          blank,
+          ...c.itemRows
+            .slice()
+            .sort((a, b) => b.revenue - a.revenue)
+            .map((r) => ({
+              Item: r.name,
+              Price: round(r.price),
+              Cost: r.costPrice != null ? round(r.costPrice) : "—",
+              Margin: r.marginPerUnit != null ? round(r.marginPerUnit) : "—",
+              Sold: r.qtySold,
+              Revenue: round(r.revenue),
+              "In stock": r.remainingQty ?? "—",
+              "Stock value": r.remainingValue != null ? round(r.remainingValue) : "—",
+            })),
+          blank,
+          { Item: "Total sale", Price: "", Cost: "", Margin: "", Sold: "", Revenue: round(c.sale), "In stock": "", "Stock value": round(c.remaining) },
+          { Item: "Purchase", Price: "", Cost: "", Margin: "", Sold: "", Revenue: round(c.purchase), "In stock": "", "Stock value": "" },
+          { Item: "Profit", Price: "", Cost: "", Margin: "", Sold: "", Revenue: round(c.profit), "In stock": "", "Stock value": "" },
+        ];
+        addSheet(c.sheet, itemSheetRows, [26, 9, 9, 9, 7, 10, 9, 11]);
       }
 
-      const totalRows = [
-        { Particulars: "Total table collection", Amount: totalTableCollection },
-        { Particulars: "Table expense", Amount: tableExpense },
-        { Particulars: "Net table income", Amount: netTableIncome },
-        { Particulars: "", Amount: "" },
-        ...categoryTotals.flatMap((c) => [
-          { Particulars: `${c.sheet} — Sale`, Amount: c.sale },
-          { Particulars: `${c.sheet} — Purchase`, Amount: c.purchase },
-          { Particulars: `${c.sheet} — Profit`, Amount: c.profit },
-        ]),
-        { Particulars: "", Amount: "" },
-        { Particulars: "TOTAL COLLECTION", Amount: totalCollection },
-        { Particulars: "TOTAL EXPENSE", Amount: totalExpense },
-        { Particulars: "NET INCOME", Amount: netIncome },
-      ];
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(totalRows), "TOTAL");
+      // One clean table instead of a long flat list — Section / Collection /
+      // Expense / Net, same shape for the table row and every category, so
+      // it reads at a glance instead of needing to hunt for each figure.
+      addSheet(
+        "TOTAL",
+        [
+          { Section: `${storeName} — ${monthLabel}`, Collection: "", Expense: "", Net: "" },
+          { Section: "", Collection: "", Expense: "", Net: "" },
+          { Section: "Table", Collection: round(totalTableCollection), Expense: round(tableExpense), Net: round(netTableIncome) },
+          ...categoryTotals.map((c) => ({
+            Section: c.sheet.replace(" collection", ""),
+            Collection: round(c.sale),
+            Expense: round(c.purchase),
+            Net: round(c.profit),
+          })),
+          { Section: "", Collection: "", Expense: "", Net: "" },
+          { Section: "Total", Collection: round(totalCollection), Expense: round(totalExpense), Net: round(netIncome) },
+        ],
+        [16, 14, 14, 14]
+      );
 
       XLSX.writeFile(
         wb,
@@ -721,7 +758,7 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
                         .slice()
                         .sort((a, b) => b.revenue - a.revenue)
                         .map((r) => (
-                          <div key={r.name} className="text-xs flex items-center justify-between gap-2">
+                          <div key={r.id} className="text-xs flex items-center justify-between gap-2">
                             <span className="min-w-0 truncate">{r.name}</span>
                             <span className="text-[var(--color-text-faint)] shrink-0 whitespace-nowrap">
                               {formatMoney(r.price, currency)} ·{" "}
