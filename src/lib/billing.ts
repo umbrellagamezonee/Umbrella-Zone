@@ -146,6 +146,15 @@ export function customerPendingOrders(orders: CanteenOrder[], bills: Bill[], cus
   );
 }
 
+// Bills that already exist (Stop & Bill, or "Bill this order") but got left
+// stuck "open" — nobody ever tapped Cash/Account/"Full amount on credit" to
+// actually settle them (checkout screen closed early, app switched away
+// mid-flow, etc). Real money already owed, just not yet reflected in
+// creditBalance — same idea as customerPendingOrders, one step further along.
+export function customerOpenBills(bills: Bill[], customerId: string): Bill[] {
+  return bills.filter((b) => b.customerId === customerId && !b.shares && b.status === "open");
+}
+
 export function sumBillMoney(bills: Bill[]): BillMoney {
   const total: BillMoney = { cash: 0, upi: 0, credit: 0 };
   for (const bill of bills) {

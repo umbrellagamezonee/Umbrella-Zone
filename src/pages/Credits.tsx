@@ -6,7 +6,7 @@ import { useOrdersStore } from "../store/useOrdersStore";
 import { useBillsStore } from "../store/useBillsStore";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { formatMoney, timeAgo } from "../lib/format";
-import { customerPendingOrders, orderTotal } from "../lib/billing";
+import { customerOpenBills, customerPendingOrders, orderTotal } from "../lib/billing";
 import { sendCreditReminder } from "../lib/reminderApi";
 import { customerLabel } from "../lib/customerName";
 import { CustomerDetailModal, SettleCreditModal } from "./Customers";
@@ -36,14 +36,22 @@ export function Credits() {
   const [detailCustomer, setDetailCustomer] = useState<Customer | null>(null);
   const [search, setSearch] = useState("");
 
+  // "Not billed yet" here covers two things that are both real money owed
+  // but not yet in creditBalance: served-but-unbilled canteen orders, and
+  // bills that already got created (Stop & Bill / "Bill this order") but got
+  // left stuck "open" — checkout started, never finished. Without the second
+  // half, a customer whose whole debt was stuck in one of those bills
+  // wouldn't even show up on this page at all.
   const pendingTotalFor = (customerId: string) =>
-    customerPendingOrders(orders, bills, customerId).reduce((sum, o) => sum + orderTotal(o), 0);
+    customerPendingOrders(orders, bills, customerId).reduce((sum, o) => sum + orderTotal(o), 0) +
+    customerOpenBills(bills, customerId).reduce((sum, b) => sum + b.amountDue, 0);
 
   // Settle needs a real credit balance to pay off — a customer whose total
-  // here is entirely unbilled pending orders has creditBalance 0, so bill
-  // every pending order onto their credit first (same as the 24h auto-credit
-  // sweep does), then open Settle for the resulting real balance. Otherwise
-  // tapping Settle on a pending-only total silently did nothing.
+  // here is entirely unbilled pending orders (or stuck-open bills) has
+  // creditBalance 0, so bill every pending order and settle every stuck-open
+  // bill onto their credit first (same as the 24h auto-credit sweep does),
+  // then open Settle for the resulting real balance. Otherwise tapping
+  // Settle on a pending-only total silently did nothing.
   function handleSettleClick(c: Customer) {
     const pending = customerPendingOrders(orders, bills, c.id);
     for (const order of pending) {
@@ -68,6 +76,10 @@ export function Credits() {
         discount: 0,
       });
       markOrderBilled(order.id);
+      const settled = settlePayment(bill.id, { amountCash: 0, amountUpi: 0 });
+      if (settled) adjustCredit(c.id, settled.amountDue);
+    }
+    for (const bill of customerOpenBills(bills, c.id)) {
       const settled = settlePayment(bill.id, { amountCash: 0, amountUpi: 0 });
       if (settled) adjustCredit(c.id, settled.amountDue);
     }

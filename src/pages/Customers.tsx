@@ -11,7 +11,7 @@ import { useBillsStore } from "../store/useBillsStore";
 import { useOrdersStore } from "../store/useOrdersStore";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { formatMoney, formatDateTime } from "../lib/format";
-import { billCollectedFor, customerPendingOrders, orderTotal, personBillView } from "../lib/billing";
+import { billCollectedFor, customerOpenBills, customerPendingOrders, orderTotal, personBillView } from "../lib/billing";
 import { cleanName, customerLabel, findCustomerByName, normalizeName } from "../lib/customerName";
 import { isCreditSettlement } from "../lib/billLabel";
 import type { Customer, Bill, CanteenOrder } from "../types";
@@ -337,7 +337,14 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
   // billing it on the spot at the counter.
   const pendingOrders = customerPendingOrders(orders, bills, customer.id);
   const pendingTotal = pendingOrders.reduce((sum, o) => sum + orderTotal(o), 0);
-  const totalOwed = customer.creditBalance + pendingTotal;
+  // Bills that already exist but got left "open" — checkout started, never
+  // finished (screen closed, app switched away). Real money owed, just not
+  // in creditBalance yet — folded in here so TOTAL OWED always matches what
+  // the ledger below reconstructs, instead of looking wrong until the 24h
+  // auto-sweep eventually catches it.
+  const openBills = customerOpenBills(bills, customer.id);
+  const openBillsTotal = openBills.reduce((sum, b) => sum + b.amountDue, 0);
+  const totalOwed = customer.creditBalance + pendingTotal + openBillsTotal;
 
   function handleBillOrder(order: (typeof pendingOrders)[number]) {
     const total = orderTotal(order);
@@ -364,12 +371,13 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
   }
 
   // Settle needs a real credit balance to pay off — a customer whose total
-  // owed is entirely unbilled pending orders has creditBalance 0, so bill
-  // every pending order onto their credit first (same as Credits' own
-  // handleSettleClick and the 24h auto-credit sweep), then open Settle for
-  // the resulting real balance. Otherwise "Settle payment" would either stay
-  // hidden or pay off only part of what's owed, leaving the rest looking
-  // stuck as still-pending even right after a full settlement.
+  // owed is entirely unbilled pending orders (or stuck-open bills) has
+  // creditBalance 0, so bill every pending order and settle every stuck-open
+  // bill onto their credit first (same as Credits' own handleSettleClick and
+  // the 24h auto-credit sweep), then open Settle for the resulting real
+  // balance. Otherwise "Settle payment" would either stay hidden or pay off
+  // only part of what's owed, leaving the rest looking stuck as still-pending
+  // even right after a full settlement.
   function handleSettleClick() {
     for (const order of pendingOrders) {
       const total = orderTotal(order);
@@ -393,6 +401,10 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
         discount: 0,
       });
       markOrderBilled(order.id);
+      const settled = settlePayment(bill.id, { amountCash: 0, amountUpi: 0 });
+      if (settled) adjustCredit(customer.id, settled.amountDue);
+    }
+    for (const bill of openBills) {
       const settled = settlePayment(bill.id, { amountCash: 0, amountUpi: 0 });
       if (settled) adjustCredit(customer.id, settled.amountDue);
     }
