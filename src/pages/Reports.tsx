@@ -550,20 +550,38 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
   const tableExpense = expenseFor("Table");
   const netTableIncome = totalTableCollection - tableExpense;
 
+  // Per-item detail (price, cost, margin, qty sold, revenue, what's still in
+  // stock) — the category totals below are just these rows added up, but the
+  // owner wants to see each item on its own line, like a ledger, not just
+  // one number for the whole category.
   const categoryTotals = REPORT_CATEGORIES.map((rc) => {
     const catId = menuCategories.find((c) => c.name === rc.categoryName)?.id;
     const catItems = menuItems.filter((i) => i.categoryId === catId);
-    let sale = 0;
-    let remaining = 0;
-    for (const item of catItems) {
+    const itemRows = catItems.map((item) => {
+      let qtySold = 0;
       for (const order of monthOrders) {
         const line = order.items.find((i) => i.menuItemId === item.id);
-        if (line) sale += line.price * line.qty;
+        if (line) qtySold += line.qty;
       }
-      if (item.stockQty != null) remaining += item.stockQty * item.price;
-    }
+      const revenue = qtySold * item.price;
+      const marginPerUnit = item.costPrice != null ? item.price - item.costPrice : null;
+      const remainingQty = item.stockQty;
+      const remainingValue = remainingQty != null ? remainingQty * item.price : null;
+      return {
+        name: item.name,
+        price: item.price,
+        costPrice: item.costPrice,
+        marginPerUnit,
+        qtySold,
+        revenue,
+        remainingQty,
+        remainingValue,
+      };
+    });
+    const sale = itemRows.reduce((s, r) => s + r.revenue, 0);
+    const remaining = itemRows.reduce((s, r) => s + (r.remainingValue ?? 0), 0);
     const purchase = expenseFor(rc.expenseCategory);
-    return { ...rc, sale, purchase, profit: sale - purchase, remaining, itemCount: catItems.length };
+    return { ...rc, sale, purchase, profit: sale - purchase, remaining, itemCount: catItems.length, itemRows };
   });
   const totalSale = categoryTotals.reduce((s, c) => s + c.sale, 0);
   const totalPurchase = categoryTotals.reduce((s, c) => s + c.purchase, 0);
@@ -586,13 +604,27 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(tableSheetRows), "Table collection");
 
       for (const c of categoryTotals) {
-        const rows = [
-          { Particulars: "Sale", Amount: c.sale },
-          { Particulars: "Purchase (expense)", Amount: c.purchase },
-          { Particulars: "Profit (sale - purchase)", Amount: c.profit },
-          { Particulars: "Remaining stock value", Amount: c.remaining },
-        ];
-        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), c.sheet.slice(0, 31));
+        type ItemRow = Record<string, string | number>;
+        const itemSheetRows: ItemRow[] = c.itemRows
+          .slice()
+          .sort((a, b) => b.revenue - a.revenue)
+          .map((r) => ({
+            Item: r.name,
+            "Selling Price": r.price,
+            "Cost Price": r.costPrice ?? "Not set",
+            "Margin / Unit": r.marginPerUnit ?? "",
+            "Qty Sold": r.qtySold,
+            Revenue: r.revenue,
+            "Pending / In Stock": r.remainingQty ?? "Not tracked",
+            "Stock Value": r.remainingValue ?? "",
+          }));
+        itemSheetRows.push(
+          { Item: "", "Selling Price": "", "Cost Price": "", "Margin / Unit": "", "Qty Sold": "", Revenue: "", "Pending / In Stock": "", "Stock Value": "" },
+          { Item: "TOTAL SALE", "Selling Price": "", "Cost Price": "", "Margin / Unit": "", "Qty Sold": "", Revenue: c.sale, "Pending / In Stock": "", "Stock Value": c.remaining },
+          { Item: "PURCHASE (expense)", "Selling Price": "", "Cost Price": "", "Margin / Unit": "", "Qty Sold": "", Revenue: c.purchase, "Pending / In Stock": "", "Stock Value": "" },
+          { Item: "PROFIT (sale - purchase)", "Selling Price": "", "Cost Price": "", "Margin / Unit": "", "Qty Sold": "", Revenue: c.profit, "Pending / In Stock": "", "Stock Value": "" }
+        );
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(itemSheetRows), c.sheet.slice(0, 31));
       }
 
       const totalRows = [
@@ -679,6 +711,30 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
                     </p>
                   </div>
                 </div>
+                {c.itemRows.length > 0 && (
+                  <details className="mt-2 pt-2 border-t border-[var(--color-border)]">
+                    <summary className="text-xs text-[var(--color-primary)] cursor-pointer select-none">
+                      Item-by-item (ledger)
+                    </summary>
+                    <div className="mt-2 space-y-1.5 max-h-56 overflow-y-auto">
+                      {c.itemRows
+                        .slice()
+                        .sort((a, b) => b.revenue - a.revenue)
+                        .map((r) => (
+                          <div key={r.name} className="text-xs flex items-center justify-between gap-2">
+                            <span className="min-w-0 truncate">{r.name}</span>
+                            <span className="text-[var(--color-text-faint)] shrink-0 whitespace-nowrap">
+                              {formatMoney(r.price, currency)} ·{" "}
+                              {r.marginPerUnit != null
+                                ? `${formatMoney(r.marginPerUnit, currency)} margin`
+                                : "no cost set"}{" "}
+                              · sold {r.qtySold} · {r.remainingQty ?? "—"} pending
+                            </span>
+                          </div>
+                        ))}
+                    </div>
+                  </details>
+                )}
               </Card>
             ))}
           </div>
