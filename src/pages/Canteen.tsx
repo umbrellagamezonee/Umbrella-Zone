@@ -14,6 +14,7 @@ import { useBillsStore } from "../store/useBillsStore";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { formatMoney, toDateInputValue, formatTime } from "../lib/format";
 import { billCollectedByPart } from "../lib/billing";
+import { findCustomerByName } from "../lib/customerName";
 import type { Bill, CanteenOrder } from "../types";
 import {
   Scissors,
@@ -26,6 +27,7 @@ import {
   Wallet,
   CalendarDays,
   Trash2,
+  UserCheck,
 } from "lucide-react";
 
 export function Canteen() {
@@ -500,6 +502,7 @@ function OrderEditModal({ order, onClose }: { order: CanteenOrder; onClose: () =
 function NewOrderModal({ onClose }: { onClose: () => void }) {
   const menuItems = useMenuStore((s) => s.items);
   const categories = useMenuStore((s) => s.categories);
+  const customers = useCustomersStore((s) => s.customers);
   const findOrCreateCustomer = useCustomersStore((s) => s.findOrCreateCustomer);
   const createOrder = useOrdersStore((s) => s.createOrder);
   const addItem = useOrdersStore((s) => s.addItem);
@@ -510,6 +513,12 @@ function NewOrderModal({ onClose }: { onClose: () => void }) {
   const [cart, setCart] = useState<Record<string, number>>({});
   const [itemSearch, setItemSearch] = useState("");
   const [activeCategory, setActiveCategory] = useState(categories[0]?.id ?? "");
+  // A typed name that matches an already-existing profile needs a beat of
+  // confirmation before saving — the suggestion list makes it easy to tap
+  // the wrong regular by habit (e.g. whoever's usually at a certain table),
+  // silently landing someone else's order on their account. A brand-new
+  // name has no such risk, so it skips straight through.
+  const [confirmCustomer, setConfirmCustomer] = useState<{ id: string; name: string } | null>(null);
 
   const setQty = (id: string, qty: number) =>
     setCart((c) => ({ ...c, [id]: Math.max(0, qty) }));
@@ -521,10 +530,9 @@ function NewOrderModal({ onClose }: { onClose: () => void }) {
   // to a table, so it can never end up billed together with (and read as
   // "merged into") someone else's table session. Food for someone actually
   // playing at a table goes through that table's own "Edit order" instead.
-  function handleSave() {
+  function saveOrder(customerId: string) {
     const items = menuItems.filter((i) => (cart[i.id] ?? 0) > 0);
     if (items.length === 0) return;
-    const customerId = name.trim() ? findOrCreateCustomer({ name: name.trim(), phone: "" }).id : "walk-in";
     const orderId = createOrder(null, customerId, null).id;
     items.forEach((item) => {
       addItem(orderId, {
@@ -536,6 +544,50 @@ function NewOrderModal({ onClose }: { onClose: () => void }) {
     });
     if (note) setNoteStore(orderId, note);
     onClose();
+  }
+
+  function handleSave() {
+    if (menuItems.filter((i) => (cart[i.id] ?? 0) > 0).length === 0) return;
+    if (!name.trim()) {
+      saveOrder("walk-in");
+      return;
+    }
+    const existing = findCustomerByName(customers, name);
+    if (existing) {
+      setConfirmCustomer({ id: existing.id, name: existing.name });
+      return;
+    }
+    saveOrder(findOrCreateCustomer({ name: name.trim(), phone: "" }).id);
+  }
+
+  if (confirmCustomer) {
+    return (
+      <Modal title="Confirm customer" onClose={onClose}>
+        <div className="space-y-4 py-2 text-center">
+          <div className="mx-auto h-14 w-14 rounded-2xl bg-[var(--color-warning)]/15 text-[var(--color-warning)] flex items-center justify-center">
+            <UserCheck size={24} />
+          </div>
+          <p className="text-sm">
+            Ye order <span className="font-semibold">{confirmCustomer.name}</span> ke account mein
+            jayega — sahi hai?
+          </p>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              onClick={() => setConfirmCustomer(null)}
+              className="rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] font-semibold py-3 text-sm"
+            >
+              Naam badlo
+            </button>
+            <button
+              onClick={() => saveOrder(confirmCustomer.id)}
+              className="rounded-xl bg-[var(--color-primary)] text-white font-semibold py-3 text-sm"
+            >
+              Haan, sahi hai
+            </button>
+          </div>
+        </div>
+      </Modal>
+    );
   }
 
   return (
