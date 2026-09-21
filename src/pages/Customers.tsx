@@ -450,18 +450,6 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
             <p className="text-lg font-bold text-[var(--color-warning)] mt-1">
               {formatMoney(totalOwed, currency)}
             </p>
-            {pendingTotal > 0 && (
-              <div className="mt-2 space-y-0.5 text-xs text-[var(--color-text-dim)]">
-                <div className="flex justify-between">
-                  <span>On credit</span>
-                  <span>{formatMoney(customer.creditBalance, currency)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Not billed yet (below)</span>
-                  <span>{formatMoney(pendingTotal, currency)}</span>
-                </div>
-              </div>
-            )}
             {deletedCount > 0 && (
               <p className="text-xs text-[var(--color-text-faint)] mt-1">
                 {deletedCount} bill{deletedCount > 1 ? "s" : ""} below {deletedCount > 1 ? "were" : "was"}{" "}
