@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { BillingTable, TableStatus } from "../types";
-import { setupSync, pushInsert, pushUpsert, pushUpdate, pushDelete, keepLocalOnly } from "../lib/cloudSync";
+import { setupSync, pushInsert, pushUpdate, pushDelete, keepLocalOnly } from "../lib/cloudSync";
 
 const DEFAULT_SESSION_MINUTES = 60;
 
@@ -143,12 +143,33 @@ export function orderedTables(tables: BillingTable[]): BillingTable[] {
   return [...tables].sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name));
 }
 
-// Every action below ends by re-reading the table it just touched and
-// pushing that full row to Supabase — simpler and less error-prone than
-// hand-building a partial patch per action.
-function pushTable(id: string) {
-  const t = useTablesStore.getState().tables.find((x) => x.id === id);
-  if (t) pushUpsert(TABLE, toRow(t));
+// Sends only the fields a session action actually changed, not this
+// device's whole local copy of the table — same reasoning as moveTable's
+// own pushUpdate below. Start/pause/resume/stop firing off pushTable's full
+// pushUpsert meant that if this device's local state of the table was even
+// slightly stale (a realtime update from another device/tab hadn't landed
+// yet), acting on it would overwrite whatever that other device had just
+// set — a session someone else started, or a pause that had already banked
+// different elapsed time — with this device's outdated snapshot, silently
+// and with no error. A scoped patch can only ever touch the handful of
+// fields this exact action means to change.
+function pushTablePatch(id: string, patch: Partial<BillingTable>) {
+  const row: Partial<TableRow> = {};
+  if ("status" in patch) row.status = patch.status;
+  if ("customerId" in patch) row.customer_id = patch.customerId;
+  if ("extraCustomerIds" in patch) row.extra_customer_ids = patch.extraCustomerIds;
+  if ("activeGameId" in patch) row.active_game_id = patch.activeGameId;
+  if ("sessionRatePerHour" in patch) row.session_rate_per_hour = patch.sessionRatePerHour;
+  if ("sessionStartedAt" in patch)
+    row.session_started_at = patch.sessionStartedAt ? new Date(patch.sessionStartedAt).toISOString() : null;
+  if ("accumulatedMs" in patch) row.accumulated_ms = patch.accumulatedMs;
+  if ("plannedDurationMs" in patch) row.planned_duration_ms = patch.plannedDurationMs;
+  if ("note" in patch) row.note = patch.note;
+  if ("name" in patch) row.name = patch.name;
+  if ("kind" in patch) row.kind = patch.kind;
+  if ("ratePerHour" in patch) row.rate_per_hour = patch.ratePerHour;
+  if ("defaultSessionMinutes" in patch) row.default_session_minutes = patch.defaultSessionMinutes;
+  pushUpdate(TABLE, id, row);
 }
 
 export const useTablesStore = create<TablesState>()(
@@ -172,7 +193,7 @@ export const useTablesStore = create<TablesState>()(
         set((state) => ({
           tables: state.tables.map((t) => (t.id === id ? { ...t, ...patch } : t)),
         }));
-        pushTable(id);
+        pushTablePatch(id, patch);
       },
 
       moveTable: (id, direction) => {
@@ -187,10 +208,11 @@ export const useTablesStore = create<TablesState>()(
         }));
         // Every table got renumbered above, not just the swapped pair — push
         // all of them so this order shows up the same on every device. Only
-        // sortOrder, though (not the whole row via pushTable/pushUpsert) —
-        // otherwise this could overwrite a session someone just started or
-        // stopped on an unrelated table from another device with this
-        // device's stale local copy of it.
+        // sortOrder, though (not the whole row) — otherwise this could
+        // overwrite a session someone just started or stopped on an
+        // unrelated table from another device with this device's stale
+        // local copy of it (see pushTablePatch above for the same fix
+        // applied to every session action).
         for (const t of get().tables) pushUpdate(TABLE, t.id, { sort_order: t.sortOrder });
       },
 
@@ -200,64 +222,59 @@ export const useTablesStore = create<TablesState>()(
       },
 
       startSession: (id, customerId, opts) => {
+        const table = get().tables.find((t) => t.id === id);
+        if (!table) return;
+        const patch: Partial<BillingTable> = {
+          status: "running",
+          customerId,
+          extraCustomerIds: opts?.extraCustomerIds ?? [],
+          activeGameId: opts?.gameId ?? null,
+          sessionRatePerHour: opts?.ratePerHour ?? null,
+          sessionStartedAt: Date.now(),
+          accumulatedMs: 0,
+          plannedDurationMs: table.defaultSessionMinutes * 60000,
+        };
         set((state) => ({
-          tables: state.tables.map((t) =>
-            t.id === id
-              ? {
-                  ...t,
-                  status: "running",
-                  customerId,
-                  extraCustomerIds: opts?.extraCustomerIds ?? [],
-                  activeGameId: opts?.gameId ?? null,
-                  sessionRatePerHour: opts?.ratePerHour ?? null,
-                  sessionStartedAt: Date.now(),
-                  accumulatedMs: 0,
-                  plannedDurationMs: t.defaultSessionMinutes * 60000,
-                }
-              : t
-          ),
+          tables: state.tables.map((t) => (t.id === id ? { ...t, ...patch } : t)),
         }));
-        pushTable(id);
+        pushTablePatch(id, patch);
       },
 
       // Adds someone to an already-running/paused session (e.g. a friend joins
       // partway through). No-ops if they're already the primary or listed.
       addParticipant: (id, customerId) => {
+        const table = get().tables.find((t) => t.id === id);
+        if (!table || table.customerId === customerId || table.extraCustomerIds.includes(customerId)) return;
+        const extraCustomerIds = [...table.extraCustomerIds, customerId];
         set((state) => ({
-          tables: state.tables.map((t) => {
-            if (t.id !== id) return t;
-            if (t.customerId === customerId || t.extraCustomerIds.includes(customerId)) return t;
-            return { ...t, extraCustomerIds: [...t.extraCustomerIds, customerId] };
-          }),
+          tables: state.tables.map((t) => (t.id === id ? { ...t, extraCustomerIds } : t)),
         }));
-        pushTable(id);
+        pushTablePatch(id, { extraCustomerIds });
       },
 
       pauseSession: (id) => {
+        const table = get().tables.find((t) => t.id === id);
+        if (!table || table.status !== "running" || !table.sessionStartedAt) return;
+        const elapsed = Date.now() - table.sessionStartedAt;
+        const patch: Partial<BillingTable> = {
+          status: "paused",
+          sessionStartedAt: null,
+          accumulatedMs: table.accumulatedMs + elapsed,
+        };
         set((state) => ({
-          tables: state.tables.map((t) => {
-            if (t.id !== id || t.status !== "running" || !t.sessionStartedAt) return t;
-            const elapsed = Date.now() - t.sessionStartedAt;
-            return {
-              ...t,
-              status: "paused",
-              sessionStartedAt: null,
-              accumulatedMs: t.accumulatedMs + elapsed,
-            };
-          }),
+          tables: state.tables.map((t) => (t.id === id ? { ...t, ...patch } : t)),
         }));
-        pushTable(id);
+        pushTablePatch(id, patch);
       },
 
       resumeSession: (id) => {
+        const table = get().tables.find((t) => t.id === id);
+        if (!table || table.status !== "paused") return;
+        const patch: Partial<BillingTable> = { status: "running", sessionStartedAt: Date.now() };
         set((state) => ({
-          tables: state.tables.map((t) =>
-            t.id === id && t.status === "paused"
-              ? { ...t, status: "running", sessionStartedAt: Date.now() }
-              : t
-          ),
+          tables: state.tables.map((t) => (t.id === id ? { ...t, ...patch } : t)),
         }));
-        pushTable(id);
+        pushTablePatch(id, patch);
       },
 
       stopSession: (id) => {
@@ -266,24 +283,20 @@ export const useTablesStore = create<TablesState>()(
         if (table?.status === "running" && table.sessionStartedAt) {
           elapsedMs += Date.now() - table.sessionStartedAt;
         }
+        const patch: Partial<BillingTable> = {
+          status: "available",
+          customerId: null,
+          extraCustomerIds: [],
+          activeGameId: null,
+          sessionRatePerHour: null,
+          sessionStartedAt: null,
+          accumulatedMs: 0,
+          plannedDurationMs: null,
+        };
         set((state) => ({
-          tables: state.tables.map((t) =>
-            t.id === id
-              ? {
-                  ...t,
-                  status: "available",
-                  customerId: null,
-                  extraCustomerIds: [],
-                  activeGameId: null,
-                  sessionRatePerHour: null,
-                  sessionStartedAt: null,
-                  accumulatedMs: 0,
-                  plannedDurationMs: null,
-                }
-              : t
-          ),
+          tables: state.tables.map((t) => (t.id === id ? { ...t, ...patch } : t)),
         }));
-        pushTable(id);
+        pushTablePatch(id, patch);
         return { elapsedMs };
       },
     }),
