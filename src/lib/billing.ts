@@ -1,5 +1,6 @@
 import type { Bill, CanteenOrder, PaymentMethod } from "../types";
 import { normalizeName } from "./customerName";
+import { isCreditSettlement } from "./billLabel";
 
 export interface BillMoney {
   cash: number;
@@ -90,6 +91,34 @@ export function personBillView(bill: Bill, payerNameKey: string): PersonBillView
   const paidCashOrUpi = mine.some((s) => s.status === "paid" && s.paymentMethod !== "credit");
   const pending = mine.some((s) => s.status !== "paid");
   return { total, paidFully: !pending && onCredit === 0 && paidCashOrUpi, onCredit, pending };
+}
+
+// What a customer actually owes on credit right now — computed fresh from
+// every bill each time, never a separately-stored running total. A stored
+// "credit balance" that gets nudged up/down by a separate increment call
+// per transaction can silently drift from reality forever the moment any
+// one of those network calls fails quietly (weak wifi, device closed mid
+// sync, etc) — nothing else would ever notice or correct it. Recomputing
+// from the bills themselves (the same records the ledger already reads)
+// means the number shown is always exactly what really happened, with
+// nothing else to go stale. Only "paid" bills count — a still-open
+// (stuck-checkout) bill or an unbilled canteen order genuinely isn't credit
+// yet; see customerOpenBills/customerPendingOrders for those.
+export function creditBalanceFor(bills: Bill[], customerId: string, nameKey: string): number {
+  let balance = 0;
+  for (const b of bills) {
+    if (b.status !== "paid") continue;
+    const matches = b.shares
+      ? b.shares.some((s) => normalizeName(s.payerName) === nameKey)
+      : b.customerId === customerId;
+    if (!matches) continue;
+    if (isCreditSettlement(b)) {
+      balance -= b.amountPaid + b.discount;
+    } else {
+      balance += personBillView(b, nameKey).onCredit;
+    }
+  }
+  return Math.round(balance * 100) / 100;
 }
 
 // Splits a bill's collected (cash+upi) total between its table and canteen

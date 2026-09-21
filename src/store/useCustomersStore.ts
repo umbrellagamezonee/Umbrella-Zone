@@ -2,13 +2,11 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { Customer } from "../types";
 import { cleanName, normalizeName } from "../lib/customerName";
-import { syncCreditLedger } from "../lib/reminderApi";
 import {
   setupSync,
   pushInsert,
   pushUpsert,
   pushUpdate,
-  pushIncrement,
   pushDelete,
   pushDeleteAll,
   keepLocalOnly,
@@ -20,7 +18,6 @@ const walkIn: Customer = {
   phone: "",
   email: "",
   isWalkIn: true,
-  creditBalance: 0,
   lastReminderAt: null,
   createdAt: Date.now(),
 };
@@ -31,6 +28,10 @@ interface CustomerRow {
   phone: string;
   email: string;
   is_walk_in: boolean;
+  // Column still exists in Supabase (a real migration to drop it isn't
+  // worth the risk) but the app never reads it back — what a customer owes
+  // is always computed fresh from their bills (see creditBalanceFor in
+  // lib/billing.ts). Always written as 0 so no old reader is misled by it.
   credit_balance: number;
   last_reminder_at: string | null;
   created_at: string;
@@ -45,7 +46,6 @@ const fromRow = (row: CustomerRow): Customer => ({
   phone: row.phone,
   email: row.email,
   isWalkIn: row.is_walk_in,
-  creditBalance: Number(row.credit_balance),
   lastReminderAt: row.last_reminder_at ? new Date(row.last_reminder_at).getTime() : null,
   createdAt: new Date(row.created_at).getTime(),
 });
@@ -55,7 +55,7 @@ const toRow = (c: Customer): CustomerRow => ({
   phone: c.phone,
   email: c.email,
   is_walk_in: c.isWalkIn,
-  credit_balance: c.creditBalance,
+  credit_balance: 0,
   last_reminder_at: c.lastReminderAt ? new Date(c.lastReminderAt).toISOString() : null,
   created_at: new Date(c.createdAt).toISOString(),
 });
@@ -65,12 +65,12 @@ interface CustomersState {
   addCustomer: (data: { name: string; phone: string; email: string }) => Customer;
   findOrCreateCustomer: (data: { name: string; phone: string }) => Customer;
   updateCustomer: (id: string, patch: { name?: string; phone?: string; email?: string }) => void;
-  adjustCredit: (id: string, delta: number) => void;
   markReminded: (id: string) => void;
   removeCustomer: (id: string) => void;
-  // Folds `sourceId` into `targetId`: the source's credit balance moves to the
-  // target and the source profile is deleted. Rewriting the source's name off
-  // any past bills is the caller's job (see useBillsStore.reassignCustomer).
+  // Deletes the source profile — what it's owed moves to the target
+  // automatically the moment useBillsStore.reassignCustomer rewrites its
+  // bills onto the target's id/name, since credit is always computed fresh
+  // from bills rather than carried as a number on the customer record.
   mergeCustomer: (sourceId: string, targetId: string) => void;
   resetAll: () => void;
 }
@@ -87,7 +87,6 @@ export const useCustomersStore = create<CustomersState>()(
           phone: data.phone,
           email: data.email,
           isWalkIn: false,
-          creditBalance: 0,
           lastReminderAt: null,
           createdAt: Date.now(),
         };
@@ -117,7 +116,7 @@ export const useCustomersStore = create<CustomersState>()(
       // profile wins. Otherwise falls back to matching by name (trimmed,
       // whitespace-collapsed, case-insensitive) so re-entering the same
       // person's name — however they capitalise or space it — reuses their
-      // existing profile and credit balance instead of piling up duplicates.
+      // existing profile and credit history instead of piling up duplicates.
       findOrCreateCustomer: (data) => {
         const phone = data.phone.trim();
         const key = normalizeName(data.name);
@@ -130,22 +129,6 @@ export const useCustomersStore = create<CustomersState>()(
           if (byName) return byName;
         }
         return get().addCustomer({ name: cleanName(data.name) || "Guest", phone, email: "" });
-      },
-
-      adjustCredit: (id, delta) => {
-        set((state) => ({
-          customers: state.customers.map((c) =>
-            c.id === id ? { ...c, creditBalance: c.creditBalance + delta } : c
-          ),
-        }));
-        const c = get().customers.find((x) => x.id === id);
-        if (c) {
-          syncCreditLedger({ customerId: c.id, name: c.name, phone: c.phone, amountDue: c.creditBalance });
-          // An atomic "+= delta" on the server — several of these can fire
-          // within the same second (e.g. billing a customer's whole pending
-          // list onto credit) without any risk of one overwriting another.
-          if (c.id !== "walk-in") pushIncrement("increment_credit_balance", { p_id: id, p_delta: delta }, TABLE, toRow(c));
-        }
       },
 
       markReminded: (id) => {
@@ -170,7 +153,6 @@ export const useCustomersStore = create<CustomersState>()(
         if (!source || !target) return;
         const merged: Customer = {
           ...target,
-          creditBalance: target.creditBalance + source.creditBalance,
           // Keep whichever profile actually has contact details filled in.
           phone: target.phone || source.phone,
           email: target.email || source.email,
@@ -180,26 +162,7 @@ export const useCustomersStore = create<CustomersState>()(
             .filter((c) => c.id !== sourceId)
             .map((c) => (c.id === targetId ? merged : c)),
         }));
-        syncCreditLedger({
-          customerId: merged.id,
-          name: merged.name,
-          phone: merged.phone,
-          amountDue: merged.creditBalance,
-        });
-        // Credit moves via the same atomic "+= delta" as adjustCredit —
-        // pushing the merged total as an absolute snapshot could otherwise
-        // race with some other credit change to the target landing at the
-        // same moment and clobber it (the exact bug adjustCredit itself
-        // already had to be fixed for).
         pushUpdate(TABLE, targetId, { phone: merged.phone, email: merged.email });
-        if (source.creditBalance !== 0) {
-          pushIncrement(
-            "increment_credit_balance",
-            { p_id: targetId, p_delta: source.creditBalance },
-            TABLE,
-            toRow(merged)
-          );
-        }
         pushDelete(TABLE, sourceId);
       },
 
@@ -212,7 +175,7 @@ export const useCustomersStore = create<CustomersState>()(
     }),
     {
       name: "cuebill-customers",
-      version: 1,
+      version: 2,
       migrate: (persisted) => {
         const state = persisted as { customers?: (Partial<Customer> & { id: string })[] };
         return {
@@ -222,7 +185,6 @@ export const useCustomersStore = create<CustomersState>()(
             phone: c.phone ?? "",
             email: c.email ?? "",
             isWalkIn: c.isWalkIn ?? false,
-            creditBalance: c.creditBalance ?? 0,
             lastReminderAt: c.lastReminderAt ?? null,
             createdAt: c.createdAt ?? Date.now(),
           })),

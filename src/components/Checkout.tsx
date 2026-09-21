@@ -46,7 +46,6 @@ export function Checkout({ bill, onDone, onCancel, onSettled, onRestart }: Check
   const settlePayment = useBillsStore((s) => s.settlePayment);
   const customers = useCustomersStore((s) => s.customers);
   const findOrCreateCustomer = useCustomersStore((s) => s.findOrCreateCustomer);
-  const adjustCredit = useCustomersStore((s) => s.adjustCredit);
 
   const billCustomer = customers.find((c) => c.id === bill.customerId) ?? null;
   const isRegistered = !!billCustomer && !billCustomer.isWalkIn;
@@ -80,10 +79,7 @@ export function Checkout({ bill, onDone, onCancel, onSettled, onRestart }: Check
       creditCustomerName = c.name;
     }
 
-    const updated = settlePayment(bill.id, { amountCash: 0, amountUpi: 0 });
-    if (updated && bill.total > 0 && creditCustomerId) {
-      adjustCredit(creditCustomerId, bill.total);
-    }
+    settlePayment(bill.id, { amountCash: 0, amountUpi: 0, customerId: creditCustomerId ?? undefined });
     onSettled?.();
     setSettled({ creditTo: bill.total > 0 ? creditCustomerName : null });
     setStep("success");

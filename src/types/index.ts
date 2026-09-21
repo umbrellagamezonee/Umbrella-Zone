@@ -31,7 +31,10 @@ export interface Customer {
   phone: string;
   email: string;
   isWalkIn: boolean;
-  creditBalance: number; // positive = customer owes money
+  // No stored credit balance — a device that misses one network sync would
+  // drift out of sync with everyone else forever with nothing to catch it.
+  // What a customer owes is always computed fresh from real bills (see
+  // creditBalanceFor in lib/billing.ts), never cached here.
   lastReminderAt: number | null;
   createdAt: number;
 }

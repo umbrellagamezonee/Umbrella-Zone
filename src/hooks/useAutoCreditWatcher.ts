@@ -35,7 +35,7 @@ export function useAutoCreditWatcher() {
 
       const { orders, markBilled } = useOrdersStore.getState();
       const { bills, createOpenBill, settlePayment } = useBillsStore.getState();
-      const { customers, adjustCredit } = useCustomersStore.getState();
+      const { customers } = useCustomersStore.getState();
 
       const staleServedOrders = orders.filter(
         (o) =>
@@ -70,16 +70,14 @@ export function useAutoCreditWatcher() {
           discount: 0,
         });
         markBilled(order.id);
-        const settled = settlePayment(bill.id, { amountCash: 0, amountUpi: 0 });
-        if (settled) adjustCredit(customer.id, settled.amountDue);
+        settlePayment(bill.id, { amountCash: 0, amountUpi: 0 });
       }
 
       const staleOpenBills = bills.filter(
         (b) => b.status === "open" && !b.shares && b.customerId && now - b.createdAt > AGE_MS
       );
       for (const bill of staleOpenBills) {
-        const settled = settlePayment(bill.id, { amountCash: 0, amountUpi: 0 });
-        if (settled) adjustCredit(bill.customerId!, settled.amountDue);
+        settlePayment(bill.id, { amountCash: 0, amountUpi: 0 });
       }
     }
 

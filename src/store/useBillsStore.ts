@@ -33,6 +33,12 @@ interface CreateBillInput {
 interface SettleInput {
   amountCash: number;
   amountUpi: number;
+  // Only needed when settling attaches the bill to a real customer it
+  // wasn't already billed to (e.g. a walk-in canteen bill where a name only
+  // gets typed in at checkout) — since credit owed is now always computed
+  // from bills by matching customerId, that attribution has to happen on
+  // the bill itself, not just wherever the caller keeps a separate number.
+  customerId?: string;
 }
 
 function paymentMethodFor(amountCash: number, amountUpi: number, amountDue: number): PaymentMethod | null {
@@ -287,6 +293,7 @@ export const useBillsStore = create<BillsState>()(
             const amountDue = Math.round((b.total - amountPaid) * 100) / 100;
             updated = {
               ...b,
+              customerId: input.customerId ?? b.customerId,
               status: "paid",
               paymentMethod: paymentMethodFor(amountCash, amountUpi, amountDue),
               amountPaid,

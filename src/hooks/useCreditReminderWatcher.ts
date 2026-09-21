@@ -1,7 +1,10 @@
 import { useEffect } from "react";
 import { useCustomersStore } from "../store/useCustomersStore";
+import { useBillsStore } from "../store/useBillsStore";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { sendCreditReminder } from "../lib/reminderApi";
+import { creditBalanceFor } from "../lib/billing";
+import { normalizeName } from "../lib/customerName";
 
 const CHECK_INTERVAL_MS = 5 * 60 * 1000; // check every 5 minutes while the app is open
 const REMINDER_GAP_MS = 24 * 60 * 60 * 1000; // remind at most once per 24 hours
@@ -15,12 +18,13 @@ export function useCreditReminderWatcher() {
   useEffect(() => {
     function check() {
       const now = Date.now();
+      const bills = useBillsStore.getState().bills;
       const due = useCustomersStore
         .getState()
         .customers.filter(
           (c) =>
             !c.isWalkIn &&
-            c.creditBalance > 0 &&
+            creditBalanceFor(bills, c.id, normalizeName(c.name)) > 0 &&
             (c.lastReminderAt == null || now - c.lastReminderAt > REMINDER_GAP_MS)
         );
       // Read settings fresh each check rather than closing over them, so a
@@ -32,7 +36,7 @@ export function useCreditReminderWatcher() {
           customerId: c.id,
           name: c.name,
           phone: c.phone,
-          amountDue: c.creditBalance,
+          amountDue: creditBalanceFor(bills, c.id, normalizeName(c.name)),
           storeName,
           currencySymbol,
         });

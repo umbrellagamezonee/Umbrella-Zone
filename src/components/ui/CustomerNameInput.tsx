@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { useCustomersStore } from "../../store/useCustomersStore";
+import { useBillsStore } from "../../store/useBillsStore";
 import { useSettingsStore } from "../../store/useSettingsStore";
 import { normalizeName, customerLabel } from "../../lib/customerName";
+import { creditBalanceFor } from "../../lib/billing";
 import { formatMoney } from "../../lib/format";
 import { Check } from "lucide-react";
 
@@ -26,6 +28,7 @@ export function CustomerNameInput({
   onEnter?: () => void;
 }) {
   const customers = useCustomersStore((s) => s.customers);
+  const bills = useBillsStore((s) => s.bills);
   const currency = useSettingsStore((s) => s.currencySymbol);
   const [focused, setFocused] = useState(false);
 
@@ -40,8 +43,8 @@ export function CustomerNameInput({
             const aExact = normalizeName(a.name) === key ? 0 : 1;
             const bExact = normalizeName(b.name) === key ? 0 : 1;
             if (aExact !== bExact) return aExact - bExact;
-            const aDue = a.creditBalance > 0 ? 0 : 1;
-            const bDue = b.creditBalance > 0 ? 0 : 1;
+            const aDue = creditBalanceFor(bills, a.id, normalizeName(a.name)) > 0 ? 0 : 1;
+            const bDue = creditBalanceFor(bills, b.id, normalizeName(b.name)) > 0 ? 0 : 1;
             if (aDue !== bDue) return aDue - bDue;
             return a.name.localeCompare(b.name);
           })
@@ -69,6 +72,7 @@ export function CustomerNameInput({
         <div className="mt-1.5 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] overflow-hidden">
           {matches.map((c) => {
             const isExact = c.id === exactId;
+            const due = creditBalanceFor(bills, c.id, normalizeName(c.name));
             return (
               <button
                 key={c.id}
@@ -85,9 +89,9 @@ export function CustomerNameInput({
                   {isExact && <Check size={13} className="text-[var(--color-success)] shrink-0" />}
                   {customerLabel(c, customers)}
                 </span>
-                {c.creditBalance > 0 && (
+                {due > 0 && (
                   <span className="text-xs text-[var(--color-warning)] shrink-0">
-                    {formatMoney(c.creditBalance, currency)} due
+                    {formatMoney(due, currency)} due
                   </span>
                 )}
               </button>

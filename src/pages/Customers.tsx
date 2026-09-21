@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { AppShell } from "../components/layout/AppShell";
 import { Card } from "../components/ui/Card";
 import { Modal } from "../components/ui/Modal";
@@ -11,7 +11,14 @@ import { useBillsStore } from "../store/useBillsStore";
 import { useOrdersStore } from "../store/useOrdersStore";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { formatMoney, formatDateTime } from "../lib/format";
-import { billCollectedFor, customerOpenBills, customerPendingOrders, orderTotal, personBillView } from "../lib/billing";
+import {
+  billCollectedFor,
+  creditBalanceFor,
+  customerOpenBills,
+  customerPendingOrders,
+  orderTotal,
+  personBillView,
+} from "../lib/billing";
 import { cleanName, customerLabel, findCustomerByName, normalizeName } from "../lib/customerName";
 import { isCreditSettlement } from "../lib/billLabel";
 import type { Customer, Bill, CanteenOrder } from "../types";
@@ -24,6 +31,7 @@ export function Customers() {
   const customers = useCustomersStore((s) => s.customers);
   const addCustomer = useCustomersStore((s) => s.addCustomer);
   const removeCustomer = useCustomersStore((s) => s.removeCustomer);
+  const bills = useBillsStore((s) => s.bills);
   const currency = useSettingsStore((s) => s.currencySymbol);
   const [search, setSearch] = useState("");
   const [showAdd, setShowAdd] = useState(false);
@@ -32,6 +40,17 @@ export function Customers() {
   const [email, setEmail] = useState("");
   const [detailCustomer, setDetailCustomer] = useState<Customer | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+
+  // One pass over every bill for the whole list, not one pass per row —
+  // this directory can have well over a hundred customers.
+  const creditById = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const c of customers) {
+      if (c.isWalkIn) continue;
+      map.set(c.id, creditBalanceFor(bills, c.id, normalizeName(c.name)));
+    }
+    return map;
+  }, [customers, bills]);
 
   const filtered = customers.filter(
     (c) =>
@@ -103,9 +122,9 @@ export function Customers() {
               </div>
             </div>
             <div className="flex items-center gap-1.5">
-              {c.creditBalance > 0 ? (
+              {(creditById.get(c.id) ?? 0) > 0 ? (
                 <span className="text-xs font-semibold text-[var(--color-warning)]">
-                  {formatMoney(c.creditBalance, currency)} due
+                  {formatMoney(creditById.get(c.id) ?? 0, currency)} due
                 </span>
               ) : (
                 !c.isWalkIn && <Check size={16} className="text-[var(--color-text-faint)]" />
@@ -276,7 +295,6 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
   const allCustomers = useCustomersStore((s) => s.customers);
   const mergeCustomer = useCustomersStore((s) => s.mergeCustomer);
   const updateCustomer = useCustomersStore((s) => s.updateCustomer);
-  const adjustCredit = useCustomersStore((s) => s.adjustCredit);
   const [detailBill, setDetailBill] = useState<Bill | null>(null);
   const [checkoutBill, setCheckoutBill] = useState<Bill | null>(null);
   const [showSettle, setShowSettle] = useState(false);
@@ -344,7 +362,8 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
   // auto-sweep eventually catches it.
   const openBills = customerOpenBills(bills, customer.id);
   const openBillsTotal = openBills.reduce((sum, b) => sum + b.amountDue, 0);
-  const totalOwed = customer.creditBalance + pendingTotal + openBillsTotal;
+  const customerCredit = creditBalanceFor(bills, customer.id, nameKey);
+  const totalOwed = customerCredit + pendingTotal + openBillsTotal;
 
   function handleBillOrder(order: (typeof pendingOrders)[number]) {
     const total = orderTotal(order);
@@ -401,12 +420,10 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
         discount: 0,
       });
       markOrderBilled(order.id);
-      const settled = settlePayment(bill.id, { amountCash: 0, amountUpi: 0 });
-      if (settled) adjustCredit(customer.id, settled.amountDue);
+      settlePayment(bill.id, { amountCash: 0, amountUpi: 0 });
     }
     for (const bill of openBills) {
-      const settled = settlePayment(bill.id, { amountCash: 0, amountUpi: 0 });
-      if (settled) adjustCredit(customer.id, settled.amountDue);
+      settlePayment(bill.id, { amountCash: 0, amountUpi: 0 });
     }
     setShowSettle(true);
   }
@@ -570,20 +587,23 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
                 Pick who this is really the same as — every match, bill and credit balance moves
                 onto them and this duplicate is removed. Can't be undone.
               </p>
-              {mergeCandidates.slice(0, 8).map((c) => (
-                <button
-                  key={c.id}
-                  onClick={() => setMergeTarget(c)}
-                  className="w-full flex items-center justify-between gap-2 rounded-xl bg-[var(--color-surface)] border border-[var(--color-border)] px-3 py-2.5 text-left"
-                >
-                  <span className="text-sm">{customerLabel(c, allCustomers)}</span>
-                  {c.creditBalance > 0 && (
-                    <span className="text-xs text-[var(--color-warning)] shrink-0">
-                      {formatMoney(c.creditBalance, currency)} due
-                    </span>
-                  )}
-                </button>
-              ))}
+              {mergeCandidates.slice(0, 8).map((c) => {
+                const due = creditBalanceFor(bills, c.id, normalizeName(c.name));
+                return (
+                  <button
+                    key={c.id}
+                    onClick={() => setMergeTarget(c)}
+                    className="w-full flex items-center justify-between gap-2 rounded-xl bg-[var(--color-surface)] border border-[var(--color-border)] px-3 py-2.5 text-left"
+                  >
+                    <span className="text-sm">{customerLabel(c, allCustomers)}</span>
+                    {due > 0 && (
+                      <span className="text-xs text-[var(--color-warning)] shrink-0">
+                        {formatMoney(due, currency)} due
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
             </div>
           </details>
         )}
@@ -601,7 +621,7 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
             </p>
             <p className="text-xs text-[var(--color-text-faint)]">
               All their sessions and bills get re-tagged, and{" "}
-              {formatMoney(customer.creditBalance, currency)} credit is added to{" "}
+              {formatMoney(customerCredit, currency)} credit moves onto{" "}
               {customerLabel(mergeTarget, allCustomers)}. This customer is then deleted. This can't be
               undone.
             </p>
@@ -632,21 +652,22 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
 export function SettleCreditModal({ customer, onClose }: { customer: Customer; onClose: () => void }) {
   const currency = useSettingsStore((s) => s.currencySymbol);
   const recordCreditSettlement = useBillsStore((s) => s.recordCreditSettlement);
-  const adjustCredit = useCustomersStore((s) => s.adjustCredit);
+  const bills = useBillsStore((s) => s.bills);
+  const customerDue = creditBalanceFor(bills, customer.id, normalizeName(customer.name));
 
   const [discountInput, setDiscountInput] = useState("0");
-  const [cashInput, setCashInput] = useState(customer.creditBalance.toFixed(2));
+  const [cashInput, setCashInput] = useState(customerDue.toFixed(2));
   const [accountInput, setAccountInput] = useState("0");
   const [settled, setSettled] = useState<{ amountCash: number; amountUpi: number; discount: number } | null>(
     null
   );
 
-  const discount = Math.min(Math.max(0, Number(discountInput) || 0), customer.creditBalance);
-  const payableMax = Math.max(0, customer.creditBalance - discount);
+  const discount = Math.min(Math.max(0, Number(discountInput) || 0), customerDue);
+  const payableMax = Math.max(0, customerDue - discount);
   const cash = Math.min(Math.max(0, Number(cashInput) || 0), payableMax);
   const account = Math.min(Math.max(0, Number(accountInput) || 0), Math.max(0, payableMax - cash));
   const amountPaid = cash + account;
-  const remaining = Math.max(0, customer.creditBalance - amountPaid - discount);
+  const remaining = Math.max(0, customerDue - amountPaid - discount);
   const canSettle = amountPaid > 0 || discount > 0;
 
   function handleSettle() {
@@ -658,7 +679,6 @@ export function SettleCreditModal({ customer, onClose }: { customer: Customer; o
       amountUpi: account,
       discount,
     });
-    adjustCredit(customer.id, -(amountPaid + discount));
     setSettled({ amountCash: cash, amountUpi: account, discount });
   }
 
@@ -712,7 +732,7 @@ export function SettleCreditModal({ customer, onClose }: { customer: Customer; o
         <Card>
           <div className="flex justify-between text-sm">
             <span className="text-[var(--color-text-dim)]">Total due</span>
-            <span className="font-semibold">{formatMoney(customer.creditBalance, currency)}</span>
+            <span className="font-semibold">{formatMoney(customerDue, currency)}</span>
           </div>
         </Card>
 
@@ -721,7 +741,7 @@ export function SettleCreditModal({ customer, onClose }: { customer: Customer; o
           <input
             type="number"
             min={0}
-            max={customer.creditBalance}
+            max={customerDue}
             value={discountInput}
             onChange={(e) => {
               const raw = e.target.value;
@@ -729,8 +749,8 @@ export function SettleCreditModal({ customer, onClose }: { customer: Customer; o
               // Keep "Receiving now" visually honest — raising the discount
               // shouldn't leave a stale amount sitting there that adds up to
               // more than what's actually owed.
-              const newDiscount = Math.min(Math.max(0, Number(raw) || 0), customer.creditBalance);
-              const maxAmount = customer.creditBalance - newDiscount;
+              const newDiscount = Math.min(Math.max(0, Number(raw) || 0), customerDue);
+              const maxAmount = customerDue - newDiscount;
               setCashInput((prev) => ((Number(prev) || 0) > maxAmount ? maxAmount.toFixed(2) : prev));
             }}
             className="w-24 text-right bg-[var(--color-surface-2)] rounded-lg px-2 py-1.5 text-sm outline-none"

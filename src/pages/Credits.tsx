@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { AppShell } from "../components/layout/AppShell";
 import { Card } from "../components/ui/Card";
 import { useCustomersStore } from "../store/useCustomersStore";
@@ -6,9 +6,9 @@ import { useOrdersStore } from "../store/useOrdersStore";
 import { useBillsStore } from "../store/useBillsStore";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { formatMoney, timeAgo } from "../lib/format";
-import { customerOpenBills, customerPendingOrders, orderTotal } from "../lib/billing";
+import { creditBalanceFor, customerOpenBills, customerPendingOrders, orderTotal } from "../lib/billing";
 import { sendCreditReminder } from "../lib/reminderApi";
-import { customerLabel } from "../lib/customerName";
+import { customerLabel, normalizeName } from "../lib/customerName";
 import { CustomerDetailModal, SettleCreditModal } from "./Customers";
 import type { Customer } from "../types";
 import { BellRing, Wallet, Search } from "lucide-react";
@@ -22,7 +22,6 @@ import { BellRing, Wallet, Search } from "lucide-react";
 export function Credits() {
   const customers = useCustomersStore((s) => s.customers);
   const markReminded = useCustomersStore((s) => s.markReminded);
-  const adjustCredit = useCustomersStore((s) => s.adjustCredit);
   const orders = useOrdersStore((s) => s.orders);
   const markOrderBilled = useOrdersStore((s) => s.markBilled);
   const bills = useBillsStore((s) => s.bills);
@@ -76,23 +75,30 @@ export function Credits() {
         discount: 0,
       });
       markOrderBilled(order.id);
-      const settled = settlePayment(bill.id, { amountCash: 0, amountUpi: 0 });
-      if (settled) adjustCredit(c.id, settled.amountDue);
+      settlePayment(bill.id, { amountCash: 0, amountUpi: 0 });
     }
     for (const bill of customerOpenBills(bills, c.id)) {
-      const settled = settlePayment(bill.id, { amountCash: 0, amountUpi: 0 });
-      if (settled) adjustCredit(c.id, settled.amountDue);
+      settlePayment(bill.id, { amountCash: 0, amountUpi: 0 });
     }
     const fresh = useCustomersStore.getState().customers.find((x) => x.id === c.id) ?? c;
     setSettleCustomer(fresh);
   }
 
-  const dueCustomers = customers
-    .filter((c) => !c.isWalkIn)
-    .map((c) => ({ customer: c, pendingTotal: pendingTotalFor(c.id) }))
-    .filter(({ customer: c, pendingTotal }) => c.creditBalance > 0 || pendingTotal > 0)
-    .sort((a, b) => (b.customer.creditBalance + b.pendingTotal) - (a.customer.creditBalance + a.pendingTotal));
-  const totalDue = dueCustomers.reduce((sum, { customer: c, pendingTotal }) => sum + c.creditBalance + pendingTotal, 0);
+  const dueCustomers = useMemo(
+    () =>
+      customers
+        .filter((c) => !c.isWalkIn)
+        .map((c) => ({
+          customer: c,
+          creditBalance: creditBalanceFor(bills, c.id, normalizeName(c.name)),
+          pendingTotal: pendingTotalFor(c.id),
+        }))
+        .filter(({ creditBalance, pendingTotal }) => creditBalance > 0 || pendingTotal > 0)
+        .sort((a, b) => (b.creditBalance + b.pendingTotal) - (a.creditBalance + a.pendingTotal)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [customers, bills, orders]
+  );
+  const totalDue = dueCustomers.reduce((sum, { creditBalance, pendingTotal }) => sum + creditBalance + pendingTotal, 0);
   const visibleDueCustomers = dueCustomers.filter(
     ({ customer: c }) =>
       c.name.toLowerCase().includes(search.toLowerCase()) || c.phone.includes(search)
@@ -107,7 +113,7 @@ export function Credits() {
       customerId: c.id,
       name: c.name,
       phone: c.phone,
-      amountDue: c.creditBalance,
+      amountDue: creditBalanceFor(bills, c.id, normalizeName(c.name)),
       storeName,
       currencySymbol: currency,
     });
@@ -151,7 +157,7 @@ export function Credits() {
         </p>
       ) : (
         <div className="space-y-2">
-          {visibleDueCustomers.map(({ customer: c, pendingTotal }) => (
+          {visibleDueCustomers.map(({ customer: c, creditBalance, pendingTotal }) => (
             <Card
               key={c.id}
               onClick={() => setDetailCustomer(c)}
@@ -165,12 +171,12 @@ export function Credits() {
                   </p>
                 </div>
                 <span className="text-sm font-semibold text-[var(--color-warning)]">
-                  {formatMoney(c.creditBalance + pendingTotal, currency)}
+                  {formatMoney(creditBalance + pendingTotal, currency)}
                 </span>
               </div>
               {pendingTotal > 0 && (
                 <p className="text-xs text-[var(--color-text-faint)] mt-1">
-                  {formatMoney(c.creditBalance, currency)} on credit · {formatMoney(pendingTotal, currency)} not
+                  {formatMoney(creditBalance, currency)} on credit · {formatMoney(pendingTotal, currency)} not
                   billed yet
                 </p>
               )}
@@ -180,7 +186,7 @@ export function Credits() {
                     e.stopPropagation();
                     handleSettleClick(c);
                   }}
-                  disabled={c.creditBalance === 0 && pendingTotal === 0}
+                  disabled={creditBalance === 0 && pendingTotal === 0}
                   className="flex items-center justify-center gap-2 rounded-xl bg-[var(--color-success)]/15 text-[var(--color-success)] text-sm font-medium py-2 disabled:opacity-40"
                 >
                   <Wallet size={14} /> Settle

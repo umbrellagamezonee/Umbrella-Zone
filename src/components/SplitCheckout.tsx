@@ -28,7 +28,6 @@ export function SplitCheckout({ bill: initialBill, onDone }: { bill: Bill; onDon
   const upiId = useSettingsStore((s) => s.upiId);
   const settleShare = useBillsStore((s) => s.settleShare);
   const findOrCreateCustomer = useCustomersStore((s) => s.findOrCreateCustomer);
-  const adjustCredit = useCustomersStore((s) => s.adjustCredit);
   const tables = useTablesStore((s) => s.tables);
   const startSession = useTablesStore((s) => s.startSession);
   const games = useGamesStore((s) => s.games);
@@ -99,12 +98,11 @@ export function SplitCheckout({ bill: initialBill, onDone }: { bill: Bill; onDon
 
   function settle(share: BillShare, method: PaymentMethod) {
     settleShare(bill.id, share.id, { method });
-    if (method === "credit") {
-      // Matches an existing customer by the share's payer name, so the same
-      // person's credit lands on one profile instead of splintering.
-      const customer = findOrCreateCustomer({ name: share.payerName, phone: "" });
-      adjustCredit(customer.id, share.amount);
-    }
+    // Ensures a real profile exists for this name so they show up in
+    // Customers/Credits — what they owe is computed straight from the
+    // share itself (matched by payerName) once it's marked paid, no
+    // separate credit number to keep in sync.
+    if (method === "credit") findOrCreateCustomer({ name: share.payerName, phone: "" });
     setStep(share.id, "idle");
   }
 

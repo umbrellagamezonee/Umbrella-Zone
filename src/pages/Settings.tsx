@@ -13,6 +13,8 @@ import { useExpensesStore } from "../store/useExpensesStore";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { markRestoreInProgress } from "../lib/cloudSync";
 import { formatMoney, formatDateTime, IST_TIME_ZONE } from "../lib/format";
+import { creditBalanceFor } from "../lib/billing";
+import { normalizeName } from "../lib/customerName";
 import {
   LayoutGrid,
   Tag,
@@ -1158,7 +1160,7 @@ function ExportExcelModal({ onClose }: { onClose: () => void }) {
         .map((c) => ({
           Name: c.name,
           Phone: c.phone,
-          "Credit Balance": c.creditBalance,
+          "Credit Balance": creditBalanceFor(bills, c.id, normalizeName(c.name)),
           "Added On": new Date(c.createdAt).toLocaleDateString([], { timeZone: IST_TIME_ZONE }),
         }));
       if (customerRows.length > 0) {
