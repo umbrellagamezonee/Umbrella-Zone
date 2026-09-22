@@ -6,12 +6,10 @@ import { Credits } from "./pages/Credits";
 import { Reports } from "./pages/Reports";
 import { Settings } from "./pages/Settings";
 import { useCreditReminderWatcher } from "./hooks/useCreditReminderWatcher";
-import { useAutoCreditWatcher } from "./hooks/useAutoCreditWatcher";
 import { ThemeApplier } from "./components/ThemeApplier";
 
 export default function App() {
   useCreditReminderWatcher();
-  useAutoCreditWatcher();
 
   return (
     <>
