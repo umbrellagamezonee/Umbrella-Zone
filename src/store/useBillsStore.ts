@@ -85,13 +85,19 @@ interface BillRow {
 const TABLE = "bills";
 const fromRow = (row: BillRow): Bill => {
   const amountPaid = Number(row.amount_paid);
-  // Before the migration adds these columns, fall back to the old
-  // single-method assumption so a fetch that predates it still displays
-  // sensibly instead of showing every rupee as cash.
-  const amountCash =
-    row.amount_cash != null ? Number(row.amount_cash) : row.payment_method === "upi" ? 0 : amountPaid;
-  const amountUpi =
-    row.amount_upi != null ? Number(row.amount_upi) : row.payment_method === "upi" ? amountPaid : 0;
+  // Before the migration added these columns, rows got backfilled with 0/0
+  // instead of the real split — indistinguishable from missing (null) at
+  // read time, and either way cash+upi silently stops covering what was
+  // actually collected. Falling back to the old single-method assumption
+  // whenever the two don't add up (not just when they're literally null)
+  // catches both cases, instead of quietly showing an empty payment method
+  // for money that really was collected.
+  const cashUpiKnown =
+    row.amount_cash != null &&
+    row.amount_upi != null &&
+    Math.abs(Number(row.amount_cash) + Number(row.amount_upi) - amountPaid) < 0.01;
+  const amountCash = cashUpiKnown ? Number(row.amount_cash) : row.payment_method === "upi" ? 0 : amountPaid;
+  const amountUpi = cashUpiKnown ? Number(row.amount_upi) : row.payment_method === "upi" ? amountPaid : 0;
   return {
     id: row.id,
     tableId: row.table_id,
