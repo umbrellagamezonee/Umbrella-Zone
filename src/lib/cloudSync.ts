@@ -39,6 +39,38 @@ if (typeof window !== "undefined") {
   }, 5000);
 }
 
+// PostgREST caps an unranged select at its own default row limit (1000 on
+// this project) — a table that's grown past that would otherwise have its
+// initial fetch silently truncated, with no error, to whichever 1000 rows
+// happen to come back. Every device that's ever offline/reset for long
+// enough to need this initial fetch (not just brand-new ones) is exposed —
+// a busy shop's bills table crosses 1000 rows within days. Paging through
+// with .range() until a page comes back short (rather than trusting a
+// single response) gets the whole table regardless of size. Ordering by id
+// isn't meaningful on its own, just stable — without *some* explicit order
+// PostgREST doesn't guarantee row order stays put between one range request
+// and the next, which could skip or repeat rows across pages.
+const FETCH_PAGE_SIZE = 1000;
+async function fetchAllRows<TRow>(
+  table: string
+): Promise<{ data: TRow[] | null; error: { message: string } | null }> {
+  const all: TRow[] = [];
+  let from = 0;
+  for (;;) {
+    const { data, error } = await supabase!
+      .from(table)
+      .select("*")
+      .order("id")
+      .range(from, from + FETCH_PAGE_SIZE - 1);
+    if (error) return { data: null, error };
+    if (!data || data.length === 0) break;
+    all.push(...(data as TRow[]));
+    if (data.length < FETCH_PAGE_SIZE) break;
+    from += FETCH_PAGE_SIZE;
+  }
+  return { data: all, error: null };
+}
+
 // Shared plumbing every synced store uses: on load, pull the table down and
 // replace local state with it; from then on, a realtime subscription keeps
 // local state in sync with whatever any other device writes. Each store's
@@ -61,26 +93,23 @@ export function setupSync<TRow extends { id: string }, TItem>(
 ) {
   if (!supabase) return;
 
-  supabase
-    .from(table)
-    .select("*")
-    .then(({ data, error }) => {
-      if (error) {
-        console.error(`[cloudSync] initial fetch of "${table}" failed`, error);
-        return;
-      }
-      if (isRestoreInProgress()) {
-        const local = getLocal();
-        if (local.length > 0) bulkUpsertWithRetry(table, local.map(toRow) as Record<string, unknown>[]);
-        return;
-      }
-      if (data && data.length > 0) {
-        applyInitial((data as TRow[]).map(fromRow));
-        return;
-      }
+  fetchAllRows<TRow>(table).then(({ data, error }) => {
+    if (error) {
+      console.error(`[cloudSync] initial fetch of "${table}" failed`, error);
+      return;
+    }
+    if (isRestoreInProgress()) {
       const local = getLocal();
-      if (local.length > 0) pushBulkInsert(table, local.map(toRow));
-    });
+      if (local.length > 0) bulkUpsertWithRetry(table, local.map(toRow) as Record<string, unknown>[]);
+      return;
+    }
+    if (data && data.length > 0) {
+      applyInitial(data.map(fromRow));
+      return;
+    }
+    const local = getLocal();
+    if (local.length > 0) pushBulkInsert(table, local.map(toRow));
+  });
 
   supabase
     .channel(`${table}-sync`)
