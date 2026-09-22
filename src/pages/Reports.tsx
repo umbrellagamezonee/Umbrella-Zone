@@ -457,6 +457,7 @@ function TableReportModal({ onClose }: { onClose: () => void }) {
                 </thead>
                 <tbody>
                   {dayBills.map((b) => {
+                    const timeUnknown = b.tableCharge > 0 && b.tableChargeMinutes <= 0;
                     const durationMs = b.tableChargeMinutes * 60000;
                     const start = b.createdAt - durationMs;
                     const customer = customers.find((c) => c.id === b.customerId);
@@ -478,8 +479,19 @@ function TableReportModal({ onClose }: { onClose: () => void }) {
                           (b.status === "cancelled" ? " opacity-50" : "")
                         }
                       >
-                        <td className="py-2 pr-2 whitespace-nowrap">{formatTime(start)}</td>
-                        <td className="py-2 pr-2 whitespace-nowrap">{formatTime(b.createdAt)}</td>
+                        {timeUnknown ? (
+                          <td
+                            className="py-2 pr-2 whitespace-nowrap text-[var(--color-text-faint)]"
+                            colSpan={2}
+                          >
+                            Time not recorded
+                          </td>
+                        ) : (
+                          <>
+                            <td className="py-2 pr-2 whitespace-nowrap">{formatTime(start)}</td>
+                            <td className="py-2 pr-2 whitespace-nowrap">{formatTime(b.createdAt)}</td>
+                          </>
+                        )}
                         <td className="py-2 pr-2">{who}</td>
                         <td className="py-2 pr-2 text-right font-medium whitespace-nowrap">
                           {formatMoney(b.total, currency)}

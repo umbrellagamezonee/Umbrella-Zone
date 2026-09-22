@@ -19,6 +19,12 @@ export function BillDetailModal({ bill, onClose }: { bill: Bill; onClose: () => 
   const money = billMoney(bill);
 
   const hasSession = bill.tableId != null;
+  // A real table charge always has a matching non-zero duration it was
+  // computed from — if it doesn't (an old record from before this field was
+  // tracked, or a bad edit), showing a made-up start time equal to the end
+  // time would look like money appeared out of nowhere. Say so plainly
+  // instead of guessing.
+  const timeUnknown = bill.tableCharge > 0 && bill.tableChargeMinutes <= 0;
   const durationMs = bill.tableChargeMinutes * 60000;
   const startedAt = bill.createdAt - durationMs;
 
@@ -91,8 +97,19 @@ export function BillDetailModal({ bill, onClose }: { bill: Bill; onClose: () => 
                       </span>
                     )}
                   </td>
-                  <td className="py-2 px-2 whitespace-nowrap">{formatTime(startedAt)}</td>
-                  <td className="py-2 px-2 whitespace-nowrap">{formatTime(bill.createdAt)}</td>
+                  {timeUnknown ? (
+                    <td
+                      className="py-2 px-2 whitespace-nowrap text-[var(--color-text-faint)]"
+                      colSpan={2}
+                    >
+                      Time not recorded
+                    </td>
+                  ) : (
+                    <>
+                      <td className="py-2 px-2 whitespace-nowrap">{formatTime(startedAt)}</td>
+                      <td className="py-2 px-2 whitespace-nowrap">{formatTime(bill.createdAt)}</td>
+                    </>
+                  )}
                   <td className="py-2 pl-2 text-right font-medium whitespace-nowrap">
                     {money0(bill.tableCharge)}
                   </td>

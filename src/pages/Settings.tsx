@@ -1084,7 +1084,11 @@ function ExportExcelModal({ onClose }: { onClose: () => void }) {
           return {
             Date: new Date(b.createdAt).toLocaleDateString([], { timeZone: IST_TIME_ZONE }),
             "Started At": b.tableId
-              ? new Date(b.createdAt - b.tableChargeMinutes * 60000).toLocaleTimeString([], { timeZone: IST_TIME_ZONE })
+              ? b.tableCharge > 0 && b.tableChargeMinutes <= 0
+                ? "Not recorded"
+                : new Date(b.createdAt - b.tableChargeMinutes * 60000).toLocaleTimeString([], {
+                    timeZone: IST_TIME_ZONE,
+                  })
               : "",
             "Ended At": new Date(b.createdAt).toLocaleTimeString([], { timeZone: IST_TIME_ZONE }),
             Table: b.tableName ?? "",
