@@ -32,6 +32,7 @@ export function Customers() {
   const addCustomer = useCustomersStore((s) => s.addCustomer);
   const removeCustomer = useCustomersStore((s) => s.removeCustomer);
   const bills = useBillsStore((s) => s.bills);
+  const orders = useOrdersStore((s) => s.orders);
   const currency = useSettingsStore((s) => s.currencySymbol);
   const [search, setSearch] = useState("");
   const [showAdd, setShowAdd] = useState(false);
@@ -40,6 +41,7 @@ export function Customers() {
   const [email, setEmail] = useState("");
   const [detailCustomer, setDetailCustomer] = useState<Customer | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [blockedDelete, setBlockedDelete] = useState<{ name: string; owed: number } | null>(null);
 
   // One pass over every bill for the whole list, not one pass per row —
   // this directory can have well over a hundred customers.
@@ -51,6 +53,31 @@ export function Customers() {
     }
     return map;
   }, [customers, bills]);
+
+  // Everything a customer could still owe — settled credit, plus bills
+  // stuck open, plus orders never billed. Deleting a profile with any of
+  // this still outstanding doesn't erase the money, just the only place
+  // it was ever visible again — nobody's left to remind or collect from.
+  const totalOwedById = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const c of customers) {
+      if (c.isWalkIn) continue;
+      const credit = creditById.get(c.id) ?? 0;
+      const openBills = customerOpenBills(bills, c.id).reduce((s, b) => s + b.amountDue, 0);
+      const pending = customerPendingOrders(orders, bills, c.id).reduce((s, o) => s + orderTotal(o), 0);
+      map.set(c.id, credit + openBills + pending);
+    }
+    return map;
+  }, [customers, bills, orders, creditById]);
+
+  function handleDeleteClick(c: Customer) {
+    const owed = totalOwedById.get(c.id) ?? 0;
+    if (owed > 0.5) {
+      setBlockedDelete({ name: c.name, owed });
+      return;
+    }
+    setConfirmDeleteId(c.id);
+  }
 
   const filtered = customers.filter(
     (c) =>
@@ -133,7 +160,7 @@ export function Customers() {
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
-                    setConfirmDeleteId(c.id);
+                    handleDeleteClick(c);
                   }}
                   title="Delete this customer"
                   className="h-7 w-7 flex items-center justify-center rounded-full bg-[var(--color-danger)]/10 text-[var(--color-danger)] shrink-0"
@@ -149,6 +176,24 @@ export function Customers() {
 
       {detailCustomer && (
         <CustomerDetailModal customer={detailCustomer} onClose={() => setDetailCustomer(null)} />
+      )}
+
+      {blockedDelete && (
+        <Modal title="Can't delete yet" onClose={() => setBlockedDelete(null)}>
+          <div className="space-y-4">
+            <p className="text-sm">
+              <strong>{blockedDelete.name}</strong> still owes{" "}
+              <strong>{formatMoney(blockedDelete.owed, currency)}</strong>. Settle this first —
+              deleting the profile now would make that amount impossible to track or collect.
+            </p>
+            <button
+              onClick={() => setBlockedDelete(null)}
+              className="w-full rounded-xl bg-[var(--color-primary)] text-white font-semibold py-3"
+            >
+              Okay
+            </button>
+          </div>
+        </Modal>
       )}
 
       {confirmDeleteId && (
