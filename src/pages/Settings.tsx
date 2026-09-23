@@ -13,7 +13,7 @@ import { useExpensesStore } from "../store/useExpensesStore";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { markRestoreInProgress } from "../lib/cloudSync";
 import { formatMoney, formatDateTime, IST_TIME_ZONE } from "../lib/format";
-import { creditBalanceFor } from "../lib/billing";
+import { creditBalanceFor, dailyCollectionRows } from "../lib/billing";
 import { normalizeName } from "../lib/customerName";
 import {
   LayoutGrid,
@@ -1056,6 +1056,7 @@ function ExportExcelModal({ onClose }: { onClose: () => void }) {
   const expenses = useExpensesStore((s) => s.expenses);
   const items = useMenuStore((s) => s.items);
   const categories = useMenuStore((s) => s.categories);
+  const tables = useTablesStore((s) => s.tables);
   const currency = useSettingsStore((s) => s.currencySymbol);
   const [working, setWorking] = useState(false);
 
@@ -1254,6 +1255,13 @@ function ExportExcelModal({ onClose }: { onClose: () => void }) {
       }
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(stockRows), "Stock & Profit");
 
+      // Same day-by-day cash/account breakdown as the Monthly Report's own
+      // sheet, but across this export's whole history instead of just the
+      // current month — one table/category row per date, only where
+      // something was actually collected.
+      const dailyRows = dailyCollectionRows(activeBills, items, categories, orderedTables(tables));
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(dailyRows), "Daily collection");
+
       XLSX.writeFile(wb, `cuebill-data-${new Date().toISOString().slice(0, 10)}.xlsx`);
     } finally {
       setWorking(false);
@@ -1264,8 +1272,9 @@ function ExportExcelModal({ onClose }: { onClose: () => void }) {
     <Modal title="Export Data (Excel)" onClose={onClose}>
       <div className="space-y-4">
         <p className="text-sm text-[var(--color-text-dim)]">
-          Ek Excel file (.xlsx) mein sab kuch — Bills, Canteen Items, Customers, Expenses, aur
-          Stock & Profit — alag-alag sheets mein, har sheet ke aakhri row mein TOTAL ke saath.
+          Ek Excel file (.xlsx) mein sab kuch — Bills, Canteen Items, Customers, Expenses,
+          Stock & Profit, aur Daily collection (har din ka table/item-wise cash-account) —
+          alag-alag sheets mein, har sheet ke aakhri row mein TOTAL ke saath.
           Stock & Profit sheet mein har item ki cost price, per-unit aur total profit, kitna bika
           aur kitna stock abhi pending hai — sab ek saath. Isse tum Excel/Google Sheets mein khol
           kar dekh, filter, ya print kar sakte ho. Amounts {currency} mein hain.

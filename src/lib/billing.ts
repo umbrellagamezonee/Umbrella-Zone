@@ -1,6 +1,7 @@
-import type { Bill, CanteenOrder, PaymentMethod } from "../types";
+import type { Bill, CanteenOrder, MenuCategory, MenuItem, PaymentMethod } from "../types";
 import { normalizeName } from "./customerName";
 import { isCreditSettlement } from "./billLabel";
+import { toDateInputValue, formatDateKey } from "./format";
 
 export interface BillMoney {
   cash: number;
@@ -182,6 +183,156 @@ export function customerPendingOrders(orders: CanteenOrder[], bills: Bill[], cus
 // creditBalance — same idea as customerPendingOrders, one step further along.
 export function customerOpenBills(bills: Bill[], customerId: string): Bill[] {
   return bills.filter((b) => b.customerId === customerId && !b.shares && b.status === "open");
+}
+
+// Canteen menu category -> the sheet/section name each report groups it
+// under. The single place this mapping is defined — Reports' monthly sheets
+// and Settings' full export both read it, so a menu category never drifts
+// out of sync between the two.
+export const REPORT_CATEGORIES: { sheet: string; categoryName: string }[] = [
+  { sheet: "Food collection", categoryName: "Kitchen" },
+  { sheet: "Cigarette collection", categoryName: "Cigarettes" },
+  { sheet: "Drinks collection", categoryName: "Fridge" },
+  { sheet: "Chocolate collection", categoryName: "Chocolate" },
+];
+
+export interface DailyCollectionRow {
+  Date: string;
+  Item: string;
+  "Total collection": number | string;
+  Cash: number | string;
+  Account: number | string;
+  [key: string]: string | number;
+}
+
+// Day-by-day cash/account breakdown, one block per date — what the owner
+// hands to their accountant: for each day, how much of each table's and
+// each canteen category's collection came in as cash vs account.
+// "Collection" here is cash+account actually received, same as everywhere
+// else — money still on credit isn't counted until it's actually paid.
+//
+// A bill's cash/account split is recorded once for the whole bill, not per
+// line item, so it's prorated across table charge and canteen charge by
+// their own combined face value (not the bill's total, which already has
+// any discount taken out — prorating against total would attribute more
+// cash+account to the two parts than was actually collected on a
+// discounted bill). Canteen money is prorated a second time across
+// categories by each item's own share of that bill's food total, matched
+// to its menu category by name. A split (shares) bill instead reads each
+// payer's own recorded method directly, since that was actually chosen per
+// share, not assumed from a ratio. A credit settlement (paying off an
+// older, already-billed debt) has no way to know which table or category
+// that original debt was for, so it's counted as cash collected on its own
+// date under its own "Credit settlement" row rather than guessed at.
+//
+// A table/category that a bill merely touched but nothing was actually
+// collected for yet (still fully on credit) doesn't get a row at all — a
+// table played on 5 days out of 20 doesn't need 15 rows of zeros saying so.
+export function dailyCollectionRows(
+  bills: Bill[],
+  menuItems: MenuItem[],
+  menuCategories: MenuCategory[],
+  orderedTablesList: { name: string }[]
+): DailyCollectionRow[] {
+  const round = (n: number) => Math.round(n * 100) / 100;
+
+  const catIdToLabel = new Map<string, string>();
+  for (const rc of REPORT_CATEGORIES) {
+    const catId = menuCategories.find((c) => c.name === rc.categoryName)?.id;
+    if (catId) catIdToLabel.set(catId, rc.sheet.replace(" collection", ""));
+  }
+  const itemNameToCatId = new Map<string, string>();
+  for (const item of menuItems) itemNameToCatId.set(item.name.trim().toLowerCase(), item.categoryId);
+
+  type Bucket = { total: number; cash: number; upi: number };
+  const newBucket = (): Bucket => ({ total: 0, cash: 0, upi: 0 });
+  const addTo = (b: Bucket, cash: number, upi: number) => {
+    b.cash += cash;
+    b.upi += upi;
+    b.total += cash + upi;
+  };
+  const dailyTables = new Map<string, Map<string, Bucket>>();
+  const dailyCategories = new Map<string, Map<string, Bucket>>();
+  const bucketFor = (map: Map<string, Map<string, Bucket>>, dateKey: string, key: string) => {
+    if (!map.has(dateKey)) map.set(dateKey, new Map());
+    const dayMap = map.get(dateKey)!;
+    if (!dayMap.has(key)) dayMap.set(key, newBucket());
+    return dayMap.get(key)!;
+  };
+
+  for (const bill of bills) {
+    if (bill.status === "cancelled") continue;
+    const dateKey = toDateInputValue(bill.createdAt);
+
+    if (isCreditSettlement(bill)) {
+      addTo(bucketFor(dailyCategories, dateKey, "Credit settlement"), bill.amountCash, bill.amountUpi);
+      continue;
+    }
+
+    const rawSum = bill.tableCharge + bill.canteenCharge;
+
+    if (bill.tableId && bill.tableName) {
+      const tBucket = bucketFor(dailyTables, dateKey, bill.tableName);
+      if (bill.shares) {
+        for (const s of bill.shares) {
+          if (s.status !== "paid" || s.label !== "Table charge" || !s.paymentMethod) continue;
+          addTo(tBucket, s.paymentMethod === "cash" ? s.amount : 0, s.paymentMethod === "upi" ? s.amount : 0);
+        }
+      } else if (rawSum > 0 && bill.tableCharge > 0) {
+        const frac = bill.tableCharge / rawSum;
+        addTo(tBucket, bill.amountCash * frac, bill.amountUpi * frac);
+      }
+    }
+
+    if (bill.canteenCharge > 0 && bill.canteenItems.length > 0) {
+      let canteenCash = 0;
+      let canteenUpi = 0;
+      if (bill.shares) {
+        for (const s of bill.shares) {
+          if (s.status !== "paid" || s.label === "Table charge" || !s.paymentMethod) continue;
+          if (s.paymentMethod === "cash") canteenCash += s.amount;
+          else if (s.paymentMethod === "upi") canteenUpi += s.amount;
+        }
+      } else if (rawSum > 0) {
+        const frac = bill.canteenCharge / rawSum;
+        canteenCash = bill.amountCash * frac;
+        canteenUpi = bill.amountUpi * frac;
+      }
+      for (const item of bill.canteenItems) {
+        const revenue = item.price * item.qty;
+        if (revenue <= 0) continue;
+        const itemFrac = revenue / bill.canteenCharge;
+        const catId = itemNameToCatId.get(item.name.trim().toLowerCase());
+        const label = (catId && catIdToLabel.get(catId)) || "Other";
+        addTo(bucketFor(dailyCategories, dateKey, label), canteenCash * itemFrac, canteenUpi * itemFrac);
+      }
+    }
+  }
+
+  const dateKeys = [...new Set([...dailyTables.keys(), ...dailyCategories.keys()])].sort();
+  const categoryOrder = [...REPORT_CATEGORIES.map((rc) => rc.sheet.replace(" collection", "")), "Other", "Credit settlement"];
+  const rows: DailyCollectionRow[] = [];
+  for (const dateKey of dateKeys) {
+    const label = formatDateKey(dateKey, { day: "numeric", month: "long" });
+    let dayTotal = newBucket();
+    const tableMap = dailyTables.get(dateKey);
+    for (const t of orderedTablesList) {
+      const b = tableMap?.get(t.name);
+      if (!b || b.total === 0) continue;
+      rows.push({ Date: label, Item: t.name, "Total collection": round(b.total), Cash: round(b.cash), Account: round(b.upi) });
+      dayTotal = { total: dayTotal.total + b.total, cash: dayTotal.cash + b.cash, upi: dayTotal.upi + b.upi };
+    }
+    const catMap = dailyCategories.get(dateKey);
+    for (const label2 of categoryOrder) {
+      const b = catMap?.get(label2);
+      if (!b || b.total === 0) continue;
+      rows.push({ Date: label, Item: label2, "Total collection": round(b.total), Cash: round(b.cash), Account: round(b.upi) });
+      dayTotal = { total: dayTotal.total + b.total, cash: dayTotal.cash + b.cash, upi: dayTotal.upi + b.upi };
+    }
+    rows.push({ Date: label, Item: "Total", "Total collection": round(dayTotal.total), Cash: round(dayTotal.cash), Account: round(dayTotal.upi) });
+    rows.push({ Date: "", Item: "", "Total collection": "", Cash: "", Account: "" });
+  }
+  return rows;
 }
 
 export function sumBillMoney(bills: Bill[]): BillMoney {
