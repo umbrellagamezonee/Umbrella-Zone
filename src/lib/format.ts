@@ -66,6 +66,15 @@ export function toDateInputValue(ts: number) {
   return `${y}-${m}-${day}`;
 }
 
+// The reverse of toDateInputValue — the real UTC instant that IST midnight
+// at the start of that calendar day falls on, for turning a date-range
+// picker's two <input type="date"> values into an actual [start, end) window
+// to filter timestamps against.
+export function dateInputValueToIstMidnight(dateValue: string): number {
+  const [y, m, d] = dateValue.split("-").map(Number);
+  return Date.UTC(y, m - 1, d, 0, 0, 0) - IST_OFFSET_MS;
+}
+
 export function formatDateTime(ts: number) {
   const d = new Date(ts);
   return d.toLocaleString([], {

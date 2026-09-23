@@ -18,7 +18,7 @@ import {
   isThisMonth,
   toDateInputValue,
   formatDateKey,
-  IST_TIME_ZONE,
+  dateInputValueToIstMidnight,
 } from "../lib/format";
 import { billMoney, billCollected, billRemaining, dailyCollectionRows, categoryStockProfit } from "../lib/billing";
 import { billPersonName, billPlace } from "../lib/billLabel";
@@ -532,6 +532,14 @@ function TableReportModal({ onClose }: { onClose: () => void }) {
   );
 }
 
+// Start of the current IST calendar month, as a date-input value — the
+// picker's default range, matching what this report always showed before
+// it became customizable.
+function startOfThisMonthValue(): string {
+  const now = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
+  return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}-01`;
+}
+
 function MonthlyReportModal({ onClose }: { onClose: () => void }) {
   const bills = useBillsStore((s) => s.bills);
   const orders = useOrdersStore((s) => s.orders);
@@ -543,36 +551,76 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
   const storeName = useSettingsStore((s) => s.storeName);
   const [working, setWorking] = useState(false);
   // Which category's Purchase figure is being edited right now — opens a
-  // list of this month's expense entries for just that category, since
-  // Purchase is a sum of however many of those there are, not one number.
+  // list of the selected range's expense entries for just that category,
+  // since Purchase is a sum of however many of those there are, not one
+  // number.
   const [editCategory, setEditCategory] = useState<string | null>(null);
 
-  const monthBills = useMemo(
-    () => bills.filter((b) => isThisMonth(b.createdAt) && b.status !== "cancelled"),
-    [bills]
+  // Everything on this report — every sheet, every card — is scoped to this
+  // one picked date range instead of always being "this month": a day, a
+  // week, a year, whatever the person actually wants right now. Defaults to
+  // the current month so the report opens exactly like it always used to.
+  const [rangeStart, setRangeStart] = useState(startOfThisMonthValue);
+  const [rangeEnd, setRangeEnd] = useState(() => toDateInputValue(Date.now()));
+  const rangeStartMs = dateInputValueToIstMidnight(rangeStart);
+  // Exclusive upper bound — the instant IST midnight starts on the day
+  // *after* the picked end date, so the end date itself is fully included.
+  const rangeEndMs = dateInputValueToIstMidnight(rangeEnd) + 24 * 60 * 60 * 1000;
+  function setPreset(days: number | "month" | "year") {
+    const today = toDateInputValue(Date.now());
+    if (days === "month") {
+      setRangeStart(startOfThisMonthValue());
+    } else if (days === "year") {
+      const y = new Date(Date.now() + 5.5 * 60 * 60 * 1000).getUTCFullYear();
+      setRangeStart(`${y}-01-01`);
+    } else {
+      setRangeStart(toDateInputValue(Date.now() - (days - 1) * 24 * 60 * 60 * 1000));
+    }
+    setRangeEnd(today);
+  }
+  const rangeLabel =
+    rangeStart === rangeEnd
+      ? formatDateKey(rangeStart, { day: "numeric", month: "short", year: "numeric" })
+      : `${formatDateKey(rangeStart, { day: "numeric", month: "short" })} – ${formatDateKey(rangeEnd, {
+          day: "numeric",
+          month: "short",
+          year: "numeric",
+        })}`;
+
+  const rangeBills = useMemo(
+    () =>
+      bills.filter(
+        (b) => b.createdAt >= rangeStartMs && b.createdAt < rangeEndMs && b.status !== "cancelled"
+      ),
+    [bills, rangeStartMs, rangeEndMs]
   );
-  const monthExpenses = useMemo(() => expenses.filter((e) => isThisMonth(e.createdAt)), [expenses]);
+  const rangeOrders = useMemo(
+    () => orders.filter((o) => o.createdAt >= rangeStartMs && o.createdAt < rangeEndMs),
+    [orders, rangeStartMs, rangeEndMs]
+  );
+  const rangeExpenses = useMemo(
+    () => expenses.filter((e) => e.createdAt >= rangeStartMs && e.createdAt < rangeEndMs),
+    [expenses, rangeStartMs, rangeEndMs]
+  );
   const expenseFor = (category: string) =>
-    monthExpenses.filter((e) => e.category === category).reduce((s, e) => s + e.amount, 0);
+    rangeExpenses.filter((e) => e.category === category).reduce((s, e) => s + e.amount, 0);
 
   const orderedTablesList = useMemo(() => orderedTables(tables), [tables]);
   const tableRows = orderedTablesList.map((t) => ({
     name: t.name,
-    collection: monthBills.filter((b) => b.tableId === t.id).reduce((s, b) => s + b.tableCharge, 0),
+    collection: rangeBills.filter((b) => b.tableId === t.id).reduce((s, b) => s + b.tableCharge, 0),
   }));
   const totalTableCollection = tableRows.reduce((s, r) => s + r.collection, 0);
   const tableExpense = expenseFor("Table");
   const netTableIncome = totalTableCollection - tableExpense;
 
-  // Stock, not revenue — how much of each item has ever sold and what
-  // restocking it has cost, across the whole time the shop's used this app,
-  // not just this month. A month boundary doesn't mean anything to a bag of
-  // stock bought in August and still being sold in September, so this reads
-  // every order and every expense ever logged, same as a shopkeeper's own
-  // running stock book never resets on the 1st.
+  // Same stock idea as before — how much of each item sold and what
+  // restocking it cost — just scoped to the picked range now instead of
+  // always being every order/expense ever logged. Pick a wide enough range
+  // (a year, or the shop's whole history) to get the old all-time view back.
   const categoryTotals = useMemo(
-    () => categoryStockProfit(orders, expenses, menuItems, menuCategories),
-    [orders, expenses, menuItems, menuCategories]
+    () => categoryStockProfit(rangeOrders, rangeExpenses, menuItems, menuCategories),
+    [rangeOrders, rangeExpenses, menuItems, menuCategories]
   );
   const totalSale = categoryTotals.reduce((s, c) => s + c.sale, 0);
   const totalPurchase = categoryTotals.reduce((s, c) => s + c.purchase, 0);
@@ -586,11 +634,6 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
       const XLSX = await import("xlsx");
       const wb = XLSX.utils.book_new();
       const round = (n: number) => Math.round(n * 100) / 100;
-      const monthLabel = new Date().toLocaleDateString("en-IN", {
-        month: "long",
-        year: "numeric",
-        timeZone: IST_TIME_ZONE,
-      });
 
       // A plain round-number sheet (no decimals-heavy noise, sensible column
       // widths so nothing gets clipped) reads like a real report instead of
@@ -605,7 +648,7 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
       addSheet(
         "Table collection",
         [
-          { Table: `${storeName} — ${monthLabel}`, Collection: "" },
+          { Table: `${storeName} — ${rangeLabel}`, Collection: "" },
           { Table: "", Collection: "" },
           ...tableRows.map((r) => ({ Table: r.name, Collection: round(r.collection) })),
           { Table: "Total collection", Collection: round(totalTableCollection) },
@@ -619,7 +662,7 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
         type ItemRow = Record<string, string | number>;
         const blank: ItemRow = { Item: "", Price: "", Cost: "", Margin: "", Sold: "", Revenue: "", "In stock": "", "Stock value": "" };
         const itemSheetRows: ItemRow[] = [
-          { Item: `${storeName} — All-time stock`, Price: "", Cost: "", Margin: "", Sold: "", Revenue: "", "In stock": "", "Stock value": "" },
+          { Item: `${storeName} — ${rangeLabel}`, Price: "", Cost: "", Margin: "", Sold: "", Revenue: "", "In stock": "", "Stock value": "" },
           blank,
           ...c.itemRows
             .slice()
@@ -642,7 +685,7 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
         addSheet(c.sheet, itemSheetRows, [26, 9, 9, 9, 7, 10, 9, 11]);
       }
 
-      addSheet("Daily collection", dailyCollectionRows(monthBills, menuItems, menuCategories, orderedTablesList), [
+      addSheet("Daily collection", dailyCollectionRows(rangeBills, menuItems, menuCategories, orderedTablesList), [
         16, 16, 16, 12, 12, 12,
       ]);
 
@@ -652,16 +695,11 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
       addSheet(
         "TOTAL",
         [
-          { Section: `${storeName} — ${monthLabel}`, Collection: "", Expense: "", Net: "" },
+          { Section: `${storeName} — ${rangeLabel}`, Collection: "", Expense: "", Net: "" },
           { Section: "", Collection: "", Expense: "", Net: "" },
-          {
-            Section: "Table (this month)",
-            Collection: round(totalTableCollection),
-            Expense: round(tableExpense),
-            Net: round(netTableIncome),
-          },
+          { Section: "Table", Collection: round(totalTableCollection), Expense: round(tableExpense), Net: round(netTableIncome) },
           ...categoryTotals.map((c) => ({
-            Section: `${c.sheet.replace(" collection", "")} (all-time)`,
+            Section: c.sheet.replace(" collection", ""),
             Collection: round(c.sale),
             Expense: round(c.purchase),
             Net: round(c.profit),
@@ -674,9 +712,7 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
 
       XLSX.writeFile(
         wb,
-        `${storeName.replace(/[^a-z0-9]+/gi, "-") || "cuebill"}-monthly-report-${new Date()
-          .toISOString()
-          .slice(0, 7)}.xlsx`
+        `${storeName.replace(/[^a-z0-9]+/gi, "-") || "cuebill"}-report-${rangeStart}-to-${rangeEnd}.xlsx`
       );
     } finally {
       setWorking(false);
@@ -687,15 +723,52 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
     <Modal title="Monthly Report" onClose={onClose}>
       <div className="space-y-4">
         <p className="text-xs text-[var(--color-text-faint)]">
-          Table Collection is mahine ka hai. Food/Drinks/Cigarette/Chocolate hamesha ka stock
-          hisaab hai (kabhi reset nahi hota) — "Purchase" Settings → Expenses mein dale gaye
-          kharch se aata hai; jab tak wahan kharch daalna shuru nahi karoge, Purchase aur Profit
-          ₹0 dikhenge.
+          Poori report neeche isi date range ki hai — jitna chaho utna chhota ya bada rakh sakte ho.
+          "Purchase" Settings → Expenses mein dale gaye kharch se aata hai; jab tak wahan kharch
+          daalna shuru nahi karoge, Purchase aur Profit ₹0 dikhenge.
         </p>
+
+        <Card>
+          <div className="flex flex-wrap gap-1.5 mb-2.5">
+            {[
+              { label: "Aaj", days: 1 as const },
+              { label: "7 din", days: 7 as const },
+              { label: "15 din", days: 15 as const },
+              { label: "Is mahine", days: "month" as const },
+              { label: "Is saal", days: "year" as const },
+            ].map((p) => (
+              <button
+                key={p.label}
+                onClick={() => setPreset(p.days)}
+                className="rounded-full bg-[var(--color-surface-2)] border border-[var(--color-border)] px-3 py-1 text-xs font-medium"
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-2">
+            <input
+              type="date"
+              value={rangeStart}
+              max={rangeEnd}
+              onChange={(e) => setRangeStart(e.target.value)}
+              className="flex-1 min-w-0 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] px-2.5 py-2 text-sm outline-none"
+            />
+            <span className="text-[var(--color-text-faint)] text-xs shrink-0">se</span>
+            <input
+              type="date"
+              value={rangeEnd}
+              min={rangeStart}
+              max={toDateInputValue(Date.now())}
+              onChange={(e) => setRangeEnd(e.target.value)}
+              className="flex-1 min-w-0 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] px-2.5 py-2 text-sm outline-none"
+            />
+          </div>
+        </Card>
 
         <div>
           <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-2">
-            TABLE COLLECTION (IS MAHINE)
+            TABLE COLLECTION — {rangeLabel.toUpperCase()}
           </p>
           <Card>
             <div className="flex justify-between text-sm py-1">
@@ -724,7 +797,7 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
 
         <div>
           <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-2">
-            FOOD · DRINKS · CIGARETTE · CHOCOLATE (HAMESHA KA STOCK)
+            FOOD · DRINKS · CIGARETTE · CHOCOLATE — {rangeLabel.toUpperCase()}
           </p>
           <div className="space-y-2">
             {categoryTotals.map((c) => (
@@ -800,10 +873,6 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
             <span>Net income</span>
             <span className="text-[var(--color-success)]">{formatMoney(netIncome, currency)}</span>
           </div>
-          <p className="text-[10px] text-[var(--color-text-faint)] mt-2 pt-2 border-t border-[var(--color-border)]">
-            Table is mahine ka hai, Food/Drinks/Cigarette/Chocolate hamesha ka — yeh total dono ko
-            jod deta hai.
-          </p>
         </Card>
 
         <button
@@ -818,10 +887,8 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
       {editCategory && (
         <CategoryExpensesModal
           category={editCategory}
-          allTime={editCategory !== "Table"}
-          expenses={(editCategory === "Table" ? monthExpenses : expenses).filter(
-            (e) => e.category === editCategory
-          )}
+          rangeLabel={rangeLabel}
+          expenses={rangeExpenses.filter((e) => e.category === editCategory)}
           onClose={() => setEditCategory(null)}
         />
       )}
@@ -831,18 +898,16 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
 
 // This category's expense entries — Purchase on the report above is just
 // these added up, but staff correct/add to it one entry at a time, not as a
-// single lump number. Table stays scoped to this month (matching its still-
-// monthly Table Collection card); every other category is all-time, matching
-// their now-never-resets Purchase figure.
+// single lump number — same date range as the rest of the report.
 function CategoryExpensesModal({
   category,
   expenses,
-  allTime,
+  rangeLabel,
   onClose,
 }: {
   category: string;
   expenses: Expense[];
-  allTime: boolean;
+  rangeLabel: string;
   onClose: () => void;
 }) {
   const currency = useSettingsStore((s) => s.currencySymbol);
@@ -885,7 +950,7 @@ function CategoryExpensesModal({
   }
 
   return (
-    <Modal title={`${category} expenses${allTime ? " (all-time)" : " this month"}`} onClose={onClose}>
+    <Modal title={`${category} expenses — ${rangeLabel}`} onClose={onClose}>
       <div className="space-y-3">
         <div className="flex justify-between text-sm font-semibold">
           <span>Total (Purchase)</span>
@@ -894,7 +959,7 @@ function CategoryExpensesModal({
 
         {sorted.length === 0 && !adding && (
           <p className="text-sm text-[var(--color-text-faint)] text-center py-4">
-            {allTime ? `${category} mein kabhi koi expense nahi daala gaya.` : `Is mahine ${category} mein koi expense nahi daala gaya.`}
+            Is date range mein {category} ka koi expense nahi daala gaya.
           </p>
         )}
 
