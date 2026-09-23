@@ -53,7 +53,6 @@ export function Reports() {
   const bills = useBillsStore((s) => s.bills);
   const tables = useTablesStore((s) => s.tables);
   const customers = useCustomersStore((s) => s.customers);
-  const todaysBills = useMemo(() => bills.filter((b) => isToday(b.createdAt)), [bills]);
   const monthBills = useMemo(() => bills.filter((b) => isThisMonth(b.createdAt)), [bills]);
   const expenses = useExpensesStore((s) => s.expenses);
   const addExpense = useExpensesStore((s) => s.addExpense);
@@ -68,9 +67,23 @@ export function Reports() {
   const [showMonthlyReport, setShowMonthlyReport] = useState(false);
   const [checkDate, setCheckDate] = useState(() => toDateInputValue(Date.now()));
   const [detailBill, setDetailBill] = useState<Bill | null>(null);
+  const isCheckingToday = checkDate === toDateInputValue(Date.now());
 
-  const nonCancelledBills = todaysBills.filter((b) => b.status !== "cancelled");
-  const cancelledBills = todaysBills.filter((b) => b.status === "cancelled");
+  // Everything from "Check any date" down — the bill list, totals, expenses,
+  // Galla Summary — follows this picked date instead of always being today.
+  // Floor Now stays live on purpose: it's the tables' status right now, not
+  // something recorded per past day, so a picked date can't change it.
+  // Insights stays a rolling multi-day view for the same reason.
+  const checkDateBills = useMemo(
+    () => bills.filter((b) => toDateInputValue(b.createdAt) === checkDate),
+    [bills, checkDate]
+  );
+  const nonCancelledBills = checkDateBills.filter((b) => b.status !== "cancelled");
+  const cancelledBills = checkDateBills.filter((b) => b.status === "cancelled");
+  const checkDateExpenses = useMemo(
+    () => expenses.filter((e) => toDateInputValue(e.createdAt) === checkDate),
+    [expenses, checkDate]
+  );
 
   const totals = useMemo(() => {
     let collected = 0;
@@ -84,8 +97,11 @@ export function Reports() {
   }, [nonCancelledBills]);
 
   const collectedToday = useMemo(
-    () => nonCancelledBills.reduce((sum, b) => sum + billCollected(b), 0),
-    [nonCancelledBills]
+    () =>
+      bills
+        .filter((b) => isToday(b.createdAt) && b.status !== "cancelled")
+        .reduce((sum, b) => sum + billCollected(b), 0),
+    [bills]
   );
 
   const collectedThisMonth = useMemo(
@@ -97,11 +113,8 @@ export function Reports() {
   );
 
   const collectedOnCheckDate = useMemo(
-    () =>
-      bills
-        .filter((b) => toDateInputValue(b.createdAt) === checkDate && b.status !== "cancelled")
-        .reduce((sum, b) => sum + billCollected(b), 0),
-    [bills, checkDate]
+    () => nonCancelledBills.reduce((sum, b) => sum + billCollected(b), 0),
+    [nonCancelledBills]
   );
 
   const cashInDrawer = useMemo(() => {
@@ -118,7 +131,7 @@ export function Reports() {
   const openBillsTotal = openBills.reduce((sum, b) => sum + billRemaining(b), 0);
   const activeCount = running + paused;
 
-  const filteredBills = todaysBills.filter((b) => {
+  const filteredBills = checkDateBills.filter((b) => {
     const q = search.toLowerCase();
     return (
       (b.tableName ?? "").toLowerCase().includes(q) ||
@@ -170,6 +183,11 @@ export function Reports() {
             {formatMoney(collectedOnCheckDate, currency)}
           </p>
         </div>
+        {!isCheckingToday && (
+          <p className="text-xs text-[var(--color-text-faint)] mt-2">
+            Bills, totals and Galla Summary below now show this date — Floor Now still shows right now.
+          </p>
+        )}
       </Card>
 
       <div>
@@ -262,13 +280,16 @@ export function Reports() {
 
       <Card>
         <p className="text-xs text-[var(--color-text-dim)]">FILTERS APPLIED</p>
-        <p className="text-sm mt-0.5">Today · All statuses · All payments</p>
+        <p className="text-sm mt-0.5">
+          {isCheckingToday ? "Today" : formatDateKey(checkDate, { day: "numeric", month: "short", year: "numeric" })}{" "}
+          · All statuses · All payments
+        </p>
       </Card>
 
       <div className="flex gap-3">
         <Card className="flex-1 flex items-center gap-2">
           <span className="text-sm text-[var(--color-text-dim)]">BILLS</span>
-          <span className="font-semibold">{todaysBills.length}</span>
+          <span className="font-semibold">{checkDateBills.length}</span>
         </Card>
         <Card className="flex-1 flex items-center gap-2">
           <span className="text-sm text-[var(--color-text-dim)]">CANCELLED</span>
@@ -365,13 +386,13 @@ export function Reports() {
         ))}
       </div>
 
-      {expenses.length > 0 && (
+      {checkDateExpenses.length > 0 && (
         <div>
           <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-2">
-            EXPENSES TODAY
+            {isCheckingToday ? "EXPENSES TODAY" : "EXPENSES ON THIS DATE"}
           </p>
           <div className="space-y-2">
-            {expenses.slice(0, 5).map((e) => (
+            {checkDateExpenses.slice(0, 5).map((e) => (
               <Card key={e.id} className="flex items-center justify-between">
                 <div>
                   <p className="text-sm font-medium">{e.category}</p>
@@ -390,7 +411,7 @@ export function Reports() {
         <AddExpenseModal categories={categories} onAdd={addExpense} onClose={() => setShowExpense(false)} />
       )}
       {showCafeReport && <CafeReportModal onClose={() => setShowCafeReport(false)} />}
-      {showGalla && <GallaSummaryModal onClose={() => setShowGalla(false)} />}
+      {showGalla && <GallaSummaryModal date={checkDate} onClose={() => setShowGalla(false)} />}
       {showInsights && <InsightsModal onClose={() => setShowInsights(false)} />}
       {showTableReport && <TableReportModal onClose={() => setShowTableReport(false)} />}
       {showMonthlyReport && <MonthlyReportModal onClose={() => setShowMonthlyReport(false)} />}
@@ -1144,37 +1165,43 @@ function CategoryExpensesModal({
   );
 }
 
-function GallaSummaryModal({ onClose }: { onClose: () => void }) {
+function GallaSummaryModal({ date, onClose }: { date: string; onClose: () => void }) {
   const bills = useBillsStore((s) => s.bills);
   const expenses = useExpensesStore((s) => s.expenses);
   const currency = useSettingsStore((s) => s.currencySymbol);
+  const isDateToday = date === toDateInputValue(Date.now());
 
-  const todaysActive = useMemo(
-    () => bills.filter((b) => isToday(b.createdAt) && b.status !== "cancelled"),
-    [bills]
+  const dayActive = useMemo(
+    () => bills.filter((b) => toDateInputValue(b.createdAt) === date && b.status !== "cancelled"),
+    [bills, date]
   );
-  const todaysExpenses = useMemo(() => expenses.filter((e) => isToday(e.createdAt)), [expenses]);
+  const dayExpenses = useMemo(
+    () => expenses.filter((e) => toDateInputValue(e.createdAt) === date),
+    [expenses, date]
+  );
 
   const { cash, upi, credit: creditGiven } = useMemo(() => {
     let cash = 0;
     let upi = 0;
     let credit = 0;
-    for (const b of todaysActive) {
+    for (const b of dayActive) {
       const m = billMoney(b);
       cash += m.cash;
       upi += m.upi;
       credit += m.credit;
     }
     return { cash, upi, credit };
-  }, [todaysActive]);
-  const expensesTotal = todaysExpenses.reduce((s, e) => s + e.amount, 0);
+  }, [dayActive]);
+  const expensesTotal = dayExpenses.reduce((s, e) => s + e.amount, 0);
   const netCash = cash + upi - expensesTotal;
 
   return (
     <Modal title="Galla Summary" onClose={onClose}>
       <div className="space-y-4">
         <div>
-          <p className="text-xs text-[var(--color-text-dim)]">Net cash in drawer</p>
+          <p className="text-xs text-[var(--color-text-dim)]">
+            {isDateToday ? "Net cash in drawer" : "Net collected that day"}
+          </p>
           <p className="text-3xl font-bold text-[var(--color-primary)]">
             {formatMoney(netCash, currency)}
           </p>
@@ -1207,13 +1234,13 @@ function GallaSummaryModal({ onClose }: { onClose: () => void }) {
           </Card>
         </div>
 
-        {todaysExpenses.length > 0 && (
+        {dayExpenses.length > 0 && (
           <div>
             <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-2">
-              EXPENSES TODAY
+              {isDateToday ? "EXPENSES TODAY" : "EXPENSES ON THIS DATE"}
             </p>
             <div className="space-y-2">
-              {todaysExpenses.map((e) => (
+              {dayExpenses.map((e) => (
                 <Card key={e.id} className="flex items-center justify-between">
                   <div>
                     <p className="text-sm font-medium">{e.category}</p>
