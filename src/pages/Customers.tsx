@@ -149,9 +149,9 @@ export function Customers() {
               </div>
             </div>
             <div className="flex items-center gap-1.5">
-              {(creditById.get(c.id) ?? 0) > 0 ? (
+              {(totalOwedById.get(c.id) ?? 0) > 0 ? (
                 <span className="text-xs font-semibold text-[var(--color-warning)]">
-                  {formatMoney(creditById.get(c.id) ?? 0, currency)} due
+                  {formatMoney(totalOwedById.get(c.id) ?? 0, currency)} due
                 </span>
               ) : (
                 !c.isWalkIn && <Check size={16} className="text-[var(--color-text-faint)]" />
