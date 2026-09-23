@@ -4,7 +4,7 @@ import { useGamesStore } from "../store/useGamesStore";
 import { useTablesStore } from "../store/useTablesStore";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { formatDuration, formatMoney } from "../lib/format";
-import { tableElapsedMs, tableRemainingMs, activeRate } from "../lib/tableTiming";
+import { tableElapsedMs, activeRate } from "../lib/tableTiming";
 import { costForElapsed } from "../lib/format";
 import type { BillingTable } from "../types";
 import { Play, Pause, Gamepad2 } from "lucide-react";
@@ -32,17 +32,12 @@ export function TableCard({
   const customer = customers.find((c) => c.id === table.customerId);
   const extraCount = table.extraCustomerIds.length;
   const game = games.find((g) => g.id === table.activeGameId);
-  const remaining = tableRemainingMs(table, now);
-  const overtime = remaining != null && remaining < 0;
-
   return (
     <Card
       onClick={() => (table.status === "available" ? onStart(table) : onOpenDetail(table))}
       className={
         table.status === "running"
-          ? overtime
-            ? "border-[var(--color-danger)]/50"
-            : "border-[var(--color-success)]/50"
+          ? "border-[var(--color-success)]/50"
           : table.status === "paused"
           ? "border-[var(--color-warning)]/50"
           : ""
@@ -59,21 +54,13 @@ export function TableCard({
           className={
             "text-[11px] font-medium rounded-full px-2.5 py-1 " +
             (table.status === "running"
-              ? overtime
-                ? "bg-[var(--color-danger)]/15 text-[var(--color-danger)]"
-                : "bg-[var(--color-success)]/15 text-[var(--color-success)]"
+              ? "bg-[var(--color-success)]/15 text-[var(--color-success)]"
               : table.status === "paused"
               ? "bg-[var(--color-warning)]/15 text-[var(--color-warning)]"
               : "bg-[var(--color-surface-2)] text-[var(--color-text-dim)]")
           }
         >
-          {table.status === "running"
-            ? overtime
-              ? "Overtime"
-              : "Running"
-            : table.status === "paused"
-            ? "Paused"
-            : "Available"}
+          {table.status === "running" ? "Running" : table.status === "paused" ? "Paused" : "Available"}
         </span>
       </div>
 
@@ -88,16 +75,6 @@ export function TableCard({
             {game && (
               <p className="text-xs text-[var(--color-accent)] flex items-center gap-1 mt-0.5">
                 <Gamepad2 size={11} /> {game.name} · {formatMoney(rate, currency)}/hr
-              </p>
-            )}
-            {remaining != null && (
-              <p
-                className={
-                  "text-xs font-medium mt-0.5 " +
-                  (overtime ? "text-[var(--color-danger)]" : "text-[var(--color-text-faint)]")
-                }
-              >
-                {overtime ? `+${formatDuration(-remaining)} over` : `${formatDuration(remaining)} left`}
               </p>
             )}
           </div>

@@ -7,11 +7,6 @@ export function tableElapsedMs(table: BillingTable, now: number) {
   return table.accumulatedMs;
 }
 
-export function tableRemainingMs(table: BillingTable, now: number) {
-  if (table.plannedDurationMs == null) return null;
-  return table.plannedDurationMs - tableElapsedMs(table, now);
-}
-
 export function activeRate(table: BillingTable) {
   return table.sessionRatePerHour ?? table.ratePerHour;
 }

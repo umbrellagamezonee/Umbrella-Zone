@@ -12,7 +12,7 @@ import { useGamesStore } from "../store/useGamesStore";
 import { useBillsStore } from "../store/useBillsStore";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { formatDuration, formatMoney, elapsedMinutesExact, costForElapsed } from "../lib/format";
-import { tableElapsedMs, tableRemainingMs, activeRate } from "../lib/tableTiming";
+import { tableElapsedMs, activeRate } from "../lib/tableTiming";
 import type { BillingTable, Bill } from "../types";
 import { Plus, Minus, UserPlus, Pencil, Check, Pause, Play, Gamepad2 } from "lucide-react";
 
@@ -90,8 +90,6 @@ export function TableDetailModal({
   // (e.g. a canteen item removed) — the bill total must never go negative.
   const effectiveDiscount = Math.min(discount, tableCharge + canteenTotal);
   const total = tableCharge + canteenTotal - effectiveDiscount;
-  const remaining = tableRemainingMs(table, now);
-  const overtime = remaining != null && remaining < 0;
 
   // `payers` is who actually owes this bill — everyone at the table when
   // nobody's picked out specially (equal split), or a chosen few (the rest
@@ -272,18 +270,6 @@ export function TableDetailModal({
                     </button>
                   )}
                 </div>
-                {remaining != null && (
-                  <p
-                    className={
-                      "text-xs font-medium mt-0.5 " +
-                      (overtime ? "text-[var(--color-danger)]" : "text-[var(--color-text-faint)]")
-                    }
-                  >
-                    {overtime
-                      ? `${formatDuration(-remaining)} over the ${table.defaultSessionMinutes}m session`
-                      : `${formatDuration(remaining)} left of ${table.defaultSessionMinutes}m session`}
-                  </p>
-                )}
               </div>
               <div className="text-right">
                 <p className="text-xs text-[var(--color-text-dim)]">
