@@ -645,17 +645,24 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
         XLSX.utils.book_append_sheet(wb, ws, name.slice(0, 31));
       }
 
+      // Day-by-day, every table and every canteen category together in one
+      // simple total-per-item view — reuses the same per-date figures as the
+      // Daily collection sheet, just without that sheet's cash/account/
+      // credit split, for whoever just wants one number per item per day.
+      const tableAndCategoryRows = dailyCollectionRows(rangeBills, menuItems, menuCategories, orderedTablesList).map(
+        (r) => ({ Date: r.Date, Item: r.Item, Collection: r["Total collection"] })
+      );
       addSheet(
         "Table collection",
         [
-          { Table: `${storeName} — ${rangeLabel}`, Collection: "" },
-          { Table: "", Collection: "" },
-          ...tableRows.map((r) => ({ Table: r.name, Collection: round(r.collection) })),
-          { Table: "Total collection", Collection: round(totalTableCollection) },
-          { Table: "Table expense", Collection: round(tableExpense) },
-          { Table: "Net table income", Collection: round(netTableIncome) },
+          { Date: `${storeName} — ${rangeLabel}`, Item: "", Collection: "" },
+          { Date: "", Item: "", Collection: "" },
+          ...tableAndCategoryRows,
+          { Date: "", Item: "Table collection", Collection: round(totalTableCollection) },
+          { Date: "", Item: "Table expense", Collection: round(tableExpense) },
+          { Date: "", Item: "Net table income", Collection: round(netTableIncome) },
         ],
-        [24, 16]
+        [16, 18, 14]
       );
 
       for (const c of categoryTotals) {
