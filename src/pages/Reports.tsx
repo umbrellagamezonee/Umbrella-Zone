@@ -13,6 +13,7 @@ import { useSettingsStore } from "../store/useSettingsStore";
 import {
   formatMoney,
   formatTime,
+  formatDateTime,
   isToday,
   isThisMonth,
   toDateInputValue,
@@ -24,7 +25,7 @@ import { billPersonName, billPlace } from "../lib/billLabel";
 import { useCustomersStore } from "../store/useCustomersStore";
 import { orderedTables } from "../store/useTablesStore";
 import { BillDetailModal } from "../components/BillDetailModal";
-import type { Bill } from "../types";
+import type { Bill, Expense } from "../types";
 import {
   Wallet,
   CreditCard,
@@ -36,6 +37,9 @@ import {
   CalendarDays,
   LayoutGrid,
   FileSpreadsheet,
+  Pencil,
+  Trash2,
+  Plus,
 } from "lucide-react";
 
 export function Reports() {
@@ -538,6 +542,10 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
   const currency = useSettingsStore((s) => s.currencySymbol);
   const storeName = useSettingsStore((s) => s.storeName);
   const [working, setWorking] = useState(false);
+  // Which category's Purchase figure is being edited right now — opens a
+  // list of this month's expense entries for just that category, since
+  // Purchase is a sum of however many of those there are, not one number.
+  const [editCategory, setEditCategory] = useState<string | null>(null);
 
   const monthBills = useMemo(
     () => bills.filter((b) => isThisMonth(b.createdAt) && b.status !== "cancelled"),
@@ -713,9 +721,18 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
               <span className="text-[var(--color-text-dim)]">Total collection</span>
               <span className="font-semibold">{formatMoney(totalTableCollection, currency)}</span>
             </div>
-            <div className="flex justify-between text-sm py-1">
+            <div className="flex justify-between items-center text-sm py-1">
               <span className="text-[var(--color-text-dim)]">Table expense</span>
-              <span>{formatMoney(tableExpense, currency)}</span>
+              <span className="flex items-center gap-1.5">
+                {formatMoney(tableExpense, currency)}
+                <button
+                  onClick={() => setEditCategory("Table")}
+                  className="text-[var(--color-text-faint)]"
+                  title="Edit Table expenses"
+                >
+                  <Pencil size={12} />
+                </button>
+              </span>
             </div>
             <div className="flex justify-between text-sm py-1 border-t border-[var(--color-border)] mt-1 pt-2 font-semibold">
               <span>Net table income</span>
@@ -742,7 +759,16 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
                   </div>
                   <div>
                     <p className="text-[10px] text-[var(--color-text-faint)]">Purchase</p>
-                    <p className="text-sm font-semibold">{formatMoney(c.purchase, currency)}</p>
+                    <p className="text-sm font-semibold flex items-center justify-center gap-1.5">
+                      {formatMoney(c.purchase, currency)}
+                      <button
+                        onClick={() => setEditCategory(c.sheet.replace(" collection", ""))}
+                        className="text-[var(--color-text-faint)]"
+                        title={`Edit ${c.sheet.replace(" collection", "")} expenses`}
+                      >
+                        <Pencil size={12} />
+                      </button>
+                    </p>
                   </div>
                   <div>
                     <p className="text-[10px] text-[var(--color-text-faint)]">Profit</p>
@@ -802,6 +828,190 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
         >
           <FileSpreadsheet size={16} /> {working ? "Preparing…" : "Download Monthly Report Excel"}
         </button>
+      </div>
+
+      {editCategory && (
+        <CategoryExpensesModal
+          category={editCategory}
+          expenses={monthExpenses.filter((e) => e.category === editCategory)}
+          onClose={() => setEditCategory(null)}
+        />
+      )}
+    </Modal>
+  );
+}
+
+// This month's expense entries for one category — Purchase on the report
+// above is just these added up, but staff correct/add to it one entry at a
+// time, not as a single lump number.
+function CategoryExpensesModal({
+  category,
+  expenses,
+  onClose,
+}: {
+  category: string;
+  expenses: Expense[];
+  onClose: () => void;
+}) {
+  const currency = useSettingsStore((s) => s.currencySymbol);
+  const addExpense = useExpensesStore((s) => s.addExpense);
+  const updateExpense = useExpensesStore((s) => s.updateExpense);
+  const removeExpense = useExpensesStore((s) => s.removeExpense);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [amount, setAmount] = useState("");
+  const [note, setNote] = useState("");
+  const [adding, setAdding] = useState(false);
+
+  const sorted = [...expenses].sort((a, b) => b.createdAt - a.createdAt);
+  const total = sorted.reduce((s, e) => s + e.amount, 0);
+
+  function startEdit(e: Expense) {
+    setEditingId(e.id);
+    setAmount(String(e.amount));
+    setNote(e.note);
+    setAdding(false);
+  }
+  function startAdd() {
+    setAdding(true);
+    setEditingId(null);
+    setAmount("");
+    setNote("");
+  }
+  function cancel() {
+    setEditingId(null);
+    setAdding(false);
+  }
+  function save() {
+    const amt = Number(amount);
+    if (!amt || amt <= 0) return;
+    if (adding) {
+      addExpense({ category, amount: amt, note });
+    } else if (editingId) {
+      updateExpense(editingId, { category, amount: amt, note });
+    }
+    cancel();
+  }
+
+  return (
+    <Modal title={`${category} expenses this month`} onClose={onClose}>
+      <div className="space-y-3">
+        <div className="flex justify-between text-sm font-semibold">
+          <span>Total (Purchase)</span>
+          <span>{formatMoney(total, currency)}</span>
+        </div>
+
+        {sorted.length === 0 && !adding && (
+          <p className="text-sm text-[var(--color-text-faint)] text-center py-4">
+            Is mahine {category} mein koi expense nahi daala gaya.
+          </p>
+        )}
+
+        <div className="space-y-2">
+          {sorted.map((e) =>
+            editingId === e.id ? (
+              <Card key={e.id}>
+                <div className="space-y-2">
+                  <input
+                    type="number"
+                    min={0}
+                    value={amount}
+                    onChange={(ev) => setAmount(ev.target.value)}
+                    placeholder="Amount"
+                    className="w-full rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] px-3 py-2 text-sm outline-none"
+                  />
+                  <input
+                    value={note}
+                    onChange={(ev) => setNote(ev.target.value)}
+                    placeholder="Note (optional)"
+                    className="w-full rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] px-3 py-2 text-sm outline-none"
+                  />
+                  <div className="flex gap-2">
+                    <button
+                      onClick={save}
+                      className="flex-1 rounded-xl bg-[var(--color-primary)] text-white text-sm font-semibold py-2"
+                    >
+                      Save
+                    </button>
+                    <button
+                      onClick={cancel}
+                      className="flex-1 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] text-sm font-medium py-2"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              </Card>
+            ) : (
+              <Card key={e.id} className="flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold">{formatMoney(e.amount, currency)}</p>
+                  <p className="text-xs text-[var(--color-text-faint)] truncate">
+                    {e.note || "No note"} · {formatDateTime(e.createdAt)}
+                  </p>
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  <button
+                    onClick={() => startEdit(e)}
+                    className="h-8 w-8 flex items-center justify-center rounded-full bg-[var(--color-surface-2)]"
+                    title="Edit"
+                  >
+                    <Pencil size={14} />
+                  </button>
+                  <button
+                    onClick={() => removeExpense(e.id)}
+                    className="h-8 w-8 flex items-center justify-center rounded-full bg-[var(--color-danger)]/10 text-[var(--color-danger)]"
+                    title="Delete"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              </Card>
+            )
+          )}
+        </div>
+
+        {adding ? (
+          <Card>
+            <div className="space-y-2">
+              <input
+                type="number"
+                min={0}
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                placeholder="Amount"
+                autoFocus
+                className="w-full rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] px-3 py-2 text-sm outline-none"
+              />
+              <input
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                placeholder="Note (optional)"
+                className="w-full rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] px-3 py-2 text-sm outline-none"
+              />
+              <div className="flex gap-2">
+                <button
+                  onClick={save}
+                  className="flex-1 rounded-xl bg-[var(--color-primary)] text-white text-sm font-semibold py-2"
+                >
+                  Save
+                </button>
+                <button
+                  onClick={cancel}
+                  className="flex-1 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] text-sm font-medium py-2"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </Card>
+        ) : (
+          <button
+            onClick={startAdd}
+            className="w-full flex items-center justify-center gap-2 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] text-sm font-medium py-2.5"
+          >
+            <Plus size={14} /> Add {category} expense
+          </button>
+        )}
       </div>
     </Modal>
   );

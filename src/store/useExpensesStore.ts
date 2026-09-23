@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { Expense } from "../types";
-import { setupSync, pushInsert, pushDelete, pushDeleteAll, keepLocalOnly } from "../lib/cloudSync";
+import { setupSync, pushInsert, pushUpsert, pushDelete, pushDeleteAll, keepLocalOnly } from "../lib/cloudSync";
 
 interface ExpenseRow {
   id: string;
@@ -31,6 +31,7 @@ interface ExpensesState {
   expenses: Expense[];
   categories: string[];
   addExpense: (data: { category: string; amount: number; note: string }) => void;
+  updateExpense: (id: string, data: { category: string; amount: number; note: string }) => void;
   removeExpense: (id: string) => void;
   resetAll: () => void;
 }
@@ -62,6 +63,18 @@ export const useExpensesStore = create<ExpensesState>()(
         };
         set((state) => ({ expenses: [created, ...state.expenses] }));
         pushInsert(TABLE, toRow(created));
+      },
+
+      updateExpense: (id, data) => {
+        let updated: Expense | undefined;
+        set((state) => ({
+          expenses: state.expenses.map((e) => {
+            if (e.id !== id) return e;
+            updated = { ...e, category: data.category, amount: data.amount, note: data.note };
+            return updated;
+          }),
+        }));
+        if (updated) pushUpsert(TABLE, toRow(updated));
       },
 
       removeExpense: (id) => {
