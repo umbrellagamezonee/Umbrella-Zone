@@ -403,12 +403,17 @@ export function dailyCollectionRows(
 
   const dateKeys = [...new Set([...dailyTables.keys(), ...dailyCategories.keys()])].sort();
   const categoryOrder = [...REPORT_CATEGORIES.map((rc) => rc.sheet.replace(" collection", "")), "Other", "Credit settlement"];
+  // A device whose local table list has picked up a duplicate (a stale sync
+  // artifact, not real cloud data) would otherwise print that table's row
+  // twice on every date — de-duplicate by name so the report can't inherit
+  // that regardless of why the list had one.
+  const uniqueTables = [...new Map(orderedTablesList.map((t) => [t.name, t])).values()];
   const rows: DailyCollectionRow[] = [];
   for (const dateKey of dateKeys) {
     const label = formatDateKey(dateKey, { day: "numeric", month: "long" });
     let dayTotal = newBucket();
     const tableMap = dailyTables.get(dateKey);
-    for (const t of orderedTablesList) {
+    for (const t of uniqueTables) {
       const b = tableMap?.get(t.name);
       if (!b || (b.total === 0 && b.credit === 0)) continue;
       rows.push({

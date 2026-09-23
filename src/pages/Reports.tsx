@@ -647,10 +647,18 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
 
       // Day-by-day, every table and every canteen category together in one
       // simple total-per-item view — reuses the same per-date figures as the
-      // Daily collection sheet, just without that sheet's cash/account/
-      // credit split, for whoever just wants one number per item per day.
+      // Daily collection sheet, just added back into one number instead of
+      // that sheet's cash/account/credit split. This shop bills almost
+      // everything on credit first and settles it separately later, so a
+      // day's activity showing only its cash+account portion would read as
+      // mostly zeros — this is the full amount actually billed that day,
+      // paid or not, for whoever just wants one real number per item.
       const tableAndCategoryRows = dailyCollectionRows(rangeBills, menuItems, menuCategories, orderedTablesList).map(
-        (r) => ({ Date: r.Date, Item: r.Item, Collection: r["Total collection"] })
+        (r) => ({
+          Date: r.Date,
+          Item: r.Item,
+          Collection: r["Total collection"] === "" ? "" : round(Number(r["Total collection"]) + Number(r.Credit)),
+        })
       );
       addSheet(
         "Table collection",

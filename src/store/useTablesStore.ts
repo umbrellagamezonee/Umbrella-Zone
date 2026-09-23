@@ -356,7 +356,20 @@ setupSync<TableRow, BillingTable>(
       });
       // A table added in the gap between this fetch starting and resolving
       // must not vanish — same reasoning as keepLocalOnly's own comment.
-      return { tables: [...merged, ...keepLocalOnly(tables, state.tables)] };
+      // But seedTables (this store's built-in defaults) gives every table a
+      // fresh random id on every module load, so a device that renders even
+      // one frame before its first-ever cloud fetch resolves — no persisted
+      // state yet, or storage was cleared — briefly has its own "Pool 1"
+      // with an id the cloud has never seen. Once that happens it isn't a
+      // one-time glitch: keepLocalOnly correctly treats it as "not yet
+      // synced" and preserves it forever, so every table shows twice, on
+      // every reload, permanently. Names are fixed and effectively unique
+      // here (a handful of physical tables), so anything local-only whose
+      // name a cloud table already has is that exact phantom, not a real
+      // second table — drop it instead of keeping it.
+      const mergedNames = new Set(merged.map((t) => t.name));
+      const localOnly = keepLocalOnly(tables, state.tables).filter((t) => !mergedNames.has(t.name));
+      return { tables: [...merged, ...localOnly] };
     }),
   (table) =>
     useTablesStore.setState((state) => {
