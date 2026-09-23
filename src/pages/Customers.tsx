@@ -327,10 +327,6 @@ function buildLedger(customerBills: Bill[], pendingOrders: CanteenOrder[], nameK
 // cards and day-grouped history cards.
 export function CustomerDetailModal({ customer: initialCustomer, onClose }: { customer: Customer; onClose: () => void }) {
   const bills = useBillsStore((s) => s.bills);
-  // Deleted bills too — a credit balance doesn't get reversed when the bill
-  // that created it is trashed, so leaving those out would hide exactly the
-  // history someone's most likely trying to track down.
-  const deletedBills = useBillsStore((s) => s.deletedBills);
   const reassignCustomer = useBillsStore((s) => s.reassignCustomer);
   const createOpenBill = useBillsStore((s) => s.createOpenBill);
   const settlePayment = useBillsStore((s) => s.settlePayment);
@@ -473,14 +469,17 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
     setShowSettle(true);
   }
 
-  const customerBills = [...bills, ...deletedBills]
-    .filter(matchesCustomer)
-    .sort((a, b) => b.createdAt - a.createdAt);
-  const deletedCount = customerBills.filter((b) => b.deletedAt).length;
+  // A wrong/duplicate bill that got deleted didn't really happen — showing
+  // it in a customer's own ledger (staff pull this screen up in front of
+  // customers to settle disputes) looks like the shop's books are a mess,
+  // and its amount would otherwise still inflate every running balance
+  // shown after it even though it's excluded from TOTAL OWED. Real history
+  // only.
+  const customerBills = bills.filter(matchesCustomer).sort((a, b) => b.createdAt - a.createdAt);
 
   // A "match" is one table session that actually counted — canteen-only bills,
-  // credit settlements, cancellations and trashed sessions don't.
-  const isMatch = (b: Bill) => !!b.tableId && !b.deletedAt && b.status !== "cancelled";
+  // credit settlements and cancellations don't.
+  const isMatch = (b: Bill) => !!b.tableId && b.status !== "cancelled";
   const totalMatches = customerBills.filter(isMatch).length;
   const totalSpent = customerBills.reduce((sum, b) => sum + billCollectedFor(b, nameKey), 0);
 
@@ -524,14 +523,6 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
             <p className="text-lg font-bold text-[var(--color-warning)] mt-1">
               {formatMoney(totalOwed, currency)}
             </p>
-            {deletedCount > 0 && (
-              <p className="text-xs text-[var(--color-text-faint)] mt-1">
-                {deletedCount} bill{deletedCount > 1 ? "s" : ""} below {deletedCount > 1 ? "were" : "was"}{" "}
-                deleted — check them for what added to this. Older credit changes with no bill left
-                at all (permanently deleted, or from before this device tracked history) can't be
-                traced back further than that.
-              </p>
-            )}
             <button
               onClick={handleSettleClick}
               className="mt-3 w-full flex items-center justify-center gap-2 rounded-xl bg-[var(--color-success)]/15 text-[var(--color-success)] text-sm font-medium py-2.5"
@@ -563,7 +554,7 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
                 </span>
               </div>
               {ledgerEntries.map((entry) => {
-                const dimmed = entry.bill && (entry.bill.deletedAt || entry.bill.status === "cancelled");
+                const dimmed = entry.bill?.status === "cancelled";
                 return (
                   <div
                     key={entry.id}
@@ -577,9 +568,6 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
                     <div className="min-w-0">
                       <p className="text-sm truncate">
                         {entry.particulars}
-                        {entry.bill?.deletedAt && (
-                          <span className="text-[var(--color-danger)] font-normal"> · Deleted</span>
-                        )}
                         {entry.bill?.status === "cancelled" && (
                           <span className="text-[var(--color-text-faint)] font-normal"> · Cancelled</span>
                         )}
