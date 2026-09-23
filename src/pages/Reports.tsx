@@ -643,7 +643,7 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
       }
 
       addSheet("Daily collection", dailyCollectionRows(monthBills, menuItems, menuCategories, orderedTablesList), [
-        16, 16, 16, 12, 12,
+        16, 16, 16, 12, 12, 12,
       ]);
 
       // One clean table instead of a long flat list — Section / Collection /

@@ -1277,10 +1277,10 @@ function ExportExcelModal({ onClose }: { onClose: () => void }) {
       }
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(categoryRows), "Category Stock & Profit");
 
-      // Same day-by-day cash/account breakdown as the Monthly Report's own
-      // sheet, but across this export's whole history instead of just the
-      // current month — one table/category row per date, only where
-      // something was actually collected.
+      // Same day-by-day cash/account/credit breakdown as the Monthly
+      // Report's own sheet, but across this export's whole history instead
+      // of just the current month — one table/category row per date, only
+      // where something was actually billed or collected.
       const dailyRows = dailyCollectionRows(activeBills, items, categories, orderedTables(tables));
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(dailyRows), "Daily collection");
 

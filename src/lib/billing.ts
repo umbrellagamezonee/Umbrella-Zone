@@ -273,32 +273,39 @@ export interface DailyCollectionRow {
   "Total collection": number | string;
   Cash: number | string;
   Account: number | string;
+  Credit: number | string;
   [key: string]: string | number;
 }
 
-// Day-by-day cash/account breakdown, one block per date — what the owner
-// hands to their accountant: for each day, how much of each table's and
-// each canteen category's collection came in as cash vs account.
-// "Collection" here is cash+account actually received, same as everywhere
-// else — money still on credit isn't counted until it's actually paid.
+// Day-by-day cash/account/credit breakdown, one block per date — what the
+// owner hands to their accountant: for each day, how much of each table's
+// and each canteen category's billing came in as cash, as account, and how
+// much is still sitting on credit. "Total collection" is cash+account
+// actually received, same as everywhere else — Credit is tracked
+// separately, not folded into it, since it's money billed but not yet in
+// hand.
 //
-// A bill's cash/account split is recorded once for the whole bill, not per
-// line item, so it's prorated across table charge and canteen charge by
-// their own combined face value (not the bill's total, which already has
-// any discount taken out — prorating against total would attribute more
-// cash+account to the two parts than was actually collected on a
-// discounted bill). Canteen money is prorated a second time across
-// categories by each item's own share of that bill's food total, matched
-// to its menu category by name. A split (shares) bill instead reads each
-// payer's own recorded method directly, since that was actually chosen per
-// share, not assumed from a ratio. A credit settlement (paying off an
-// older, already-billed debt) has no way to know which table or category
-// that original debt was for, so it's counted as cash collected on its own
-// date under its own "Credit settlement" row rather than guessed at.
+// A bill's cash/account/credit split is recorded once for the whole bill,
+// not per line item, so it's prorated across table charge and canteen
+// charge by their own combined face value (not the bill's total, which
+// already has any discount taken out — prorating against total would
+// attribute more than was actually billed on a discounted bill). Canteen
+// money is prorated a second time across categories by each item's own
+// share of that bill's food total, matched to its menu category by name. A
+// split (shares) bill instead reads each payer's own recorded method
+// directly, since that was actually chosen per share, not assumed from a
+// ratio — a still-pending share (nobody's decided how they're paying yet)
+// counts toward none of the three, the same way it counts toward nothing
+// today elsewhere in the app. A credit settlement (paying off an older,
+// already-billed debt) has no way to know which table or category that
+// original debt was for, so it's counted as cash/account collected on its
+// own date under its own "Credit settlement" row rather than guessed at —
+// it never carries a Credit amount of its own, since it's a payment, not a
+// new charge.
 //
 // A table/category that a bill merely touched but nothing was actually
-// collected for yet (still fully on credit) doesn't get a row at all — a
-// table played on 5 days out of 20 doesn't need 15 rows of zeros saying so.
+// billed or collected for yet doesn't get a row at all — a table played on
+// 5 days out of 20 doesn't need 15 rows of zeros saying so.
 export function dailyCollectionRows(
   bills: Bill[],
   menuItems: MenuItem[],
@@ -315,11 +322,12 @@ export function dailyCollectionRows(
   const itemNameToCatId = new Map<string, string>();
   for (const item of menuItems) itemNameToCatId.set(item.name.trim().toLowerCase(), item.categoryId);
 
-  type Bucket = { total: number; cash: number; upi: number };
-  const newBucket = (): Bucket => ({ total: 0, cash: 0, upi: 0 });
-  const addTo = (b: Bucket, cash: number, upi: number) => {
+  type Bucket = { total: number; cash: number; upi: number; credit: number };
+  const newBucket = (): Bucket => ({ total: 0, cash: 0, upi: 0, credit: 0 });
+  const addTo = (b: Bucket, cash: number, upi: number, credit: number) => {
     b.cash += cash;
     b.upi += upi;
+    b.credit += credit;
     b.total += cash + upi;
   };
   const dailyTables = new Map<string, Map<string, Bucket>>();
@@ -336,7 +344,7 @@ export function dailyCollectionRows(
     const dateKey = toDateInputValue(bill.createdAt);
 
     if (isCreditSettlement(bill)) {
-      addTo(bucketFor(dailyCategories, dateKey, "Credit settlement"), bill.amountCash, bill.amountUpi);
+      addTo(bucketFor(dailyCategories, dateKey, "Credit settlement"), bill.amountCash, bill.amountUpi, 0);
       continue;
     }
 
@@ -347,27 +355,35 @@ export function dailyCollectionRows(
       if (bill.shares) {
         for (const s of bill.shares) {
           if (s.status !== "paid" || s.label !== "Table charge" || !s.paymentMethod) continue;
-          addTo(tBucket, s.paymentMethod === "cash" ? s.amount : 0, s.paymentMethod === "upi" ? s.amount : 0);
+          addTo(
+            tBucket,
+            s.paymentMethod === "cash" ? s.amount : 0,
+            s.paymentMethod === "upi" ? s.amount : 0,
+            s.paymentMethod === "credit" ? s.amount : 0
+          );
         }
       } else if (rawSum > 0 && bill.tableCharge > 0) {
         const frac = bill.tableCharge / rawSum;
-        addTo(tBucket, bill.amountCash * frac, bill.amountUpi * frac);
+        addTo(tBucket, bill.amountCash * frac, bill.amountUpi * frac, bill.amountDue * frac);
       }
     }
 
     if (bill.canteenCharge > 0 && bill.canteenItems.length > 0) {
       let canteenCash = 0;
       let canteenUpi = 0;
+      let canteenCredit = 0;
       if (bill.shares) {
         for (const s of bill.shares) {
           if (s.status !== "paid" || s.label === "Table charge" || !s.paymentMethod) continue;
           if (s.paymentMethod === "cash") canteenCash += s.amount;
           else if (s.paymentMethod === "upi") canteenUpi += s.amount;
+          else if (s.paymentMethod === "credit") canteenCredit += s.amount;
         }
       } else if (rawSum > 0) {
         const frac = bill.canteenCharge / rawSum;
         canteenCash = bill.amountCash * frac;
         canteenUpi = bill.amountUpi * frac;
+        canteenCredit = bill.amountDue * frac;
       }
       for (const item of bill.canteenItems) {
         const revenue = item.price * item.qty;
@@ -375,7 +391,12 @@ export function dailyCollectionRows(
         const itemFrac = revenue / bill.canteenCharge;
         const catId = itemNameToCatId.get(item.name.trim().toLowerCase());
         const label = (catId && catIdToLabel.get(catId)) || "Other";
-        addTo(bucketFor(dailyCategories, dateKey, label), canteenCash * itemFrac, canteenUpi * itemFrac);
+        addTo(
+          bucketFor(dailyCategories, dateKey, label),
+          canteenCash * itemFrac,
+          canteenUpi * itemFrac,
+          canteenCredit * itemFrac
+        );
       }
     }
   }
@@ -389,19 +410,50 @@ export function dailyCollectionRows(
     const tableMap = dailyTables.get(dateKey);
     for (const t of orderedTablesList) {
       const b = tableMap?.get(t.name);
-      if (!b || b.total === 0) continue;
-      rows.push({ Date: label, Item: t.name, "Total collection": round(b.total), Cash: round(b.cash), Account: round(b.upi) });
-      dayTotal = { total: dayTotal.total + b.total, cash: dayTotal.cash + b.cash, upi: dayTotal.upi + b.upi };
+      if (!b || (b.total === 0 && b.credit === 0)) continue;
+      rows.push({
+        Date: label,
+        Item: t.name,
+        "Total collection": round(b.total),
+        Cash: round(b.cash),
+        Account: round(b.upi),
+        Credit: round(b.credit),
+      });
+      dayTotal = {
+        total: dayTotal.total + b.total,
+        cash: dayTotal.cash + b.cash,
+        upi: dayTotal.upi + b.upi,
+        credit: dayTotal.credit + b.credit,
+      };
     }
     const catMap = dailyCategories.get(dateKey);
     for (const label2 of categoryOrder) {
       const b = catMap?.get(label2);
-      if (!b || b.total === 0) continue;
-      rows.push({ Date: label, Item: label2, "Total collection": round(b.total), Cash: round(b.cash), Account: round(b.upi) });
-      dayTotal = { total: dayTotal.total + b.total, cash: dayTotal.cash + b.cash, upi: dayTotal.upi + b.upi };
+      if (!b || (b.total === 0 && b.credit === 0)) continue;
+      rows.push({
+        Date: label,
+        Item: label2,
+        "Total collection": round(b.total),
+        Cash: round(b.cash),
+        Account: round(b.upi),
+        Credit: round(b.credit),
+      });
+      dayTotal = {
+        total: dayTotal.total + b.total,
+        cash: dayTotal.cash + b.cash,
+        upi: dayTotal.upi + b.upi,
+        credit: dayTotal.credit + b.credit,
+      };
     }
-    rows.push({ Date: label, Item: "Total", "Total collection": round(dayTotal.total), Cash: round(dayTotal.cash), Account: round(dayTotal.upi) });
-    rows.push({ Date: "", Item: "", "Total collection": "", Cash: "", Account: "" });
+    rows.push({
+      Date: label,
+      Item: "Total",
+      "Total collection": round(dayTotal.total),
+      Cash: round(dayTotal.cash),
+      Account: round(dayTotal.upi),
+      Credit: round(dayTotal.credit),
+    });
+    rows.push({ Date: "", Item: "", "Total collection": "", Cash: "", Account: "", Credit: "" });
   }
   return rows;
 }
