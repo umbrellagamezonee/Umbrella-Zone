@@ -20,7 +20,7 @@ import {
   formatDateKey,
   IST_TIME_ZONE,
 } from "../lib/format";
-import { billMoney, billCollected, billRemaining, REPORT_CATEGORIES, dailyCollectionRows } from "../lib/billing";
+import { billMoney, billCollected, billRemaining, dailyCollectionRows, categoryStockProfit } from "../lib/billing";
 import { billPersonName, billPlace } from "../lib/billLabel";
 import { useCustomersStore } from "../store/useCustomersStore";
 import { orderedTables } from "../store/useTablesStore";
@@ -551,7 +551,6 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
     () => bills.filter((b) => isThisMonth(b.createdAt) && b.status !== "cancelled"),
     [bills]
   );
-  const monthOrders = useMemo(() => orders.filter((o) => isThisMonth(o.createdAt)), [orders]);
   const monthExpenses = useMemo(() => expenses.filter((e) => isThisMonth(e.createdAt)), [expenses]);
   const expenseFor = (category: string) =>
     monthExpenses.filter((e) => e.category === category).reduce((s, e) => s + e.amount, 0);
@@ -565,40 +564,16 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
   const tableExpense = expenseFor("Table");
   const netTableIncome = totalTableCollection - tableExpense;
 
-  // Per-item detail (price, cost, margin, qty sold, revenue, what's still in
-  // stock) — the category totals below are just these rows added up, but the
-  // owner wants to see each item on its own line, like a ledger, not just
-  // one number for the whole category.
-  const categoryTotals = REPORT_CATEGORIES.map((rc) => {
-    const catId = menuCategories.find((c) => c.name === rc.categoryName)?.id;
-    const catItems = menuItems.filter((i) => i.categoryId === catId);
-    const itemRows = catItems.map((item) => {
-      let qtySold = 0;
-      for (const order of monthOrders) {
-        const line = order.items.find((i) => i.menuItemId === item.id);
-        if (line) qtySold += line.qty;
-      }
-      const revenue = qtySold * item.price;
-      const marginPerUnit = item.costPrice != null ? item.price - item.costPrice : null;
-      const remainingQty = item.stockQty;
-      const remainingValue = remainingQty != null ? remainingQty * item.price : null;
-      return {
-        id: item.id,
-        name: item.name,
-        price: item.price,
-        costPrice: item.costPrice,
-        marginPerUnit,
-        qtySold,
-        revenue,
-        remainingQty,
-        remainingValue,
-      };
-    });
-    const sale = itemRows.reduce((s, r) => s + r.revenue, 0);
-    const remaining = itemRows.reduce((s, r) => s + (r.remainingValue ?? 0), 0);
-    const purchase = expenseFor(rc.sheet.replace(" collection", ""));
-    return { ...rc, sale, purchase, profit: sale - purchase, remaining, itemCount: catItems.length, itemRows };
-  });
+  // Stock, not revenue — how much of each item has ever sold and what
+  // restocking it has cost, across the whole time the shop's used this app,
+  // not just this month. A month boundary doesn't mean anything to a bag of
+  // stock bought in August and still being sold in September, so this reads
+  // every order and every expense ever logged, same as a shopkeeper's own
+  // running stock book never resets on the 1st.
+  const categoryTotals = useMemo(
+    () => categoryStockProfit(orders, expenses, menuItems, menuCategories),
+    [orders, expenses, menuItems, menuCategories]
+  );
   const totalSale = categoryTotals.reduce((s, c) => s + c.sale, 0);
   const totalPurchase = categoryTotals.reduce((s, c) => s + c.purchase, 0);
   const totalCollection = totalTableCollection + totalSale;
@@ -644,7 +619,7 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
         type ItemRow = Record<string, string | number>;
         const blank: ItemRow = { Item: "", Price: "", Cost: "", Margin: "", Sold: "", Revenue: "", "In stock": "", "Stock value": "" };
         const itemSheetRows: ItemRow[] = [
-          { Item: `${storeName} — ${monthLabel}`, Price: "", Cost: "", Margin: "", Sold: "", Revenue: "", "In stock": "", "Stock value": "" },
+          { Item: `${storeName} — All-time stock`, Price: "", Cost: "", Margin: "", Sold: "", Revenue: "", "In stock": "", "Stock value": "" },
           blank,
           ...c.itemRows
             .slice()
@@ -679,9 +654,14 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
         [
           { Section: `${storeName} — ${monthLabel}`, Collection: "", Expense: "", Net: "" },
           { Section: "", Collection: "", Expense: "", Net: "" },
-          { Section: "Table", Collection: round(totalTableCollection), Expense: round(tableExpense), Net: round(netTableIncome) },
+          {
+            Section: "Table (this month)",
+            Collection: round(totalTableCollection),
+            Expense: round(tableExpense),
+            Net: round(netTableIncome),
+          },
           ...categoryTotals.map((c) => ({
-            Section: c.sheet.replace(" collection", ""),
+            Section: `${c.sheet.replace(" collection", "")} (all-time)`,
             Collection: round(c.sale),
             Expense: round(c.purchase),
             Net: round(c.profit),
@@ -707,14 +687,15 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
     <Modal title="Monthly Report" onClose={onClose}>
       <div className="space-y-4">
         <p className="text-xs text-[var(--color-text-faint)]">
-          Is mahine ka data. "Purchase" Settings → Expenses mein Table/Food/Drinks/Cigarette/
-          Chocolate category se dale gaye kharch se aata hai — jab tak wahan kharch daalna shuru
-          nahi karoge, Purchase aur Profit ₹0 dikhenge.
+          Table Collection is mahine ka hai. Food/Drinks/Cigarette/Chocolate hamesha ka stock
+          hisaab hai (kabhi reset nahi hota) — "Purchase" Settings → Expenses mein dale gaye
+          kharch se aata hai; jab tak wahan kharch daalna shuru nahi karoge, Purchase aur Profit
+          ₹0 dikhenge.
         </p>
 
         <div>
           <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-2">
-            TABLE COLLECTION
+            TABLE COLLECTION (IS MAHINE)
           </p>
           <Card>
             <div className="flex justify-between text-sm py-1">
@@ -743,7 +724,7 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
 
         <div>
           <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-2">
-            FOOD · DRINKS · CIGARETTE · CHOCOLATE
+            FOOD · DRINKS · CIGARETTE · CHOCOLATE (HAMESHA KA STOCK)
           </p>
           <div className="space-y-2">
             {categoryTotals.map((c) => (
@@ -819,6 +800,10 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
             <span>Net income</span>
             <span className="text-[var(--color-success)]">{formatMoney(netIncome, currency)}</span>
           </div>
+          <p className="text-[10px] text-[var(--color-text-faint)] mt-2 pt-2 border-t border-[var(--color-border)]">
+            Table is mahine ka hai, Food/Drinks/Cigarette/Chocolate hamesha ka — yeh total dono ko
+            jod deta hai.
+          </p>
         </Card>
 
         <button
@@ -833,7 +818,10 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
       {editCategory && (
         <CategoryExpensesModal
           category={editCategory}
-          expenses={monthExpenses.filter((e) => e.category === editCategory)}
+          allTime={editCategory !== "Table"}
+          expenses={(editCategory === "Table" ? monthExpenses : expenses).filter(
+            (e) => e.category === editCategory
+          )}
           onClose={() => setEditCategory(null)}
         />
       )}
@@ -841,16 +829,20 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
   );
 }
 
-// This month's expense entries for one category — Purchase on the report
-// above is just these added up, but staff correct/add to it one entry at a
-// time, not as a single lump number.
+// This category's expense entries — Purchase on the report above is just
+// these added up, but staff correct/add to it one entry at a time, not as a
+// single lump number. Table stays scoped to this month (matching its still-
+// monthly Table Collection card); every other category is all-time, matching
+// their now-never-resets Purchase figure.
 function CategoryExpensesModal({
   category,
   expenses,
+  allTime,
   onClose,
 }: {
   category: string;
   expenses: Expense[];
+  allTime: boolean;
   onClose: () => void;
 }) {
   const currency = useSettingsStore((s) => s.currencySymbol);
@@ -893,7 +885,7 @@ function CategoryExpensesModal({
   }
 
   return (
-    <Modal title={`${category} expenses this month`} onClose={onClose}>
+    <Modal title={`${category} expenses${allTime ? " (all-time)" : " this month"}`} onClose={onClose}>
       <div className="space-y-3">
         <div className="flex justify-between text-sm font-semibold">
           <span>Total (Purchase)</span>
@@ -902,7 +894,7 @@ function CategoryExpensesModal({
 
         {sorted.length === 0 && !adding && (
           <p className="text-sm text-[var(--color-text-faint)] text-center py-4">
-            Is mahine {category} mein koi expense nahi daala gaya.
+            {allTime ? `${category} mein kabhi koi expense nahi daala gaya.` : `Is mahine ${category} mein koi expense nahi daala gaya.`}
           </p>
         )}
 

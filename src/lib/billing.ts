@@ -1,4 +1,4 @@
-import type { Bill, CanteenOrder, MenuCategory, MenuItem, PaymentMethod } from "../types";
+import type { Bill, CanteenOrder, Expense, MenuCategory, MenuItem, PaymentMethod } from "../types";
 import { normalizeName } from "./customerName";
 import { isCreditSettlement } from "./billLabel";
 import { toDateInputValue, formatDateKey } from "./format";
@@ -195,6 +195,77 @@ export const REPORT_CATEGORIES: { sheet: string; categoryName: string }[] = [
   { sheet: "Drinks collection", categoryName: "Fridge" },
   { sheet: "Chocolate collection", categoryName: "Chocolate" },
 ];
+
+export interface CategoryItemRow {
+  id: string;
+  name: string;
+  price: number;
+  costPrice: number | null;
+  marginPerUnit: number | null;
+  qtySold: number;
+  revenue: number;
+  remainingQty: number | null;
+  remainingValue: number | null;
+}
+
+export interface CategoryStockProfit {
+  sheet: string;
+  categoryName: string;
+  sale: number;
+  purchase: number;
+  profit: number;
+  remaining: number;
+  itemCount: number;
+  itemRows: CategoryItemRow[];
+}
+
+// Per-canteen-category stock tracking: how much of each item sold (from
+// every order ever placed, not bucketed by month — stock bought last month
+// and sold this month, or vice versa, is still one continuous ledger, the
+// same way a shopkeeper's own stock book never resets on the 1st), how much
+// was spent restocking it (from Settings → Expenses, matched by category),
+// and the resulting profit. "Sale" reads every order regardless of whether
+// it was ever billed, matching how much has actually left the shelf.
+export function categoryStockProfit(
+  orders: CanteenOrder[],
+  expenses: Expense[],
+  menuItems: MenuItem[],
+  menuCategories: MenuCategory[]
+): CategoryStockProfit[] {
+  const expenseFor = (category: string) =>
+    expenses.filter((e) => e.category === category).reduce((s, e) => s + e.amount, 0);
+
+  return REPORT_CATEGORIES.map((rc) => {
+    const catId = menuCategories.find((c) => c.name === rc.categoryName)?.id;
+    const catItems = menuItems.filter((i) => i.categoryId === catId);
+    const itemRows: CategoryItemRow[] = catItems.map((item) => {
+      let qtySold = 0;
+      for (const order of orders) {
+        const line = order.items.find((i) => i.menuItemId === item.id);
+        if (line) qtySold += line.qty;
+      }
+      const revenue = qtySold * item.price;
+      const marginPerUnit = item.costPrice != null ? item.price - item.costPrice : null;
+      const remainingQty = item.stockQty;
+      const remainingValue = remainingQty != null ? remainingQty * item.price : null;
+      return {
+        id: item.id,
+        name: item.name,
+        price: item.price,
+        costPrice: item.costPrice,
+        marginPerUnit,
+        qtySold,
+        revenue,
+        remainingQty,
+        remainingValue,
+      };
+    });
+    const sale = itemRows.reduce((s, r) => s + r.revenue, 0);
+    const remaining = itemRows.reduce((s, r) => s + (r.remainingValue ?? 0), 0);
+    const purchase = expenseFor(rc.sheet.replace(" collection", ""));
+    return { ...rc, sale, purchase, profit: sale - purchase, remaining, itemCount: catItems.length, itemRows };
+  });
+}
 
 export interface DailyCollectionRow {
   Date: string;
