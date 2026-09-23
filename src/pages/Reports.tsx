@@ -675,9 +675,19 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
 
       for (const c of categoryTotals) {
         type ItemRow = Record<string, string | number>;
-        const blank: ItemRow = { Item: "", Price: "", Cost: "", Margin: "", Sold: "", Revenue: "", "In stock": "", "Stock value": "" };
+        const blank: ItemRow = {
+          Item: "",
+          Price: "",
+          Cost: "",
+          Margin: "",
+          Sold: "",
+          Revenue: "",
+          "Item profit": "",
+          "In stock": "",
+          "Stock value": "",
+        };
         const itemSheetRows: ItemRow[] = [
-          { Item: `${storeName} — ${rangeLabel}`, Price: "", Cost: "", Margin: "", Sold: "", Revenue: "", "In stock": "", "Stock value": "" },
+          { ...blank, Item: `${storeName} — ${rangeLabel}` },
           blank,
           ...c.itemRows
             .slice()
@@ -689,15 +699,16 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
               Margin: r.marginPerUnit != null ? round(r.marginPerUnit) : "—",
               Sold: r.qtySold,
               Revenue: round(r.revenue),
+              "Item profit": r.marginPerUnit != null ? round(r.marginPerUnit * r.qtySold) : "—",
               "In stock": r.remainingQty ?? "—",
               "Stock value": r.remainingValue != null ? round(r.remainingValue) : "—",
             })),
           blank,
-          { Item: "Total sale", Price: "", Cost: "", Margin: "", Sold: "", Revenue: round(c.sale), "In stock": "", "Stock value": round(c.remaining) },
-          { Item: "Purchase", Price: "", Cost: "", Margin: "", Sold: "", Revenue: round(c.purchase), "In stock": "", "Stock value": "" },
-          { Item: "Profit", Price: "", Cost: "", Margin: "", Sold: "", Revenue: round(c.profit), "In stock": "", "Stock value": "" },
+          { ...blank, Item: "Total sale", Revenue: round(c.sale), "Stock value": round(c.remaining) },
+          { ...blank, Item: "Purchase (restocking)", Revenue: round(c.purchase) },
+          { ...blank, Item: "Overall profit (sale − restocking)", Revenue: round(c.profit) },
         ];
-        addSheet(c.sheet, itemSheetRows, [26, 9, 9, 9, 7, 10, 9, 11]);
+        addSheet(c.sheet, itemSheetRows, [30, 9, 9, 9, 7, 10, 11, 9, 11]);
       }
 
       addSheet("Daily collection", dailyCollectionRows(rangeBills, menuItems, menuCategories, orderedTablesList), [
