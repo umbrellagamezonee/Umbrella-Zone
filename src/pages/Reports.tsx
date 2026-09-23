@@ -20,7 +20,14 @@ import {
   formatDateKey,
   dateInputValueToIstMidnight,
 } from "../lib/format";
-import { billMoney, billCollected, billRemaining, dailyCollectionRows, categoryStockProfit } from "../lib/billing";
+import {
+  billMoney,
+  billCollected,
+  billRemaining,
+  dailyCollectionRows,
+  categoryStockProfit,
+  canteenItemPayments,
+} from "../lib/billing";
 import { billPersonName, billPlace } from "../lib/billLabel";
 import { useCustomersStore } from "../store/useCustomersStore";
 import { orderedTables } from "../store/useTablesStore";
@@ -673,6 +680,7 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
         [16, 18, 14]
       );
 
+      const itemPayments = canteenItemPayments(rangeBills);
       for (const c of categoryTotals) {
         type ItemRow = Record<string, string | number>;
         const blank: ItemRow = {
@@ -683,16 +691,36 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
           Sold: "",
           Revenue: "",
           "Item profit": "",
+          Cash: "",
+          Account: "",
+          Credit: "",
           "In stock": "",
           "Stock value": "",
         };
-        const itemSheetRows: ItemRow[] = [
-          { ...blank, Item: `${storeName} — ${rangeLabel}` },
-          blank,
-          ...c.itemRows
-            .slice()
-            .sort((a, b) => b.revenue - a.revenue)
-            .map((r) => ({
+        // Bills only remember an item's name, not its menu item id, so a
+        // payment split fetched by name is shared by every item with that
+        // name (see canteenItemPayments) — split it back across their rows
+        // by each row's own share of that name's combined revenue, so two
+        // menu items with the same name don't both show the full amount.
+        const revenueByName = new Map<string, number>();
+        for (const r of c.itemRows) revenueByName.set(r.name, (revenueByName.get(r.name) ?? 0) + r.revenue);
+        let catCash = 0;
+        let catAccount = 0;
+        let catCredit = 0;
+        const itemRows = c.itemRows
+          .slice()
+          .sort((a, b) => b.revenue - a.revenue)
+          .map((r) => {
+            const pay = itemPayments.get(r.name);
+            const nameTotal = revenueByName.get(r.name) ?? 0;
+            const share = pay && nameTotal > 0 ? r.revenue / nameTotal : 0;
+            const cash = pay ? round(pay.cash * share) : 0;
+            const account = pay ? round(pay.upi * share) : 0;
+            const credit = pay ? round(pay.credit * share) : 0;
+            catCash += cash;
+            catAccount += account;
+            catCredit += credit;
+            return {
               Item: r.name,
               Price: round(r.price),
               Cost: r.costPrice != null ? round(r.costPrice) : "—",
@@ -700,15 +728,31 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
               Sold: r.qtySold,
               Revenue: round(r.revenue),
               "Item profit": r.marginPerUnit != null ? round(r.marginPerUnit * r.qtySold) : "—",
+              Cash: cash,
+              Account: account,
+              Credit: credit,
               "In stock": r.remainingQty ?? "—",
               "Stock value": r.remainingValue != null ? round(r.remainingValue) : "—",
-            })),
+            };
+          });
+        const itemSheetRows: ItemRow[] = [
+          { ...blank, Item: `${storeName} — ${rangeLabel}` },
           blank,
-          { ...blank, Item: "Total sale", Revenue: round(c.sale), "Stock value": round(c.remaining) },
+          ...itemRows,
+          blank,
+          {
+            ...blank,
+            Item: "Total sale",
+            Revenue: round(c.sale),
+            Cash: round(catCash),
+            Account: round(catAccount),
+            Credit: round(catCredit),
+            "Stock value": round(c.remaining),
+          },
           { ...blank, Item: "Purchase (restocking)", Revenue: round(c.purchase) },
           { ...blank, Item: "Overall profit (sale − restocking)", Revenue: round(c.profit) },
         ];
-        addSheet(c.sheet, itemSheetRows, [30, 9, 9, 9, 7, 10, 11, 9, 11]);
+        addSheet(c.sheet, itemSheetRows, [30, 9, 9, 9, 7, 10, 11, 9, 9, 9, 9, 11]);
       }
 
       addSheet("Daily collection", dailyCollectionRows(rangeBills, menuItems, menuCategories, orderedTablesList), [
