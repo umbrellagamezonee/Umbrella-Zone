@@ -1,4 +1,5 @@
 import { useState } from "react";
+import type { MenuItem } from "../types";
 import { AppShell } from "../components/layout/AppShell";
 import { Card } from "../components/ui/Card";
 import { Modal } from "../components/ui/Modal";
@@ -1205,19 +1206,35 @@ function ExportExcelModal({ onClose }: { onClose: () => void }) {
         }
       }
 
-      const stockRows: Row[] = items.map((i) => {
-        const sold = soldByName.get(i.name) ?? { qty: 0, revenue: 0 };
-        soldByName.delete(i.name);
-        const cost = i.costPrice;
+      // A bill only remembers an item's name, not which menu item id was
+      // sold, so two menu items sharing a name (e.g. two "kitkat" entries at
+      // different prices) can't have their past sales told apart — grouping
+      // by id here would silently hand all the sales to whichever one came
+      // first and show 0 for the rest. Group by name instead so every item
+      // with that name appears once, with their sales and stock combined.
+      const itemsByName = new Map<string, MenuItem[]>();
+      for (const i of items) {
+        const list = itemsByName.get(i.name) ?? [];
+        list.push(i);
+        itemsByName.set(i.name, list);
+      }
+      const stockRows: Row[] = [...itemsByName.entries()].map(([name, variants]) => {
+        const sold = soldByName.get(name) ?? { qty: 0, revenue: 0 };
+        soldByName.delete(name);
+        const prices = [...new Set(variants.map((v) => v.price))];
+        const costs = [...new Set(variants.map((v) => v.costPrice).filter((c): c is number => c != null))];
+        const cost = costs.length === 1 ? costs[0] : null;
         const cogs = cost != null ? cost * sold.qty : null;
+        const stockQtys = variants.map((v) => v.stockQty);
+        const stockQty = stockQtys.every((q) => q != null) ? stockQtys.reduce((s, q) => s + (q ?? 0), 0) : null;
         return {
-          Item: i.name,
-          Category: categories.find((c) => c.id === i.categoryId)?.name ?? "",
-          "Selling Price": i.price,
-          "Cost Price": cost ?? "Not set",
-          "Profit / Unit": cost != null ? i.price - cost : "",
+          Item: variants.length > 1 ? `${name} (${variants.length} menu entries, different prices)` : name,
+          Category: categories.find((c) => c.id === variants[0].categoryId)?.name ?? "",
+          "Selling Price": prices.length === 1 ? prices[0] : prices.join(" / "),
+          "Cost Price": cost ?? (costs.length > 1 ? costs.join(" / ") : "Not set"),
+          "Profit / Unit": cost != null && prices.length === 1 ? prices[0] - cost : "",
           "Qty Sold": sold.qty,
-          "Qty In Stock (Pending)": i.stockQty ?? "Not tracked",
+          "Qty In Stock (Pending)": stockQty ?? "Not tracked",
           Revenue: sold.revenue,
           "Total Cost": cogs ?? "",
           "Total Profit": cogs != null ? sold.revenue - cogs : "",
