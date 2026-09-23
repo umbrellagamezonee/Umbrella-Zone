@@ -1294,17 +1294,17 @@ function ExportExcelModal({ onClose }: { onClose: () => void }) {
     <Modal title="Export Data (Excel)" onClose={onClose}>
       <div className="space-y-4">
         <p className="text-sm text-[var(--color-text-dim)]">
-          Ek Excel file (.xlsx) mein sab kuch — Bills, Canteen Items, Customers, Expenses,
-          Stock & Profit, Category Stock & Profit (Food/Drinks/Cigarette/Chocolate ka hamesha
-          ka Sale/Purchase/Profit), aur Daily collection (har din ka table/item-wise
-          cash-account) — alag-alag sheets mein, har sheet ke aakhri row mein TOTAL ke saath.
-          Stock & Profit sheet mein har item ki cost price, per-unit aur total profit, kitna bika
-          aur kitna stock abhi pending hai — sab ek saath. Isse tum Excel/Google Sheets mein khol
-          kar dekh, filter, ya print kar sakte ho. Amounts {currency} mein hain.
+          Everything in one Excel file (.xlsx) — Bills, Canteen Items, Customers, Expenses,
+          Stock &amp; Profit, Category Stock &amp; Profit (Food/Drinks/Cigarette/Chocolate
+          Sale/Purchase/Profit across all time), and Daily collection (day-by-day cash/account
+          by table and item) — each on its own sheet, with a TOTAL row at the end of every sheet.
+          The Stock &amp; Profit sheet lists each item's cost price, per-unit and total profit,
+          units sold, and units still in stock. Open it in Excel or Google Sheets to review,
+          filter, or print. Amounts are in {currency}.
         </p>
         <p className="text-xs text-[var(--color-text-faint)]">
-          Profit sirf un items ka aayega jinki Cost Price Menu Management mein bhari ho — baaki
-          ke liye Cost Price column mein "Not set" dikhega.
+          Profit only shows for items with a Cost Price set in Menu Management — others show
+          "Not set" in the Cost Price column.
         </p>
         <button
           onClick={handleExport}

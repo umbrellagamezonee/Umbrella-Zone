@@ -723,19 +723,19 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
     <Modal title="Monthly Report" onClose={onClose}>
       <div className="space-y-4">
         <p className="text-xs text-[var(--color-text-faint)]">
-          Poori report neeche isi date range ki hai — jitna chaho utna chhota ya bada rakh sakte ho.
-          "Purchase" Settings → Expenses mein dale gaye kharch se aata hai; jab tak wahan kharch
-          daalna shuru nahi karoge, Purchase aur Profit ₹0 dikhenge.
+          This entire report reflects the date range selected below — choose any period you need.
+          "Purchase" is drawn from expenses logged under Settings → Expenses; Purchase and Profit
+          will show ₹0 until expenses are recorded there.
         </p>
 
         <Card>
           <div className="flex flex-wrap gap-1.5 mb-2.5">
             {[
-              { label: "Aaj", days: 1 as const },
-              { label: "7 din", days: 7 as const },
-              { label: "15 din", days: 15 as const },
-              { label: "Is mahine", days: "month" as const },
-              { label: "Is saal", days: "year" as const },
+              { label: "Today", days: 1 as const },
+              { label: "7 days", days: 7 as const },
+              { label: "15 days", days: 15 as const },
+              { label: "This month", days: "month" as const },
+              { label: "This year", days: "year" as const },
             ].map((p) => (
               <button
                 key={p.label}
@@ -754,7 +754,7 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
               onChange={(e) => setRangeStart(e.target.value)}
               className="flex-1 min-w-0 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] px-2.5 py-2 text-sm outline-none"
             />
-            <span className="text-[var(--color-text-faint)] text-xs shrink-0">se</span>
+            <span className="text-[var(--color-text-faint)] text-xs shrink-0">to</span>
             <input
               type="date"
               value={rangeEnd}
@@ -959,7 +959,7 @@ function CategoryExpensesModal({
 
         {sorted.length === 0 && !adding && (
           <p className="text-sm text-[var(--color-text-faint)] text-center py-4">
-            Is date range mein {category} ka koi expense nahi daala gaya.
+            No {category} expenses recorded in this date range.
           </p>
         )}
 

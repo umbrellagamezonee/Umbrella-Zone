@@ -568,21 +568,21 @@ function NewOrderModal({ onClose }: { onClose: () => void }) {
             <UserCheck size={24} />
           </div>
           <p className="text-sm">
-            Ye order <span className="font-semibold">{confirmCustomer.name}</span> ke account mein
-            jayega — sahi hai?
+            This order will go on <span className="font-semibold">{confirmCustomer.name}</span>'s
+            account — is that correct?
           </p>
           <div className="grid grid-cols-2 gap-2">
             <button
               onClick={() => setConfirmCustomer(null)}
               className="rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] font-semibold py-3 text-sm"
             >
-              Naam badlo
+              Change name
             </button>
             <button
               onClick={() => saveOrder(confirmCustomer.id)}
               className="rounded-xl bg-[var(--color-primary)] text-white font-semibold py-3 text-sm"
             >
-              Haan, sahi hai
+              Yes, that's correct
             </button>
           </div>
         </div>
