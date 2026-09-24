@@ -78,21 +78,9 @@ export function Canteen() {
     setCheckoutBill(bill);
   }
 
-  // An order billed days after it was placed (an old order finally cleared
-  // through checkout) should show up on the day it was actually billed, not
-  // the day it was ordered — otherwise it appears on this page under one
-  // date while the money it brought in shows on the customer's Khata and
-  // every other report under a different date, days apart, looking like it
-  // vanished. Once billed, its bill's own createdAt is the one date that
-  // actually matches what every other screen already shows for it.
-  function orderEffectiveDate(order: CanteenOrder): number {
-    if (order.status !== "billed") return order.createdAt;
-    return bills.find((b) => b.orderId === order.id)?.createdAt ?? order.createdAt;
-  }
-
   const ordersForDate = orders
-    .filter((o) => toDateInputValue(orderEffectiveDate(o)) === selectedDate)
-    .sort((a, b) => orderEffectiveDate(b) - orderEffectiveDate(a));
+    .filter((o) => toDateInputValue(o.createdAt) === selectedDate)
+    .sort((a, b) => b.createdAt - a.createdAt);
   const activeCount = ordersForDate.filter((o) => o.status !== "billed").length;
 
   const dateBills = bills.filter(
@@ -249,7 +237,7 @@ export function Canteen() {
                   </div>
                   <div className="flex items-center gap-1.5">
                     <span className="text-xs text-[var(--color-text-faint)]">
-                      {formatTime(orderBill?.createdAt ?? order.createdAt)}
+                      {formatTime(order.createdAt)}
                     </span>
                     {order.status === "served" && (
                       <span className="text-[10px] font-medium rounded-full px-2 py-0.5 bg-[var(--color-success)]/15 text-[var(--color-success)]">
