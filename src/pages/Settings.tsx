@@ -14,7 +14,7 @@ import { useExpensesStore } from "../store/useExpensesStore";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { markRestoreInProgress } from "../lib/cloudSync";
 import { formatMoney, formatDateTime, IST_TIME_ZONE } from "../lib/format";
-import { creditBalanceFor, dailyCollectionRows, categoryStockProfit } from "../lib/billing";
+import { creditBalanceFor, dailyCollectionRows, categoryStockProfit, creditSettlementDetails } from "../lib/billing";
 import { normalizeName } from "../lib/customerName";
 import {
   LayoutGrid,
@@ -1301,6 +1301,21 @@ function ExportExcelModal({ onClose }: { onClose: () => void }) {
       const dailyRows = dailyCollectionRows(activeBills, items, categories, orderedTables(tables));
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(dailyRows), "Daily collection");
 
+      // Every credit settlement ever recorded, with the date of the oldest
+      // charge it started clearing — a settlement is assumed to clear
+      // whatever's been owed the longest first, since there's no record of
+      // which specific past charge a given rupee of settlement was for.
+      const settlementRows: Row[] = creditSettlementDetails(bills, customers)
+        .sort((a, b) => a.date - b.date)
+        .map((r) => ({
+          Date: new Date(r.date).toLocaleString([], { timeZone: IST_TIME_ZONE }),
+          Customer: r.customerName,
+          "Amount settled": r.amount,
+          "Oldest unpaid since": r.oldestUnpaidSince != null ? new Date(r.oldestUnpaidSince).toLocaleString([], { timeZone: IST_TIME_ZONE }) : "—",
+          "Days pending": r.oldestUnpaidSince != null ? Math.round((r.date - r.oldestUnpaidSince) / 86400000) : "",
+        }));
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(settlementRows), "Credit Settlements");
+
       XLSX.writeFile(wb, `cuebill-data-${new Date().toISOString().slice(0, 10)}.xlsx`);
     } finally {
       setWorking(false);
@@ -1313,11 +1328,12 @@ function ExportExcelModal({ onClose }: { onClose: () => void }) {
         <p className="text-sm text-[var(--color-text-dim)]">
           Everything in one Excel file (.xlsx) — Bills, Canteen Items, Customers, Expenses,
           Stock &amp; Profit, Category Stock &amp; Profit (Food/Drinks/Cigarette/Chocolate
-          Sale/Purchase/Profit across all time), and Daily collection (day-by-day cash/account
-          by table and item) — each on its own sheet, with a TOTAL row at the end of every sheet.
-          The Stock &amp; Profit sheet lists each item's cost price, per-unit and total profit,
-          units sold, and units still in stock. Open it in Excel or Google Sheets to review,
-          filter, or print. Amounts are in {currency}.
+          Sale/Purchase/Profit across all time), Daily collection (day-by-day cash/account
+          by table and item), and Credit Settlements (every payoff, with how much and the
+          date of the oldest charge it started clearing) — each on its own sheet, with a
+          TOTAL row at the end of every sheet. The Stock &amp; Profit sheet lists each item's
+          cost price, per-unit and total profit, units sold, and units still in stock. Open
+          it in Excel or Google Sheets to review, filter, or print. Amounts are in {currency}.
         </p>
         <p className="text-xs text-[var(--color-text-faint)]">
           Profit only shows for items with a Cost Price set in Menu Management — others show

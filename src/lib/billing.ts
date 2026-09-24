@@ -1,4 +1,4 @@
-import type { Bill, CanteenOrder, Expense, MenuCategory, MenuItem, PaymentMethod } from "../types";
+import type { Bill, CanteenOrder, Customer, Expense, MenuCategory, MenuItem, PaymentMethod } from "../types";
 import { normalizeName } from "./customerName";
 import { isCreditSettlement } from "./billLabel";
 import { toDateInputValue, formatDateKey } from "./format";
@@ -516,6 +516,75 @@ export function canteenItemPayments(bills: Bill[]): Map<string, ItemPayment> {
     }
   }
   return byName;
+}
+
+export interface CreditSettlementDetail {
+  date: number;
+  customerName: string;
+  amount: number;
+  oldestUnpaidSince: number | null;
+}
+
+// For every credit settlement (a customer paying down their running tab),
+// how much they paid and the date of the oldest charge still unpaid right
+// before this payment — a settlement is assumed to clear whatever's been
+// owed the longest first, the same way a shopkeeper's own khata naturally
+// works, since there's no record of which specific past charge a given
+// rupee of settlement was actually for. This needs every bill a customer
+// has ever had, not just the report's date range, since a settlement can
+// be clearing debt from well before the range starts — the caller filters
+// the returned rows down to the range afterward.
+export function creditSettlementDetails(allBills: Bill[], customers: Customer[]): CreditSettlementDetail[] {
+  type Debt = { date: number; remaining: number };
+  const queues = new Map<string, Debt[]>();
+
+  const queueFor = (key: string) => {
+    if (!queues.has(key)) queues.set(key, []);
+    return queues.get(key)!;
+  };
+  const consume = (queue: Debt[], amount: number): number | null => {
+    const oldest = queue.length > 0 ? queue[0].date : null;
+    let left = amount;
+    while (left > 0.005 && queue.length > 0) {
+      const chunk = queue[0];
+      const take = Math.min(chunk.remaining, left);
+      chunk.remaining -= take;
+      left -= take;
+      if (chunk.remaining <= 0.005) queue.shift();
+    }
+    return oldest;
+  };
+
+  const results: CreditSettlementDetail[] = [];
+  const sorted = allBills
+    .filter((b) => b.status === "paid")
+    .slice()
+    .sort((a, b) => a.createdAt - b.createdAt);
+
+  for (const bill of sorted) {
+    if (isCreditSettlement(bill)) {
+      const key = bill.customerId ?? `name:${normalizeName(bill.tableName ?? "")}`;
+      const amount = Math.round((bill.amountPaid + bill.discount) * 100) / 100;
+      if (amount <= 0) continue;
+      const oldest = consume(queueFor(key), amount);
+      const customerName = customers.find((c) => c.id === bill.customerId)?.name ?? bill.tableName ?? "Unknown";
+      results.push({ date: bill.createdAt, customerName, amount, oldestUnpaidSince: oldest });
+      continue;
+    }
+    if (bill.shares) {
+      for (const s of bill.shares) {
+        if (s.status !== "paid" || s.paymentMethod !== "credit" || s.amount <= 0) continue;
+        const nameKey = normalizeName(s.payerName);
+        const key = customers.find((c) => normalizeName(c.name) === nameKey)?.id ?? `name:${nameKey}`;
+        queueFor(key).push({ date: bill.createdAt, remaining: s.amount });
+      }
+      continue;
+    }
+    if (bill.amountDue > 0 && bill.customerId) {
+      queueFor(bill.customerId).push({ date: bill.createdAt, remaining: bill.amountDue });
+    }
+  }
+  return results;
 }
 
 export function sumBillMoney(bills: Bill[]): BillMoney {

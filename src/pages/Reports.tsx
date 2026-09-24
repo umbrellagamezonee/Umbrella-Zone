@@ -27,6 +27,7 @@ import {
   dailyCollectionRows,
   categoryStockProfit,
   canteenItemPayments,
+  creditSettlementDetails,
 } from "../lib/billing";
 import { billPersonName, billPlace } from "../lib/billLabel";
 import { useCustomersStore } from "../store/useCustomersStore";
@@ -575,6 +576,7 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
   const menuItems = useMenuStore((s) => s.items);
   const menuCategories = useMenuStore((s) => s.categories);
   const tables = useTablesStore((s) => s.tables);
+  const customers = useCustomersStore((s) => s.customers);
   const currency = useSettingsStore((s) => s.currencySymbol);
   const storeName = useSettingsStore((s) => s.storeName);
   const [working, setWorking] = useState(false);
@@ -779,6 +781,22 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
       addSheet("Daily collection", dailyCollectionRows(rangeBills, menuItems, menuCategories, orderedTablesList), [
         16, 16, 16, 12, 12, 12,
       ]);
+
+      // Needs every bill ever recorded (not just this range) so a
+      // settlement that clears old debt from before the range still shows
+      // the right "oldest unpaid since" date — only the settlements
+      // themselves get filtered down to the picked range afterward.
+      const settlementRows = creditSettlementDetails(bills, customers)
+        .filter((r) => r.date >= rangeStartMs && r.date < rangeEndMs)
+        .sort((a, b) => a.date - b.date)
+        .map((r) => ({
+          Date: formatDateTime(r.date),
+          Customer: r.customerName,
+          "Amount settled": round(r.amount),
+          "Oldest unpaid since": r.oldestUnpaidSince != null ? formatDateTime(r.oldestUnpaidSince) : "—",
+          "Days pending": r.oldestUnpaidSince != null ? Math.round((r.date - r.oldestUnpaidSince) / 86400000) : "",
+        }));
+      addSheet("Credit Settlements", settlementRows, [18, 22, 13, 18, 12]);
 
       // One clean table instead of a long flat list — Section / Collection /
       // Expense / Net, same shape for the table row and every category, so
