@@ -206,6 +206,7 @@ export interface CategoryItemRow {
   revenue: number;
   remainingQty: number | null;
   remainingValue: number | null;
+  lowStockThreshold: number;
 }
 
 export interface CategoryStockProfit {
@@ -258,6 +259,7 @@ export function categoryStockProfit(
         revenue,
         remainingQty,
         remainingValue,
+        lowStockThreshold: item.lowStockThreshold,
       };
     });
     const sale = itemRows.reduce((s, r) => s + r.revenue, 0);

@@ -718,6 +718,7 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
           Account: "",
           Credit: "",
           "In stock": "",
+          "Stock status": "",
           "Stock value": "",
         };
         // Bills only remember an item's name, not its menu item id, so a
@@ -755,6 +756,14 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
               Account: account,
               Credit: credit,
               "In stock": r.remainingQty ?? "—",
+              "Stock status":
+                r.remainingQty == null
+                  ? "Not tracked"
+                  : r.remainingQty === 0
+                  ? "Out of stock — needs restocking"
+                  : r.remainingQty <= r.lowStockThreshold
+                  ? "Running low"
+                  : "OK",
               "Stock value": r.remainingValue != null ? round(r.remainingValue) : "—",
             };
           });
@@ -775,7 +784,7 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
           { ...blank, Item: "Purchase (restocking)", Revenue: round(c.purchase) },
           { ...blank, Item: "Overall profit (sale − restocking)", Revenue: round(c.profit) },
         ];
-        addSheet(c.sheet, itemSheetRows, [30, 9, 9, 9, 7, 10, 11, 9, 9, 9, 9, 11]);
+        addSheet(c.sheet, itemSheetRows, [30, 9, 9, 9, 7, 10, 11, 9, 9, 9, 9, 26, 11]);
       }
 
       addSheet("Daily collection", dailyCollectionRows(rangeBills, menuItems, menuCategories, orderedTablesList), [

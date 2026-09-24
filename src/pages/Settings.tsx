@@ -553,7 +553,7 @@ function MenuManagementModal({ onClose }: { onClose: () => void }) {
       }
       setImportResult({ added, skipped });
     } catch {
-      setImportError("Ye file padh nahi payi — Excel (.xlsx) ya CSV file try karo, pehli row mein column names ke saath (Name, Price, Stock).");
+      setImportError("Couldn't read that file — try an Excel (.xlsx) or CSV file, with column names in the first row (Name, Price, Stock).");
     } finally {
       setImporting(false);
     }
@@ -574,6 +574,11 @@ function MenuManagementModal({ onClose }: { onClose: () => void }) {
           className="w-full rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] pl-9 pr-3 py-2.5 text-sm outline-none focus:border-[var(--color-primary)]"
         />
       </div>
+      <p className="text-xs text-[var(--color-text-faint)] mb-3">
+        Stock goes down on its own as items sell. It never goes back up by
+        itself — after you buy new stock, come back here and type the new
+        total for that item.
+      </p>
       <div className="space-y-2 mb-4 max-h-64 overflow-y-auto">
         {filteredItems.length === 0 && (
           <p className="text-sm text-[var(--color-text-faint)] text-center py-4">
@@ -648,7 +653,11 @@ function MenuManagementModal({ onClose }: { onClose: () => void }) {
               </div>
               <div className="flex items-center justify-between mt-1.5">
                 <span className={"text-xs " + (low ? "text-[var(--color-danger)] font-medium" : "text-[var(--color-text-dim)]")}>
-                  {item.stockQty == null ? "Stock not tracked" : `${item.stockQty} in stock${low ? " · low!" : ""}`}
+                  {item.stockQty == null
+                    ? "Stock not tracked"
+                    : item.stockQty === 0
+                    ? "Out of stock — got new stock? Update the number →"
+                    : `${item.stockQty} in stock${low ? " · running low" : ""}`}
                 </span>
                 <input
                   type="number"
@@ -1227,6 +1236,7 @@ function ExportExcelModal({ onClose }: { onClose: () => void }) {
         const cogs = cost != null ? cost * sold.qty : null;
         const stockQtys = variants.map((v) => v.stockQty);
         const stockQty = stockQtys.every((q) => q != null) ? stockQtys.reduce((s, q) => s + (q ?? 0), 0) : null;
+        const lowThreshold = Math.min(...variants.map((v) => v.lowStockThreshold));
         return {
           Item: variants.length > 1 ? `${name} (${variants.length} menu entries, different prices)` : name,
           Category: categories.find((c) => c.id === variants[0].categoryId)?.name ?? "",
@@ -1235,6 +1245,14 @@ function ExportExcelModal({ onClose }: { onClose: () => void }) {
           "Profit / Unit": cost != null && prices.length === 1 ? prices[0] - cost : "",
           "Qty Sold": sold.qty,
           "Qty In Stock (Pending)": stockQty ?? "Not tracked",
+          "Stock Status":
+            stockQty == null
+              ? "Not tracked"
+              : stockQty === 0
+              ? "Out of stock — needs restocking"
+              : stockQty <= lowThreshold
+              ? "Running low"
+              : "OK",
           Revenue: sold.revenue,
           "Total Cost": cogs ?? "",
           "Total Profit": cogs != null ? sold.revenue - cogs : "",
@@ -1252,6 +1270,7 @@ function ExportExcelModal({ onClose }: { onClose: () => void }) {
           "Profit / Unit": "",
           "Qty Sold": sold.qty,
           "Qty In Stock (Pending)": "",
+          "Stock Status": "",
           Revenue: sold.revenue,
           "Total Cost": "",
           "Total Profit": "",
@@ -1266,6 +1285,7 @@ function ExportExcelModal({ onClose }: { onClose: () => void }) {
           "Profit / Unit": "",
           "Qty Sold": sum(stockRows, "Qty Sold"),
           "Qty In Stock (Pending)": "",
+          "Stock Status": "",
           Revenue: sum(stockRows, "Revenue"),
           "Total Cost": sum(stockRows, "Total Cost"),
           "Total Profit": sum(stockRows, "Total Profit"),
