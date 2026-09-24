@@ -470,15 +470,17 @@ export interface ItemPayment {
 }
 
 // How much of each canteen item's money came in as cash, account, or is
-// still on credit — same proration as dailyCollectionRows's canteen half
-// (a bill's cash/account/credit split is prorated to its canteen portion,
-// then across that bill's items by each item's own share of the canteen
-// charge), just totalled by item name across the given bills instead of
-// bucketed per day and per category. An item still sitting in an unbilled
-// open order has nothing here yet, since only a paid bill carries a real
-// split — its Sold/Revenue elsewhere still counts it, this just has no
-// money to show for it yet. Bills only remember an item's name (not its
-// menu item id), so two menu items sharing a name share one bucket here.
+// still on credit — only counted from a bill that ordered exactly that one
+// canteen item, so the whole cash/account/credit amount belongs to it with
+// no splitting needed. A bill with two or more different items has no
+// honest way to say which rupee of a mixed cash+account payment was for
+// which item, so those bills contribute nothing here at all rather than a
+// guessed percentage split — an item that only ever sold alongside other
+// things in the same order will show 0 here even with real Sold/Revenue
+// elsewhere. Only a paid bill carries a real split, so an item still
+// sitting in an unbilled open order has nothing here yet either. Bills only
+// remember an item's name (not its menu item id), so two menu items
+// sharing a name share one bucket here.
 export function canteenItemPayments(bills: Bill[]): Map<string, ItemPayment> {
   const byName = new Map<string, ItemPayment>();
   const addTo = (name: string, cash: number, upi: number, credit: number) => {
@@ -490,7 +492,9 @@ export function canteenItemPayments(bills: Bill[]): Map<string, ItemPayment> {
   };
   for (const bill of bills) {
     if (bill.status === "cancelled" || isCreditSettlement(bill)) continue;
-    if (bill.canteenCharge <= 0 || bill.canteenItems.length === 0) continue;
+    if (bill.canteenCharge <= 0 || bill.canteenItems.length !== 1) continue;
+    const item = bill.canteenItems[0];
+    if (item.price * item.qty <= 0) continue;
     const rawSum = bill.tableCharge + bill.canteenCharge;
     let canteenCash = 0;
     let canteenUpi = 0;
@@ -508,12 +512,7 @@ export function canteenItemPayments(bills: Bill[]): Map<string, ItemPayment> {
       canteenUpi = bill.amountUpi * frac;
       canteenCredit = bill.amountDue * frac;
     }
-    for (const item of bill.canteenItems) {
-      const revenue = item.price * item.qty;
-      if (revenue <= 0) continue;
-      const itemFrac = revenue / bill.canteenCharge;
-      addTo(item.name, canteenCash * itemFrac, canteenUpi * itemFrac, canteenCredit * itemFrac);
-    }
+    addTo(item.name, canteenCash, canteenUpi, canteenCredit);
   }
   return byName;
 }
