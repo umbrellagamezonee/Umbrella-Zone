@@ -68,6 +68,12 @@ export function TableDetailModal({
   const [selectedPayerIds, setSelectedPayerIds] = useState<string[]>([]);
   const [showEditTime, setShowEditTime] = useState(false);
   const [showGamePicker, setShowGamePicker] = useState(false);
+  // Stop & Bill on a session flagged as stuck (see STUCK_SESSION_MS) needs a
+  // second, explicit tap before it'll actually charge — the first tap only
+  // opens the "are you sure" prompt below the button instead of billing
+  // straight away, so a several-hour phantom charge can't go out just
+  // because someone tapped the usual button out of habit.
+  const [confirmStuckBill, setConfirmStuckBill] = useState(false);
   // Snapshot taken right before a non-split Stop & Bill, so cancelling the
   // checkout before paying can put the session back exactly as it was
   // instead of leaving it stopped with nowhere to undo from.
@@ -369,8 +375,28 @@ export function TableDetailModal({
             />
           </div>
 
+          {stuck && !confirmStuckBill && (
+            <div className="rounded-lg bg-[var(--color-danger)]/10 text-[var(--color-danger)] text-xs font-medium px-2.5 py-2 space-y-2">
+              <p className="flex items-start gap-1.5">
+                <AlertTriangle size={13} className="shrink-0 mt-0.5" />
+                <span>
+                  This has been running for {formatDuration(elapsed)} — likely nobody stopped it
+                  earlier. Fix the time with the pencil above, or confirm you really want to bill
+                  this much.
+                </span>
+              </p>
+              <button
+                onClick={() => setConfirmStuckBill(true)}
+                className="w-full rounded-lg bg-[var(--color-danger)]/15 text-[var(--color-danger)] font-semibold py-2 text-xs"
+              >
+                Yes, bill {formatMoney(total, currency)} anyway
+              </button>
+            </div>
+          )}
+
           <button
             onClick={() => {
+              if (stuck && !confirmStuckBill) return;
               if (participants.length > 1) {
                 setSelectedPayerIds(participants.map((p) => p.id));
                 setShowPayerPicker(true);
@@ -378,7 +404,8 @@ export function TableDetailModal({
                 handleStopAndBill(participants);
               }
             }}
-            className="w-full rounded-xl bg-[var(--color-primary)] text-white font-semibold py-3"
+            disabled={stuck && !confirmStuckBill}
+            className="w-full rounded-xl bg-[var(--color-primary)] text-white font-semibold py-3 disabled:opacity-40"
           >
             Stop & Bill · {formatMoney(total, currency)}
           </button>
