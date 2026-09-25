@@ -4,10 +4,10 @@ import { useGamesStore } from "../store/useGamesStore";
 import { useTablesStore } from "../store/useTablesStore";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { formatDuration, formatMoney } from "../lib/format";
-import { tableElapsedMs, activeRate } from "../lib/tableTiming";
+import { tableElapsedMs, activeRate, STUCK_SESSION_MS } from "../lib/tableTiming";
 import { costForElapsed } from "../lib/format";
 import type { BillingTable } from "../types";
-import { Play, Pause, Gamepad2 } from "lucide-react";
+import { Play, Pause, Gamepad2, AlertTriangle } from "lucide-react";
 
 export function TableCard({
   table,
@@ -32,11 +32,14 @@ export function TableCard({
   const customer = customers.find((c) => c.id === table.customerId);
   const extraCount = table.extraCustomerIds.length;
   const game = games.find((g) => g.id === table.activeGameId);
+  const stuck = table.status !== "available" && elapsed > STUCK_SESSION_MS;
   return (
     <Card
       onClick={() => (table.status === "available" ? onStart(table) : onOpenDetail(table))}
       className={
-        table.status === "running"
+        stuck
+          ? "border-[var(--color-danger)]"
+          : table.status === "running"
           ? "border-[var(--color-success)]/50"
           : table.status === "paused"
           ? "border-[var(--color-warning)]/50"
@@ -75,6 +78,11 @@ export function TableCard({
             {game && (
               <p className="text-xs text-[var(--color-accent)] flex items-center gap-1 mt-0.5">
                 <Gamepad2 size={11} /> {game.name} · {formatMoney(rate, currency)}/hr
+              </p>
+            )}
+            {stuck && (
+              <p className="text-xs text-[var(--color-danger)] font-medium flex items-center gap-1 mt-0.5">
+                <AlertTriangle size={11} /> Running very long — check before billing
               </p>
             )}
           </div>

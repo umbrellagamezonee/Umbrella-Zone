@@ -12,9 +12,9 @@ import { useGamesStore } from "../store/useGamesStore";
 import { useBillsStore } from "../store/useBillsStore";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { formatDuration, formatMoney, elapsedMinutesExact, costForElapsed } from "../lib/format";
-import { tableElapsedMs, activeRate } from "../lib/tableTiming";
+import { tableElapsedMs, activeRate, STUCK_SESSION_MS } from "../lib/tableTiming";
 import type { BillingTable, Bill } from "../types";
-import { Plus, Minus, UserPlus, Pencil, Check, Pause, Play, Gamepad2 } from "lucide-react";
+import { Plus, Minus, UserPlus, Pencil, Check, Pause, Play, Gamepad2, AlertTriangle } from "lucide-react";
 
 // Splits `total` equally among `n` payers down to the paisa, handing any
 // leftover paisa to the first few payers so the shares always add back up
@@ -84,6 +84,7 @@ export function TableDetailModal({
   const game = games.find((g) => g.id === table.activeGameId);
   const gamesForTable = games.filter((g) => g.kind === table.kind);
   const elapsed = tableElapsedMs(table, now);
+  const stuck = table.status !== "available" && elapsed > STUCK_SESSION_MS;
   const minutesBilled = elapsedMinutesExact(elapsed);
   const tableCharge = table.status === "available" ? 0 : costForElapsed(elapsed, rate);
   // Clamp against the raw input in case items/time changed after the discount was typed
@@ -278,6 +279,15 @@ export function TableDetailModal({
                 <p className="text-lg font-bold">{formatMoney(tableCharge, currency)}</p>
               </div>
             </div>
+            {stuck && (
+              <div className="mt-2 flex items-start gap-1.5 rounded-lg bg-[var(--color-danger)]/10 text-[var(--color-danger)] text-xs font-medium px-2.5 py-2">
+                <AlertTriangle size={13} className="shrink-0 mt-0.5" />
+                <span>
+                  This has been running for {formatDuration(elapsed)} — likely nobody stopped it earlier.
+                  Tap the pencil above to fix the time before billing.
+                </span>
+              </div>
+            )}
           </Card>
 
           {(table.status === "running" || table.status === "paused") && (
