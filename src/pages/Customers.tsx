@@ -10,7 +10,7 @@ import { useCustomersStore } from "../store/useCustomersStore";
 import { useBillsStore } from "../store/useBillsStore";
 import { useOrdersStore } from "../store/useOrdersStore";
 import { useSettingsStore } from "../store/useSettingsStore";
-import { formatMoney, formatDateTime } from "../lib/format";
+import { formatMoney, formatDateTime, formatDateKey, toDateInputValue } from "../lib/format";
 import {
   billCollectedFor,
   creditBalanceFor,
@@ -262,7 +262,19 @@ function describeItems(items: { name: string; qty: number }[]): string {
 // (a credit settlement pays down exactly what came before it), then handed
 // back newest-first to display, each row keeping the balance as it stood
 // right after that entry.
-function buildLedger(customerBills: Bill[], pendingOrders: CanteenOrder[], nameKey: string): LedgerEntry[] {
+// A bill created many hours after its order (an old stuck order finally
+// cleared through checkout) should say so — otherwise the ledger shows a
+// charge dated to a day the customer may not have even visited, looking
+// exactly like a wrong-person mistake when it's really just late billing.
+const LATE_BILL_GAP_MS = 6 * 60 * 60 * 1000;
+
+function buildLedger(
+  customerBills: Bill[],
+  pendingOrders: CanteenOrder[],
+  nameKey: string,
+  allOrders: CanteenOrder[]
+): LedgerEntry[] {
+  const orderById = new Map(allOrders.map((o) => [o.id, o]));
   type RawEvent =
     | { date: number; kind: "bill"; bill: Bill }
     | { date: number; kind: "pending"; order: CanteenOrder };
@@ -306,10 +318,15 @@ function buildLedger(customerBills: Bill[], pendingOrders: CanteenOrder[], nameK
     }
     const view = personBillView(b, nameKey);
     if (view.onCredit > 0) balance += view.onCredit;
+    let particulars = b.tableId ? (b.tableName ?? "Table") : describeItems(b.canteenItems);
+    const orderedAt = b.orderId ? orderById.get(b.orderId)?.createdAt : null;
+    if (orderedAt != null && b.createdAt - orderedAt > LATE_BILL_GAP_MS) {
+      particulars += ` (ordered ${formatDateKey(toDateInputValue(orderedAt), { day: "numeric", month: "short" })})`;
+    }
     return {
       id: b.id,
       date: b.createdAt,
-      particulars: b.tableId ? (b.tableName ?? "Table") : describeItems(b.canteenItems),
+      particulars,
       debit: view.onCredit,
       credit: 0,
       paidNow: view.onCredit === 0,
@@ -489,7 +506,7 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
   // day-grouped history. Built oldest-first so the balance accumulates
   // correctly, then shown newest-first (each row keeps the balance as it
   // stood right after that entry).
-  const ledgerEntries = buildLedger(customerBills, pendingOrders, nameKey);
+  const ledgerEntries = buildLedger(customerBills, pendingOrders, nameKey, orders);
 
   return (
     <Modal title={customerLabel(customer, allCustomers)} onClose={onClose}>
