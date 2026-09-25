@@ -51,7 +51,12 @@ export function Checkout({ bill, onDone, onCancel, onSettled, onRestart }: Check
   const isRegistered = !!billCustomer && !billCustomer.isWalkIn;
 
   const [step, setStep] = useState<CheckoutStep>("select");
-  const [cashInput, setCashInput] = useState(bill.total.toFixed(2));
+  // Both start blank rather than pre-filled with the full amount — leaving
+  // them untouched and tapping "Confirm payment" should land on the safe
+  // side (everything on credit, same as tapping "Full amount on credit"
+  // below), not silently record the whole bill as cash someone never
+  // actually handed over.
+  const [cashInput, setCashInput] = useState("0");
   const [accountInput, setAccountInput] = useState("0");
   const [payerName, setPayerName] = useState(
     billCustomer && !billCustomer.isWalkIn ? billCustomer.name : ""
