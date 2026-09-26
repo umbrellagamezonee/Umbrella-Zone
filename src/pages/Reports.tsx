@@ -684,7 +684,15 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
       // day's activity showing only its cash+account portion would read as
       // mostly zeros — this is the full amount actually billed that day,
       // paid or not, for whoever just wants one real number per item.
-      const tableAndCategoryRows = dailyCollectionRows(rangeBills, menuItems, menuCategories, orderedTablesList).map(
+      const tableAndCategoryRows = dailyCollectionRows(
+        bills,
+        menuItems,
+        menuCategories,
+        orderedTablesList,
+        customers,
+        rangeStartMs,
+        rangeEndMs
+      ).map(
         (r) => ({
           Date: r.Date,
           Item: r.Item,
@@ -788,9 +796,11 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
         addSheet(c.sheet, itemSheetRows, [30, 9, 9, 9, 7, 10, 11, 9, 9, 9, 9, 26, 11]);
       }
 
-      addSheet("Daily collection", dailyCollectionRows(rangeBills, menuItems, menuCategories, orderedTablesList), [
-        16, 16, 16, 12, 12, 12,
-      ]);
+      addSheet(
+        "Daily collection",
+        dailyCollectionRows(bills, menuItems, menuCategories, orderedTablesList, customers, rangeStartMs, rangeEndMs),
+        [16, 16, 16, 12, 12, 12, 26]
+      );
 
       // Needs every bill ever recorded (not just this range) so a
       // settlement that clears old debt from before the range still shows
@@ -806,6 +816,15 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
           "Oldest unpaid since": r.oldestUnpaidSince != null ? formatDateTime(r.oldestUnpaidSince) : "—",
           "Days pending": r.oldestUnpaidSince != null ? Math.round((r.date - r.oldestUnpaidSince) / 86400000) : "",
         }));
+      if (settlementRows.length > 0) {
+        settlementRows.push({
+          Date: "",
+          Customer: "TOTAL",
+          "Amount settled": round(settlementRows.reduce((s, r) => s + r["Amount settled"], 0)),
+          "Oldest unpaid since": "",
+          "Days pending": "",
+        });
+      }
       addSheet("Credit Settlements", settlementRows, [18, 22, 13, 18, 12]);
 
       // How the period's money actually arrived — cash and account already

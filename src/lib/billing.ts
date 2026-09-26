@@ -1,7 +1,7 @@
 import type { Bill, CanteenOrder, Customer, Expense, MenuCategory, MenuItem, PaymentMethod } from "../types";
 import { normalizeName } from "./customerName";
 import { isCreditSettlement } from "./billLabel";
-import { toDateInputValue, formatDateKey } from "./format";
+import { toDateInputValue, formatDateKey, dateInputValueToIstMidnight } from "./format";
 
 export interface BillMoney {
   cash: number;
@@ -276,6 +276,7 @@ export interface DailyCollectionRow {
   Cash: number | string;
   Account: number | string;
   Credit: number | string;
+  "Credit from": string;
   [key: string]: string | number;
 }
 
@@ -298,21 +299,42 @@ export interface DailyCollectionRow {
 // directly, since that was actually chosen per share, not assumed from a
 // ratio — a still-pending share (nobody's decided how they're paying yet)
 // counts toward none of the three, the same way it counts toward nothing
-// today elsewhere in the app. A credit settlement (paying off an older,
-// already-billed debt) has no way to know which table or category that
-// original debt was for, so it's counted as cash/account collected on its
-// own date under its own "Credit settlement" row rather than guessed at —
-// it never carries a Credit amount of its own, since it's a payment, not a
-// new charge.
+// today elsewhere in the app.
+//
+// A credit settlement (paying off an older, already-billed debt) gets
+// traced back to whichever earlier charge(s) it actually cleared — oldest
+// unpaid first, the same way a shopkeeper's khata naturally works — and its
+// cash/account is added back onto THAT charge's own date/table/category
+// row, with the same amount taken back off that row's Credit, instead of
+// showing up as a separate "Credit settlement" row on the day it was
+// actually paid. So a table played on the 22nd but only settled on the
+// 25th shows as real cash on the 22nd once the report is regenerated after
+// the 25th — this sheet always reflects where things stand as of right
+// now, not a frozen snapshot of billing day. This only works when the
+// original charge's own date falls inside this report's date range; a
+// settlement clearing older debt from before the range keeps showing under
+// "Credit settlement" on its own date instead, since there's no earlier row
+// in THIS report to attach it to. "Credit from" lists whoever still owes
+// whatever's left of a row's Credit figure, so it doesn't need to be looked
+// up elsewhere.
 //
 // A table/category that a bill merely touched but nothing was actually
 // billed or collected for yet doesn't get a row at all — a table played on
 // 5 days out of 20 doesn't need 15 rows of zeros saying so.
+//
+// Needs every bill ever recorded (not just this report's range) so a debt
+// created before the range, or a settlement clearing one from before it,
+// still gets matched up correctly. rangeStartMs/rangeEndMs (default: no
+// limit, the whole history) only control which dates' rows actually get
+// printed, and how far back a settlement can reach to reattribute itself.
 export function dailyCollectionRows(
-  bills: Bill[],
+  allBills: Bill[],
   menuItems: MenuItem[],
   menuCategories: MenuCategory[],
-  orderedTablesList: { name: string }[]
+  orderedTablesList: { name: string }[],
+  customers: Customer[],
+  rangeStartMs = -Infinity,
+  rangeEndMs = Infinity
 ): DailyCollectionRow[] {
   const round = (n: number) => Math.round(n * 100) / 100;
 
@@ -323,14 +345,27 @@ export function dailyCollectionRows(
   }
   const itemNameToCatId = new Map<string, string>();
   for (const item of menuItems) itemNameToCatId.set(item.name.trim().toLowerCase(), item.categoryId);
+  const categoryLabelFor = (itemName: string) => {
+    const catId = itemNameToCatId.get(itemName.trim().toLowerCase());
+    return (catId && catIdToLabel.get(catId)) || "Other";
+  };
 
-  type Bucket = { total: number; cash: number; upi: number; credit: number };
-  const newBucket = (): Bucket => ({ total: 0, cash: 0, upi: 0, credit: 0 });
-  const addTo = (b: Bucket, cash: number, upi: number, credit: number) => {
+  type Bucket = {
+    total: number;
+    cash: number;
+    upi: number;
+    credit: number;
+    creditByCustomer: Map<string, number>;
+  };
+  const newBucket = (): Bucket => ({ total: 0, cash: 0, upi: 0, credit: 0, creditByCustomer: new Map() });
+  const addTo = (b: Bucket, cash: number, upi: number, credit: number, customerName?: string) => {
     b.cash += cash;
     b.upi += upi;
     b.credit += credit;
     b.total += cash + upi;
+    if (credit > 0.005 && customerName) {
+      b.creditByCustomer.set(customerName, (b.creditByCustomer.get(customerName) ?? 0) + credit);
+    }
   };
   const dailyTables = new Map<string, Map<string, Bucket>>();
   const dailyCategories = new Map<string, Map<string, Bucket>>();
@@ -341,83 +376,168 @@ export function dailyCollectionRows(
     return dayMap.get(key)!;
   };
 
-  for (const bill of bills) {
-    if (bill.status === "cancelled") continue;
+  // One chunk per debt-creating charge — a whole non-split bill's due
+  // amount, or one payer's own credit share of a split bill — remembering
+  // which bucket(s) that charge landed in and how much of the chunk each
+  // one is, so a later settlement can put money back exactly where it came
+  // from instead of wherever the settlement itself happened to land.
+  type ChunkPart = { bucket: Bucket; amount: number; customerName: string };
+  type DebtChunk = { date: number; remaining: number; total: number; parts: ChunkPart[] };
+  const queues = new Map<string, DebtChunk[]>();
+  const queueFor = (key: string) => {
+    if (!queues.has(key)) queues.set(key, []);
+    return queues.get(key)!;
+  };
+  const keyForName = (name: string) => {
+    const nameKey = normalizeName(name);
+    return customers.find((c) => normalizeName(c.name) === nameKey)?.id ?? `name:${nameKey}`;
+  };
+
+  const sorted = allBills
+    .filter((b) => b.status !== "cancelled")
+    .slice()
+    .sort((a, b) => a.createdAt - b.createdAt);
+
+  for (const bill of sorted) {
     const dateKey = toDateInputValue(bill.createdAt);
 
     if (isCreditSettlement(bill)) {
-      addTo(bucketFor(dailyCategories, dateKey, "Credit settlement"), bill.amountCash, bill.amountUpi, 0);
+      const key = bill.customerId ?? `name:${normalizeName(bill.tableName ?? "")}`;
+      const settleAmount = round(bill.amountPaid + bill.discount);
+      if (settleAmount <= 0.005) continue;
+      const queue = queueFor(key);
+      const cashPool = bill.amountCash;
+      const upiPool = bill.amountUpi;
+      let left = settleAmount;
+      while (left > 0.005 && queue.length > 0) {
+        const chunk = queue[0];
+        const take = Math.min(chunk.remaining, left);
+        const chunkFrac = take / settleAmount;
+        const takeCash = cashPool * chunkFrac;
+        const takeUpi = upiPool * chunkFrac;
+        const inRange = chunk.date >= rangeStartMs && chunk.date < rangeEndMs;
+        for (const part of chunk.parts) {
+          const partFrac = chunk.total > 0 ? part.amount / chunk.total : 0;
+          const partTake = take * partFrac;
+          if (inRange) {
+            part.bucket.credit = Math.max(0, round(part.bucket.credit - partTake));
+            const prevByCustomer = part.bucket.creditByCustomer.get(part.customerName) ?? 0;
+            part.bucket.creditByCustomer.set(part.customerName, Math.max(0, round(prevByCustomer - partTake)));
+            part.bucket.cash += takeCash * partFrac;
+            part.bucket.upi += takeUpi * partFrac;
+            part.bucket.total += (takeCash + takeUpi) * partFrac;
+          } else {
+            // The charge this is clearing is from before this report's own
+            // range — nowhere in THIS report to trace it back to, so the
+            // money still shows up, just under the settlement's own date
+            // instead of disappearing.
+            addTo(bucketFor(dailyCategories, dateKey, "Credit settlement"), takeCash * partFrac, takeUpi * partFrac, 0);
+          }
+        }
+        chunk.remaining -= take;
+        left -= take;
+        if (chunk.remaining <= 0.005) queue.shift();
+      }
+      if (left > 0.005) {
+        // More was settled than this customer's tracked debt covers — this
+        // customer had a balance from before this data existed (or from a
+        // bill that's since been deleted). Still real money, so it goes
+        // under the settlement's own date rather than being dropped.
+        const frac = left / settleAmount;
+        addTo(bucketFor(dailyCategories, dateKey, "Credit settlement"), cashPool * frac, upiPool * frac, 0);
+      }
       continue;
     }
 
     const rawSum = bill.tableCharge + bill.canteenCharge;
 
-    if (bill.tableId && bill.tableName) {
-      const tBucket = bucketFor(dailyTables, dateKey, bill.tableName);
-      if (bill.shares) {
-        for (const s of bill.shares) {
-          if (s.status !== "paid" || s.label !== "Table charge" || !s.paymentMethod) continue;
-          addTo(
-            tBucket,
-            s.paymentMethod === "cash" ? s.amount : 0,
-            s.paymentMethod === "upi" ? s.amount : 0,
-            s.paymentMethod === "credit" ? s.amount : 0
-          );
+    if (bill.shares) {
+      for (const s of bill.shares) {
+        if (s.status !== "paid" || !s.paymentMethod) continue;
+        const cash = s.paymentMethod === "cash" ? s.amount : 0;
+        const upi = s.paymentMethod === "upi" ? s.amount : 0;
+        const credit = s.paymentMethod === "credit" ? s.amount : 0;
+        let bucket: Bucket;
+        if (s.label === "Table charge") {
+          if (!bill.tableId || !bill.tableName) continue;
+          bucket = bucketFor(dailyTables, dateKey, bill.tableName);
+        } else {
+          const itemName = s.label.replace(/\s+x\d+$/, "");
+          bucket = bucketFor(dailyCategories, dateKey, categoryLabelFor(itemName));
         }
-      } else if (rawSum > 0 && bill.tableCharge > 0) {
-        const frac = bill.tableCharge / rawSum;
-        addTo(tBucket, bill.amountCash * frac, bill.amountUpi * frac, bill.amountDue * frac);
+        addTo(bucket, cash, upi, credit, s.payerName);
+        if (credit > 0.005) {
+          queueFor(keyForName(s.payerName)).push({
+            date: bill.createdAt,
+            remaining: credit,
+            total: credit,
+            parts: [{ bucket, amount: credit, customerName: s.payerName }],
+          });
+        }
       }
+      continue;
+    }
+
+    const customerName = customers.find((c) => c.id === bill.customerId)?.name ?? "Unknown";
+    const chunkParts: ChunkPart[] = [];
+
+    if (bill.tableId && bill.tableName && bill.tableCharge > 0) {
+      const tBucket = bucketFor(dailyTables, dateKey, bill.tableName);
+      const frac = bill.tableCharge / rawSum;
+      const credit = bill.amountDue * frac;
+      addTo(tBucket, bill.amountCash * frac, bill.amountUpi * frac, credit, customerName);
+      if (credit > 0.005) chunkParts.push({ bucket: tBucket, amount: credit, customerName });
     }
 
     if (bill.canteenCharge > 0 && bill.canteenItems.length > 0) {
-      let canteenCash = 0;
-      let canteenUpi = 0;
-      let canteenCredit = 0;
-      if (bill.shares) {
-        for (const s of bill.shares) {
-          if (s.status !== "paid" || s.label === "Table charge" || !s.paymentMethod) continue;
-          if (s.paymentMethod === "cash") canteenCash += s.amount;
-          else if (s.paymentMethod === "upi") canteenUpi += s.amount;
-          else if (s.paymentMethod === "credit") canteenCredit += s.amount;
-        }
-      } else if (rawSum > 0) {
-        const frac = bill.canteenCharge / rawSum;
-        canteenCash = bill.amountCash * frac;
-        canteenUpi = bill.amountUpi * frac;
-        canteenCredit = bill.amountDue * frac;
-      }
+      const canteenFrac = bill.canteenCharge / rawSum;
+      const canteenCash = bill.amountCash * canteenFrac;
+      const canteenUpi = bill.amountUpi * canteenFrac;
+      const canteenCredit = bill.amountDue * canteenFrac;
       for (const item of bill.canteenItems) {
         const revenue = item.price * item.qty;
         if (revenue <= 0) continue;
         const itemFrac = revenue / bill.canteenCharge;
-        const catId = itemNameToCatId.get(item.name.trim().toLowerCase());
-        const label = (catId && catIdToLabel.get(catId)) || "Other";
-        addTo(
-          bucketFor(dailyCategories, dateKey, label),
-          canteenCash * itemFrac,
-          canteenUpi * itemFrac,
-          canteenCredit * itemFrac
-        );
+        const cBucket = bucketFor(dailyCategories, dateKey, categoryLabelFor(item.name));
+        const credit = canteenCredit * itemFrac;
+        addTo(cBucket, canteenCash * itemFrac, canteenUpi * itemFrac, credit, customerName);
+        if (credit > 0.005) chunkParts.push({ bucket: cBucket, amount: credit, customerName });
       }
+    }
+
+    if (chunkParts.length > 0 && bill.customerId) {
+      const total = chunkParts.reduce((s, p) => s + p.amount, 0);
+      if (total > 0.005) queueFor(bill.customerId).push({ date: bill.createdAt, remaining: total, total, parts: chunkParts });
     }
   }
 
-  const dateKeys = [...new Set([...dailyTables.keys(), ...dailyCategories.keys()])].sort();
+  const dateKeys = [...new Set([...dailyTables.keys(), ...dailyCategories.keys()])]
+    .filter((k) => {
+      const ms = dateInputValueToIstMidnight(k);
+      return ms >= rangeStartMs && ms < rangeEndMs;
+    })
+    .sort();
   const categoryOrder = [...REPORT_CATEGORIES.map((rc) => rc.sheet.replace(" collection", "")), "Other", "Credit settlement"];
   // A device whose local table list has picked up a duplicate (a stale sync
   // artifact, not real cloud data) would otherwise print that table's row
   // twice on every date — de-duplicate by name so the report can't inherit
   // that regardless of why the list had one.
   const uniqueTables = [...new Map(orderedTablesList.map((t) => [t.name, t])).values()];
+  const creditFromLabel = (b: Bucket) =>
+    [...b.creditByCustomer.entries()]
+      .filter(([, amt]) => amt > 0.5)
+      .map(([name, amt]) => `${name} (${round(amt)})`)
+      .join(", ");
+  const isEmpty = (b: Bucket | undefined): b is undefined =>
+    !b || (Math.abs(b.total) < 0.005 && Math.abs(b.credit) < 0.005);
   const rows: DailyCollectionRow[] = [];
   for (const dateKey of dateKeys) {
     const label = formatDateKey(dateKey, { day: "numeric", month: "long" });
-    let dayTotal = newBucket();
+    const dayTotal = newBucket();
     const tableMap = dailyTables.get(dateKey);
     for (const t of uniqueTables) {
       const b = tableMap?.get(t.name);
-      if (!b || (b.total === 0 && b.credit === 0)) continue;
+      if (isEmpty(b)) continue;
       rows.push({
         Date: label,
         Item: t.name,
@@ -425,18 +545,17 @@ export function dailyCollectionRows(
         Cash: round(b.cash),
         Account: round(b.upi),
         Credit: round(b.credit),
+        "Credit from": creditFromLabel(b),
       });
-      dayTotal = {
-        total: dayTotal.total + b.total,
-        cash: dayTotal.cash + b.cash,
-        upi: dayTotal.upi + b.upi,
-        credit: dayTotal.credit + b.credit,
-      };
+      dayTotal.total += b.total;
+      dayTotal.cash += b.cash;
+      dayTotal.upi += b.upi;
+      dayTotal.credit += b.credit;
     }
     const catMap = dailyCategories.get(dateKey);
     for (const label2 of categoryOrder) {
       const b = catMap?.get(label2);
-      if (!b || (b.total === 0 && b.credit === 0)) continue;
+      if (isEmpty(b)) continue;
       rows.push({
         Date: label,
         Item: label2,
@@ -444,13 +563,12 @@ export function dailyCollectionRows(
         Cash: round(b.cash),
         Account: round(b.upi),
         Credit: round(b.credit),
+        "Credit from": creditFromLabel(b),
       });
-      dayTotal = {
-        total: dayTotal.total + b.total,
-        cash: dayTotal.cash + b.cash,
-        upi: dayTotal.upi + b.upi,
-        credit: dayTotal.credit + b.credit,
-      };
+      dayTotal.total += b.total;
+      dayTotal.cash += b.cash;
+      dayTotal.upi += b.upi;
+      dayTotal.credit += b.credit;
     }
     rows.push({
       Date: label,
@@ -459,8 +577,9 @@ export function dailyCollectionRows(
       Cash: round(dayTotal.cash),
       Account: round(dayTotal.upi),
       Credit: round(dayTotal.credit),
+      "Credit from": "",
     });
-    rows.push({ Date: "", Item: "", "Total collection": "", Cash: "", Account: "", Credit: "" });
+    rows.push({ Date: "", Item: "", "Total collection": "", Cash: "", Account: "", Credit: "", "Credit from": "" });
   }
   return rows;
 }

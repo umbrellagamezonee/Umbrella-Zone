@@ -1318,7 +1318,7 @@ function ExportExcelModal({ onClose }: { onClose: () => void }) {
       // Report's own sheet, but across this export's whole history instead
       // of just the current month — one table/category row per date, only
       // where something was actually billed or collected.
-      const dailyRows = dailyCollectionRows(activeBills, items, categories, orderedTables(tables));
+      const dailyRows = dailyCollectionRows(activeBills, items, categories, orderedTables(tables), customers);
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(dailyRows), "Daily collection");
 
       // Every credit settlement ever recorded, with the date of the oldest
@@ -1334,6 +1334,15 @@ function ExportExcelModal({ onClose }: { onClose: () => void }) {
           "Oldest unpaid since": r.oldestUnpaidSince != null ? new Date(r.oldestUnpaidSince).toLocaleString([], { timeZone: IST_TIME_ZONE }) : "—",
           "Days pending": r.oldestUnpaidSince != null ? Math.round((r.date - r.oldestUnpaidSince) / 86400000) : "",
         }));
+      if (settlementRows.length > 0) {
+        settlementRows.push({
+          Date: "",
+          Customer: "TOTAL",
+          "Amount settled": sum(settlementRows, "Amount settled"),
+          "Oldest unpaid since": "",
+          "Days pending": "",
+        });
+      }
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(settlementRows), "Credit Settlements");
 
       XLSX.writeFile(wb, `cuebill-data-${new Date().toISOString().slice(0, 10)}.xlsx`);
