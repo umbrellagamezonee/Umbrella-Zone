@@ -28,6 +28,7 @@ import {
   categoryStockProfit,
   canteenItemPayments,
   creditSettlementDetails,
+  sumBillMoney,
 } from "../lib/billing";
 import { billPersonName, billPlace } from "../lib/billLabel";
 import { useCustomersStore } from "../store/useCustomersStore";
@@ -807,6 +808,16 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
         }));
       addSheet("Credit Settlements", settlementRows, [18, 22, 13, 18, 12]);
 
+      // How the period's money actually arrived — cash and account already
+      // include settlements paid in this range (real money someone's
+      // running tab), not just what was collected the moment a bill was
+      // made, since that's the whole point of the credit/settle cycle. New
+      // credit and settled-old-credit are kept separate rather than netted
+      // against each other, since a settlement in this range can be paying
+      // off debt from well before it started.
+      const rangeMoney = sumBillMoney(rangeBills);
+      const rangeCreditSettled = settlementRows.reduce((s, r) => s + (r["Amount settled"] as number), 0);
+
       // One clean table instead of a long flat list — Section / Collection /
       // Expense / Net, same shape for the table row and every category, so
       // it reads at a glance instead of needing to hunt for each figure.
@@ -824,6 +835,12 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
           })),
           { Section: "", Collection: "", Expense: "", Net: "" },
           { Section: "Total", Collection: round(totalCollection), Expense: round(totalExpense), Net: round(netIncome) },
+          { Section: "", Collection: "", Expense: "", Net: "" },
+          { Section: "HOW THE MONEY CAME IN", Collection: "", Expense: "", Net: "" },
+          { Section: "Cash (incl. old credit settled in cash)", Collection: round(rangeMoney.cash), Expense: "", Net: "" },
+          { Section: "Account/UPI (incl. old credit settled via UPI)", Collection: round(rangeMoney.upi), Expense: "", Net: "" },
+          { Section: "New credit given this period (not yet paid)", Collection: round(rangeMoney.credit), Expense: "", Net: "" },
+          { Section: "Old credit settled this period (may be from before)", Collection: round(rangeCreditSettled), Expense: "", Net: "" },
         ],
         [16, 14, 14, 14]
       );
