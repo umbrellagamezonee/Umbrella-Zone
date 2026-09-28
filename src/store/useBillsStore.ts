@@ -1,8 +1,9 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { Bill, BillCanteenItem, BillShare, PaymentMethod } from "../types";
-import { setupSync, pushInsert, pushUpsert, pushDelete, pushDeleteAll, keepLocalOnly } from "../lib/cloudSync";
+import { setupSync, pushUpsert, pushDelete, pushDeleteAll, keepLocalOnly } from "../lib/cloudSync";
 import { useOrdersStore } from "./useOrdersStore";
+import { useCustomersStore } from "./useCustomersStore";
 import { isToday } from "../lib/format";
 
 interface ShareInput {
@@ -154,19 +155,62 @@ const toRow = (b: Bill): BillRow => ({
   match_losers: b.matchLosers,
 });
 
-function pushBill(id: string) {
-  const state = useBillsStore.getState();
-  const b = state.bills.find((x) => x.id === id) ?? state.deletedBills.find((x) => x.id === id);
-  if (b) pushUpsert(TABLE, toRow(b));
-}
-
-// For useCustomersStore's merge retry: re-sends one bill's current local
-// data (already correctly reassigned, regardless of whether an earlier
-// push for it actually landed) and reports whether it made it this time.
+// Re-sends one bill's current local data (whatever it is right now,
+// regardless of what an earlier push attempt for it did or didn't reach)
+// and reports whether it made it this time. Shared by markBillPending's
+// retry loop below and useCustomersStore's merge retry.
 export function pushBillById(id: string): Promise<boolean> {
   const state = useBillsStore.getState();
   const b = state.bills.find((x) => x.id === id) ?? state.deletedBills.find((x) => x.id === id);
   return b ? pushUpsert(TABLE, toRow(b)) : Promise.resolve(true);
+}
+
+// In-flight guard + version counter, same pattern as useTablesStore's
+// sendTablePatch — a version mismatch after a send resolves means a newer
+// local change arrived while it was in the air, so the pending flag stays
+// set and another send goes out immediately instead of being cleared too
+// early.
+const pendingBillInFlight = new Set<string>();
+const pendingBillVersion: Record<string, number> = {};
+
+function sendPendingBill(id: string) {
+  if (pendingBillInFlight.has(id)) return;
+  if (!useBillsStore.getState().pendingBillIds[id]) return;
+  const versionAtSend = pendingBillVersion[id] ?? 0;
+  pendingBillInFlight.add(id);
+  pushBillById(id).then((ok) => {
+    pendingBillInFlight.delete(id);
+    if (!ok) return;
+    if ((pendingBillVersion[id] ?? 0) === versionAtSend) {
+      useBillsStore.setState((state) => {
+        const rest = { ...state.pendingBillIds };
+        delete rest[id];
+        return { pendingBillIds: rest };
+      });
+    } else {
+      sendPendingBill(id);
+    }
+  });
+}
+
+// Marks a bill as having a local change not yet confirmed saved, and
+// starts sending it. Call right after any set() that changes a bill's
+// payment/status/etc.
+function markBillPending(id: string) {
+  useBillsStore.setState((state) => ({ pendingBillIds: { ...state.pendingBillIds, [id]: true } }));
+  pendingBillVersion[id] = (pendingBillVersion[id] ?? 0) + 1;
+  sendPendingBill(id);
+}
+
+// Retries every bill still waiting on a confirmed save — on reconnect,
+// periodically as a safety net, and after every fresh sync.
+function flushPendingBills() {
+  for (const id of Object.keys(useBillsStore.getState().pendingBillIds)) sendPendingBill(id);
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener("online", flushPendingBills);
+  setInterval(flushPendingBills, 30_000);
 }
 
 interface BillsState {
@@ -175,6 +219,14 @@ interface BillsState {
   // `bills` (Home, Reports, Canteen) automatically stops seeing
   // them — no per-screen filtering needed.
   deletedBills: Bill[];
+  // Bills whose latest local state isn't confirmed saved to the cloud yet
+  // — same shape of problem as menu stock/table sessions/customer merges
+  // today: recording a payment, a cancellation, a soft-delete etc. always
+  // applies locally right away, but if the save never lands (a dropped
+  // connection at the wrong moment), the next full sync would otherwise
+  // quietly put the bill back to its old state with no error shown.
+  // Retried until confirmed — see markBillPending/flushPendingBills below.
+  pendingBillIds: Record<string, true>;
   createOpenBill: (input: CreateBillInput) => Bill;
   recordCreditSettlement: (input: {
     customerId: string;
@@ -200,6 +252,15 @@ interface BillsState {
     toId: string,
     toName: string
   ) => Promise<{ ok: boolean; billIds: string[] }>;
+  // Corrects who a "loser pays" match was actually billed to, for a
+  // non-split bill only (a split bill's shares would need per-share
+  // handling — not supported here, since which specific share to move and
+  // whether it's already been paid makes that a genuinely different
+  // operation). newLoserName must be one of the bill's own
+  // matchParticipants. Moves the charge's customerId to the new loser and
+  // updates matchLosers to match — everything else about the bill
+  // (amount, items, payment already collected) stays exactly as it was.
+  reassignBillLoser: (billId: string, newLoserName: string) => boolean;
   deleteBill: (id: string) => void;
   softDeleteBill: (id: string) => void;
   restoreBill: (id: string) => void;
@@ -213,6 +274,7 @@ export const useBillsStore = create<BillsState>()(
     (set, get) => ({
       bills: [],
       deletedBills: [],
+      pendingBillIds: {},
 
       createOpenBill: (input) => {
         const gross = input.tableCharge + input.canteenCharge;
@@ -258,7 +320,7 @@ export const useBillsStore = create<BillsState>()(
           matchLosers: input.matchLosers ?? null,
         };
         set((state) => ({ bills: [bill, ...state.bills] }));
-        pushInsert(TABLE, toRow(bill));
+        markBillPending(bill.id);
         return bill;
       },
 
@@ -298,7 +360,7 @@ export const useBillsStore = create<BillsState>()(
           matchLosers: null,
         };
         set((state) => ({ bills: [bill, ...state.bills] }));
-        pushInsert(TABLE, toRow(bill));
+        markBillPending(bill.id);
         return bill;
       },
 
@@ -330,7 +392,7 @@ export const useBillsStore = create<BillsState>()(
             return updated;
           }),
         }));
-        if (updated) pushUpsert(TABLE, toRow(updated));
+        if (updated) markBillPending(id);
         return updated;
       },
 
@@ -375,7 +437,7 @@ export const useBillsStore = create<BillsState>()(
             return updated;
           }),
         }));
-        if (result) pushUpsert(TABLE, toRow(result.bill));
+        if (result) markBillPending(billId);
         return result;
       },
 
@@ -383,7 +445,7 @@ export const useBillsStore = create<BillsState>()(
         set((state) => ({
           bills: state.bills.map((b) => (b.id === id ? { ...b, status: "cancelled" } : b)),
         }));
-        pushBill(id);
+        markBillPending(id);
       },
 
       reassignCustomer: (fromId, fromName, toId, toName) => {
@@ -436,6 +498,19 @@ export const useBillsStore = create<BillsState>()(
         }));
       },
 
+      reassignBillLoser: (billId, newLoserName) => {
+        const bill = get().bills.find((b) => b.id === billId);
+        if (!bill || bill.shares || !bill.matchParticipants?.includes(newLoserName)) return false;
+        const newLoser = useCustomersStore.getState().findOrCreateCustomer({ name: newLoserName, phone: "" });
+        set((state) => ({
+          bills: state.bills.map((b) =>
+            b.id === billId ? { ...b, customerId: newLoser.id, matchLosers: [newLoserName] } : b
+          ),
+        }));
+        markBillPending(billId);
+        return true;
+      },
+
       deleteBill: (id) => {
         set((state) => ({ bills: state.bills.filter((b) => b.id !== id) }));
         pushDelete(TABLE, id);
@@ -451,7 +526,7 @@ export const useBillsStore = create<BillsState>()(
           bills: state.bills.filter((b) => b.id !== id),
           deletedBills: [deleted, ...state.deletedBills],
         }));
-        pushUpsert(TABLE, toRow(deleted));
+        markBillPending(id);
         // Otherwise the canteen order this came from is stuck showing
         // "Billed" forever with no bill behind it to open — put it back to
         // "served" so it's visible/editable/deletable from Canteen again.
@@ -466,7 +541,7 @@ export const useBillsStore = create<BillsState>()(
           deletedBills: state.deletedBills.filter((b) => b.id !== id),
           bills: [restored, ...state.bills],
         }));
-        pushUpsert(TABLE, toRow(restored));
+        markBillPending(id);
         if (bill.orderId) useOrdersStore.getState().markBilled(bill.orderId);
       },
 
@@ -478,7 +553,7 @@ export const useBillsStore = create<BillsState>()(
       todaysBills: () => get().bills.filter((b) => isToday(b.createdAt)),
 
       resetAll: () => {
-        set({ bills: [], deletedBills: [] });
+        set({ bills: [], deletedBills: [], pendingBillIds: {} });
         pushDeleteAll(TABLE);
       },
     }),
@@ -559,7 +634,16 @@ setupSync<BillRow, Bill>(
     useBillsStore.setState((state) => {
       const localAll = [...state.bills, ...state.deletedBills];
       const byId = new Map(localAll.map((b) => [b.id, b]));
-      const merged = allBills.map((b) => keepLocalPaymentSplit(b, byId.get(b.id)));
+      // A bill with a local change not yet confirmed saved (see
+      // pendingBillIds) keeps its local version entirely — this fetch's
+      // snapshot can't know about a change that hasn't reached the server
+      // yet, so accepting it here would be exactly the "quietly reverts"
+      // bug the retry above exists to prevent.
+      const merged = allBills.map((b) => {
+        const local = byId.get(b.id);
+        if (local && state.pendingBillIds[b.id]) return local;
+        return keepLocalPaymentSplit(b, local);
+      });
       // A bill created in the gap between this fetch starting and resolving
       // (typically: right after opening/reloading the app) must not vanish
       // — see keepLocalOnly's own comment for why.
@@ -569,9 +653,11 @@ setupSync<BillRow, Bill>(
         deletedBills: full.filter((b) => !!b.deletedAt),
       };
     });
+    flushPendingBills();
   },
   (bill) =>
     useBillsStore.setState((state) => {
+      if (state.pendingBillIds[bill.id]) return {};
       const existing = state.bills.find((b) => b.id === bill.id) ?? state.deletedBills.find((b) => b.id === bill.id);
       const merged = keepLocalPaymentSplit(bill, existing);
       const bills = state.bills.filter((b) => b.id !== merged.id);
