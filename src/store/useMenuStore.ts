@@ -5,6 +5,7 @@ import {
   setupSync,
   pushInsert,
   pushUpsert,
+  pushUpdate,
   pushIncrement,
   pushDelete,
   pushDeleteAll,
@@ -123,6 +124,28 @@ const itemToRow = (i: MenuItem): ItemRow => ({
   stock_qty: i.stockQty,
   low_stock_threshold: i.lowStockThreshold,
 });
+const ITEM_FIELD_TO_COLUMN: Partial<Record<keyof MenuItem, keyof ItemRow>> = {
+  name: "name",
+  categoryId: "category_id",
+  price: "price",
+  costPrice: "cost_price",
+  inStock: "in_stock",
+  stockQty: "stock_qty",
+  lowStockThreshold: "low_stock_threshold",
+};
+// Only the columns actually being changed — an edit to, say, price landing
+// on the cloud as a full-row upsert would carry along whatever stock_qty
+// this device last knew, silently undoing a stock RPC from another device
+// that hasn't synced down here yet. A scoped update can't clobber a column
+// it doesn't mention.
+function itemPatchToRow(patch: Partial<MenuItem>): Partial<ItemRow> {
+  const row: Partial<ItemRow> = {};
+  for (const key of Object.keys(patch) as (keyof MenuItem)[]) {
+    const column = ITEM_FIELD_TO_COLUMN[key];
+    if (column) (row as Record<string, unknown>)[column] = patch[key];
+  }
+  return row;
+}
 
 interface MenuState {
   categories: MenuCategory[];
@@ -179,8 +202,8 @@ export const useMenuStore = create<MenuState>()(
           set((state) => ({
             items: state.items.map((i) => (i.id === id ? { ...i, ...patch } : i)),
           }));
-          const updated = get().items.find((i) => i.id === id);
-          if (updated) pushUpsert(ITEM_TABLE, itemToRow(updated));
+          const rowPatch = itemPatchToRow(patch);
+          if (Object.keys(rowPatch).length > 0) pushUpdate(ITEM_TABLE, id, rowPatch);
         },
 
         removeItem: (id) => {
