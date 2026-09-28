@@ -105,6 +105,18 @@ interface StartSessionOptions {
 
 interface TablesState {
   tables: BillingTable[];
+  // Table changes made locally but not yet confirmed saved to the cloud —
+  // same shape of problem as menu stock (see useMenuStore's
+  // pendingStockDeltas): a session action (start/pause/resume/stop) always
+  // applies locally right away, but if the save to Supabase never lands (a
+  // dropped connection at the wrong moment), the next full sync pulls back
+  // the table's old, unconfirmed row and silently "un-stops" or
+  // "un-starts" it — a session someone already billed and walked away
+  // from can come back showing hours of stale elapsed time, looking like
+  // the clock "increased on its own". Kept here (not just memory) so a
+  // reload before the connection recovers doesn't lose track of what
+  // still needs sending, keyed by table id.
+  pendingPatches: Record<string, Partial<BillingTable>>;
   addTable: (table: NewTableInput) => void;
   updateTable: (id: string, patch: Partial<BillingTable>) => void;
   // Nudges a table one place up or down in the manual display order. Local to
@@ -143,7 +155,7 @@ export function orderedTables(tables: BillingTable[]): BillingTable[] {
   return [...tables].sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name));
 }
 
-// Sends only the fields a session action actually changed, not this
+// Converts only the fields a session action actually changed, not this
 // device's whole local copy of the table — same reasoning as moveTable's
 // own pushUpdate below. Start/pause/resume/stop firing off pushTable's full
 // pushUpsert meant that if this device's local state of the table was even
@@ -153,7 +165,7 @@ export function orderedTables(tables: BillingTable[]): BillingTable[] {
 // different elapsed time — with this device's outdated snapshot, silently
 // and with no error. A scoped patch can only ever touch the handful of
 // fields this exact action means to change.
-function pushTablePatch(id: string, patch: Partial<BillingTable>) {
+function pushTablePatch(id: string, patch: Partial<BillingTable>): Promise<boolean> {
   const row: Partial<TableRow> = {};
   if ("status" in patch) row.status = patch.status;
   if ("customerId" in patch) row.customer_id = patch.customerId;
@@ -169,137 +181,187 @@ function pushTablePatch(id: string, patch: Partial<BillingTable>) {
   if ("kind" in patch) row.kind = patch.kind;
   if ("ratePerHour" in patch) row.rate_per_hour = patch.ratePerHour;
   if ("defaultSessionMinutes" in patch) row.default_session_minutes = patch.defaultSessionMinutes;
-  pushUpdate(TABLE, id, row);
+  return pushUpdate(TABLE, id, row);
+}
+
+// In-flight guard so a table's patch already on its way to the server
+// isn't sent again by a concurrent flush. A version counter (not just a
+// before/after diff) tracks whether a newer local change arrived while a
+// send was in flight — simpler and correct for array/object fields like
+// extraCustomerIds, where "did this change" can't be checked with !==.
+const tablePatchInFlight = new Set<string>();
+const tablePatchVersion: Record<string, number> = {};
+
+// Sends whatever's still queued in pendingPatches for one table. Only
+// clears the queue if nothing changed locally while the request was in
+// flight (per the version counter) — otherwise a session action that fired
+// during the round trip would be silently dropped instead of also getting
+// saved.
+function sendTablePatch(id: string) {
+  if (tablePatchInFlight.has(id)) return;
+  const pending = useTablesStore.getState().pendingPatches[id];
+  if (!pending || Object.keys(pending).length === 0) return;
+  const versionAtSend = tablePatchVersion[id] ?? 0;
+  tablePatchInFlight.add(id);
+  pushTablePatch(id, pending).then((ok) => {
+    tablePatchInFlight.delete(id);
+    if (!ok) return;
+    if ((tablePatchVersion[id] ?? 0) === versionAtSend) {
+      useTablesStore.setState((state) => {
+        const rest = { ...state.pendingPatches };
+        delete rest[id];
+        return { pendingPatches: rest };
+      });
+    } else {
+      sendTablePatch(id);
+    }
+  });
+}
+
+// Retries every table change still waiting on a confirmed save to the
+// cloud. Called on reconnect, periodically as a safety net for a
+// connection that looks "online" but can't actually reach Supabase, and
+// once after every fresh sync — this is what stops a session that was
+// genuinely stopped/paused/started here from silently reverting to
+// whatever Supabase last had once the connection catches up.
+function flushPendingTablePatches() {
+  for (const id of Object.keys(useTablesStore.getState().pendingPatches)) sendTablePatch(id);
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener("online", flushPendingTablePatches);
+  setInterval(flushPendingTablePatches, 30_000);
+}
+
+// A table change still waiting on a confirmed save to the cloud (see
+// pendingPatches above) hasn't landed in the row this device is about to
+// receive here — applying it back on top keeps what's on screen correct
+// (a table that was actually stopped stays stopped) instead of it
+// flashing back to whatever Supabase last confirmed until the retry above
+// catches up.
+function applyPendingTablePatch(incoming: BillingTable, pending: Partial<BillingTable> | undefined): BillingTable {
+  return pending ? { ...incoming, ...pending } : incoming;
 }
 
 export const useTablesStore = create<TablesState>()(
   persist(
-    (set, get) => ({
-      tables: seedTables,
-
-      addTable: (table) => {
-        const maxOrder = get().tables.reduce((m, t) => Math.max(m, t.sortOrder), -1);
-        const created = withDefaults({
-          ...table,
-          id: crypto.randomUUID(),
-          defaultSessionMinutes: table.defaultSessionMinutes ?? DEFAULT_SESSION_MINUTES,
-          sortOrder: maxOrder + 1,
-        });
-        set((state) => ({ tables: [...state.tables, created] }));
-        pushInsert(TABLE, toRow(created));
-      },
-
-      updateTable: (id, patch) => {
+    (set, get) => {
+      // Shared by every session action — applies the change locally right
+      // away, then queues it (merging into whatever's still pending for
+      // this table) and sends it, retried until Supabase actually confirms
+      // it rather than assumed saved the moment the request goes out.
+      const applyPatch = (id: string, patch: Partial<BillingTable>) => {
         set((state) => ({
           tables: state.tables.map((t) => (t.id === id ? { ...t, ...patch } : t)),
+          pendingPatches: { ...state.pendingPatches, [id]: { ...state.pendingPatches[id], ...patch } },
         }));
-        pushTablePatch(id, patch);
-      },
+        tablePatchVersion[id] = (tablePatchVersion[id] ?? 0) + 1;
+        sendTablePatch(id);
+      };
 
-      moveTable: (id, direction) => {
-        const ordered = orderedTables(get().tables);
-        const idx = ordered.findIndex((t) => t.id === id);
-        const swapIdx = direction === "up" ? idx - 1 : idx + 1;
-        if (idx < 0 || swapIdx < 0 || swapIdx >= ordered.length) return;
-        [ordered[idx], ordered[swapIdx]] = [ordered[swapIdx], ordered[idx]];
-        const orderMap = new Map(ordered.map((t, i) => [t.id, i]));
-        set((state) => ({
-          tables: state.tables.map((t) => ({ ...t, sortOrder: orderMap.get(t.id) ?? t.sortOrder })),
-        }));
-        // Every table got renumbered above, not just the swapped pair — push
-        // all of them so this order shows up the same on every device. Only
-        // sortOrder, though (not the whole row) — otherwise this could
-        // overwrite a session someone just started or stopped on an
-        // unrelated table from another device with this device's stale
-        // local copy of it (see pushTablePatch above for the same fix
-        // applied to every session action).
-        for (const t of get().tables) pushUpdate(TABLE, t.id, { sort_order: t.sortOrder });
-      },
+      return {
+        tables: seedTables,
+        pendingPatches: {},
 
-      removeTable: (id) => {
-        set((state) => ({ tables: state.tables.filter((t) => t.id !== id) }));
-        pushDelete(TABLE, id);
-      },
+        addTable: (table) => {
+          const maxOrder = get().tables.reduce((m, t) => Math.max(m, t.sortOrder), -1);
+          const created = withDefaults({
+            ...table,
+            id: crypto.randomUUID(),
+            defaultSessionMinutes: table.defaultSessionMinutes ?? DEFAULT_SESSION_MINUTES,
+            sortOrder: maxOrder + 1,
+          });
+          set((state) => ({ tables: [...state.tables, created] }));
+          pushInsert(TABLE, toRow(created));
+        },
 
-      startSession: (id, customerId, opts) => {
-        const table = get().tables.find((t) => t.id === id);
-        if (!table) return;
-        const patch: Partial<BillingTable> = {
-          status: "running",
-          customerId,
-          extraCustomerIds: opts?.extraCustomerIds ?? [],
-          activeGameId: opts?.gameId ?? null,
-          sessionRatePerHour: opts?.ratePerHour ?? null,
-          sessionStartedAt: Date.now(),
-          accumulatedMs: 0,
-          plannedDurationMs: table.defaultSessionMinutes * 60000,
-        };
-        set((state) => ({
-          tables: state.tables.map((t) => (t.id === id ? { ...t, ...patch } : t)),
-        }));
-        pushTablePatch(id, patch);
-      },
+        updateTable: (id, patch) => applyPatch(id, patch),
 
-      // Adds someone to an already-running/paused session (e.g. a friend joins
-      // partway through). No-ops if they're already the primary or listed.
-      addParticipant: (id, customerId) => {
-        const table = get().tables.find((t) => t.id === id);
-        if (!table || table.customerId === customerId || table.extraCustomerIds.includes(customerId)) return;
-        const extraCustomerIds = [...table.extraCustomerIds, customerId];
-        set((state) => ({
-          tables: state.tables.map((t) => (t.id === id ? { ...t, extraCustomerIds } : t)),
-        }));
-        pushTablePatch(id, { extraCustomerIds });
-      },
+        moveTable: (id, direction) => {
+          const ordered = orderedTables(get().tables);
+          const idx = ordered.findIndex((t) => t.id === id);
+          const swapIdx = direction === "up" ? idx - 1 : idx + 1;
+          if (idx < 0 || swapIdx < 0 || swapIdx >= ordered.length) return;
+          [ordered[idx], ordered[swapIdx]] = [ordered[swapIdx], ordered[idx]];
+          const orderMap = new Map(ordered.map((t, i) => [t.id, i]));
+          set((state) => ({
+            tables: state.tables.map((t) => ({ ...t, sortOrder: orderMap.get(t.id) ?? t.sortOrder })),
+          }));
+          // Every table got renumbered above, not just the swapped pair — push
+          // all of them so this order shows up the same on every device. Only
+          // sortOrder, though (not the whole row) — otherwise this could
+          // overwrite a session someone just started or stopped on an
+          // unrelated table from another device with this device's stale
+          // local copy of it (see pushTablePatch above for the same fix
+          // applied to every session action).
+          for (const t of get().tables) pushUpdate(TABLE, t.id, { sort_order: t.sortOrder });
+        },
 
-      pauseSession: (id) => {
-        const table = get().tables.find((t) => t.id === id);
-        if (!table || table.status !== "running" || !table.sessionStartedAt) return;
-        const elapsed = Date.now() - table.sessionStartedAt;
-        const patch: Partial<BillingTable> = {
-          status: "paused",
-          sessionStartedAt: null,
-          accumulatedMs: table.accumulatedMs + elapsed,
-        };
-        set((state) => ({
-          tables: state.tables.map((t) => (t.id === id ? { ...t, ...patch } : t)),
-        }));
-        pushTablePatch(id, patch);
-      },
+        removeTable: (id) => {
+          set((state) => ({ tables: state.tables.filter((t) => t.id !== id) }));
+          pushDelete(TABLE, id);
+        },
 
-      resumeSession: (id) => {
-        const table = get().tables.find((t) => t.id === id);
-        if (!table || table.status !== "paused") return;
-        const patch: Partial<BillingTable> = { status: "running", sessionStartedAt: Date.now() };
-        set((state) => ({
-          tables: state.tables.map((t) => (t.id === id ? { ...t, ...patch } : t)),
-        }));
-        pushTablePatch(id, patch);
-      },
+        startSession: (id, customerId, opts) => {
+          const table = get().tables.find((t) => t.id === id);
+          if (!table) return;
+          applyPatch(id, {
+            status: "running",
+            customerId,
+            extraCustomerIds: opts?.extraCustomerIds ?? [],
+            activeGameId: opts?.gameId ?? null,
+            sessionRatePerHour: opts?.ratePerHour ?? null,
+            sessionStartedAt: Date.now(),
+            accumulatedMs: 0,
+            plannedDurationMs: table.defaultSessionMinutes * 60000,
+          });
+        },
 
-      stopSession: (id) => {
-        const table = get().tables.find((t) => t.id === id);
-        let elapsedMs = table?.accumulatedMs ?? 0;
-        if (table?.status === "running" && table.sessionStartedAt) {
-          elapsedMs += Date.now() - table.sessionStartedAt;
-        }
-        const patch: Partial<BillingTable> = {
-          status: "available",
-          customerId: null,
-          extraCustomerIds: [],
-          activeGameId: null,
-          sessionRatePerHour: null,
-          sessionStartedAt: null,
-          accumulatedMs: 0,
-          plannedDurationMs: null,
-        };
-        set((state) => ({
-          tables: state.tables.map((t) => (t.id === id ? { ...t, ...patch } : t)),
-        }));
-        pushTablePatch(id, patch);
-        return { elapsedMs };
-      },
-    }),
+        // Adds someone to an already-running/paused session (e.g. a friend joins
+        // partway through). No-ops if they're already the primary or listed.
+        addParticipant: (id, customerId) => {
+          const table = get().tables.find((t) => t.id === id);
+          if (!table || table.customerId === customerId || table.extraCustomerIds.includes(customerId)) return;
+          applyPatch(id, { extraCustomerIds: [...table.extraCustomerIds, customerId] });
+        },
+
+        pauseSession: (id) => {
+          const table = get().tables.find((t) => t.id === id);
+          if (!table || table.status !== "running" || !table.sessionStartedAt) return;
+          const elapsed = Date.now() - table.sessionStartedAt;
+          applyPatch(id, {
+            status: "paused",
+            sessionStartedAt: null,
+            accumulatedMs: table.accumulatedMs + elapsed,
+          });
+        },
+
+        resumeSession: (id) => {
+          const table = get().tables.find((t) => t.id === id);
+          if (!table || table.status !== "paused") return;
+          applyPatch(id, { status: "running", sessionStartedAt: Date.now() });
+        },
+
+        stopSession: (id) => {
+          const table = get().tables.find((t) => t.id === id);
+          let elapsedMs = table?.accumulatedMs ?? 0;
+          if (table?.status === "running" && table.sessionStartedAt) {
+            elapsedMs += Date.now() - table.sessionStartedAt;
+          }
+          applyPatch(id, {
+            status: "available",
+            customerId: null,
+            extraCustomerIds: [],
+            activeGameId: null,
+            sessionRatePerHour: null,
+            sessionStartedAt: null,
+            accumulatedMs: 0,
+            plannedDurationMs: null,
+          });
+          return { elapsedMs };
+        },
+      };
+    },
     {
       name: "cuebill-tables",
       version: 6,
@@ -349,7 +411,7 @@ setupSync<TableRow, BillingTable>(
       const byId = new Map(state.tables.map((t) => [t.id, t]));
       const maxLocal = state.tables.reduce((m, t) => Math.max(m, t.sortOrder), -1);
       const merged = tables.map((t, i) => {
-        const m = keepLocalSortOrder(t, byId.get(t.id));
+        const m = applyPendingTablePatch(keepLocalSortOrder(t, byId.get(t.id)), state.pendingPatches[t.id]);
         // Neither this device nor the cloud has a real order for it — new
         // table, seed it in at the end instead of leaving the sentinel.
         return m.sortOrder === Number.MAX_SAFE_INTEGER ? { ...m, sortOrder: maxLocal + 1 + i } : m;
@@ -369,6 +431,7 @@ setupSync<TableRow, BillingTable>(
       // second table — drop it instead of keeping it.
       const mergedNames = new Set(merged.map((t) => t.name));
       const localOnly = keepLocalOnly(tables, state.tables).filter((t) => !mergedNames.has(t.name));
+      flushPendingTablePatches();
       return { tables: [...merged, ...localOnly] };
     }),
   (table) =>
@@ -377,6 +440,7 @@ setupSync<TableRow, BillingTable>(
       const maxLocal = state.tables.reduce((m, t) => Math.max(m, t.sortOrder), -1);
       let merged = keepLocalSortOrder(table, existing);
       if (merged.sortOrder === Number.MAX_SAFE_INTEGER) merged = { ...merged, sortOrder: maxLocal + 1 };
+      merged = applyPendingTablePatch(merged, state.pendingPatches[table.id]);
       return {
         tables: existing
           ? state.tables.map((t) => (t.id === table.id ? merged : t))

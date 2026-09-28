@@ -298,13 +298,26 @@ export function pushIncrement<TRow extends object>(
 // table's sortOrder), so it can't clobber some other field a concurrent
 // write on the same row just changed (e.g. a session someone just started
 // on that table from another device).
-export function pushUpdate(table: string, id: string, patch: Record<string, unknown>) {
-  if (!supabase) return;
-  supabase
-    .from(table)
-    .update(patch)
-    .eq("id", id)
-    .then(({ error }) => logError("update", table, error));
+//
+// Returns whether the update actually reached the server, same reasoning
+// as pushIncrement above — a dropped connection right when a table session
+// gets stopped/paused/started must not look "sent" here when the server
+// never got it, since a caller that tracks pending changes (useTablesStore)
+// needs to know to keep retrying rather than treat it as done.
+export function pushUpdate(table: string, id: string, patch: Record<string, unknown>): Promise<boolean> {
+  if (!supabase) return Promise.resolve(true);
+  return Promise.resolve(supabase.from(table).update(patch).eq("id", id))
+    .then(({ error }) => {
+      if (error) {
+        logError("update", table, error);
+        return false;
+      }
+      return true;
+    })
+    .catch((error: unknown) => {
+      logError("update", table, error);
+      return false;
+    });
 }
 
 export function pushDelete(table: string, id: string) {
