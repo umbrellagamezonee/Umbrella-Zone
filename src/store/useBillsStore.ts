@@ -160,6 +160,15 @@ function pushBill(id: string) {
   if (b) pushUpsert(TABLE, toRow(b));
 }
 
+// For useCustomersStore's merge retry: re-sends one bill's current local
+// data (already correctly reassigned, regardless of whether an earlier
+// push for it actually landed) and reports whether it made it this time.
+export function pushBillById(id: string): Promise<boolean> {
+  const state = useBillsStore.getState();
+  const b = state.bills.find((x) => x.id === id) ?? state.deletedBills.find((x) => x.id === id);
+  return b ? pushUpsert(TABLE, toRow(b)) : Promise.resolve(true);
+}
+
 interface BillsState {
   bills: Bill[];
   // Soft-deleted bills, kept separately so every existing screen that reads
@@ -179,8 +188,18 @@ interface BillsState {
   cancelBill: (id: string) => void;
   // Moves every bill referencing customer `fromId` (or their old name in a
   // match/share snapshot) onto `toId`/`toName` — used when two duplicate
-  // customer profiles are merged into one.
-  reassignCustomer: (fromId: string, fromName: string, toId: string, toName: string) => void;
+  // customer profiles are merged into one. Resolves with which bills were
+  // touched and whether every one of them actually saved to the cloud
+  // (see useCustomersStore's mergeCustomerSafely, which retries exactly
+  // those bill ids until this is true) — a bill reassignment that only
+  // landed locally would otherwise look identical to a real one, until
+  // the next sync quietly puts it back on the deleted customer.
+  reassignCustomer: (
+    fromId: string,
+    fromName: string,
+    toId: string,
+    toName: string
+  ) => Promise<{ ok: boolean; billIds: string[] }>;
   deleteBill: (id: string) => void;
   softDeleteBill: (id: string) => void;
   restoreBill: (id: string) => void;
@@ -409,7 +428,12 @@ export const useBillsStore = create<BillsState>()(
             return next ?? b;
           }),
         }));
-        for (const b of touched) pushUpsert(TABLE, toRow(b));
+        const billIds = touched.map((b) => b.id);
+        if (touched.length === 0) return Promise.resolve({ ok: true, billIds });
+        return Promise.all(touched.map((b) => pushUpsert(TABLE, toRow(b)))).then((results) => ({
+          ok: results.every(Boolean),
+          billIds,
+        }));
       },
 
       deleteBill: (id) => {

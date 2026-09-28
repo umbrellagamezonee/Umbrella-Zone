@@ -160,33 +160,47 @@ function missingColumn(message: string | undefined): string | null {
   return match ? match[1] : null;
 }
 
-function insertWithRetry(table: string, row: Record<string, unknown>, action: string) {
-  supabase!
-    .from(table)
-    .insert(row)
+// Every *WithRetry helper below returns whether the row actually reached
+// the server — same reasoning as pushIncrement/pushUpdate: a dropped
+// connection rejects the request instead of resolving it with an `error`
+// field, so without a .catch() that rejection went unhandled and silent,
+// making the write look "sent" from here even though the server never saw
+// it. Callers that need to be sure a write landed (e.g. a customer merge —
+// see useCustomersStore/useBillsStore) use the return value to know when
+// to keep retrying instead of treating a fired request as done.
+function insertWithRetry(table: string, row: Record<string, unknown>, action: string): Promise<boolean> {
+  return Promise.resolve(supabase!.from(table).insert(row))
     .then(({ error }) => {
-      const col = missingColumn(error?.message);
+      if (!error) return true;
+      const col = missingColumn(error.message);
       if (col && col in row) {
         const { [col]: _drop, ...rest } = row;
-        insertWithRetry(table, rest, action);
-      } else {
-        logError(action, table, error);
+        return insertWithRetry(table, rest, action);
       }
+      logError(action, table, error);
+      return false;
+    })
+    .catch((error: unknown) => {
+      logError(action, table, error);
+      return false;
     });
 }
 
-function upsertWithRetry(table: string, row: Record<string, unknown>) {
-  supabase!
-    .from(table)
-    .upsert(row)
+function upsertWithRetry(table: string, row: Record<string, unknown>): Promise<boolean> {
+  return Promise.resolve(supabase!.from(table).upsert(row))
     .then(({ error }) => {
-      const col = missingColumn(error?.message);
+      if (!error) return true;
+      const col = missingColumn(error.message);
       if (col && col in row) {
         const { [col]: _drop, ...rest } = row;
-        upsertWithRetry(table, rest);
-      } else {
-        logError("upsert", table, error);
+        return upsertWithRetry(table, rest);
       }
+      logError("upsert", table, error);
+      return false;
+    })
+    .catch((error: unknown) => {
+      logError("upsert", table, error);
+      return false;
     });
 }
 
@@ -239,14 +253,14 @@ function bulkUpsertWithRetry(table: string, rows: Record<string, unknown>[]) {
     });
 }
 
-export function pushInsert<TRow extends object>(table: string, row: TRow) {
-  if (!supabase) return;
-  insertWithRetry(table, row as Record<string, unknown>, "insert");
+export function pushInsert<TRow extends object>(table: string, row: TRow): Promise<boolean> {
+  if (!supabase) return Promise.resolve(true);
+  return insertWithRetry(table, row as Record<string, unknown>, "insert");
 }
 
-export function pushUpsert<TRow extends object>(table: string, row: TRow) {
-  if (!supabase) return;
-  upsertWithRetry(table, row as Record<string, unknown>);
+export function pushUpsert<TRow extends object>(table: string, row: TRow): Promise<boolean> {
+  if (!supabase) return Promise.resolve(true);
+  return upsertWithRetry(table, row as Record<string, unknown>);
 }
 
 // For a running counter (credit balance, stock quantity) that can get
@@ -320,13 +334,20 @@ export function pushUpdate(table: string, id: string, patch: Record<string, unkn
     });
 }
 
-export function pushDelete(table: string, id: string) {
-  if (!supabase) return;
-  supabase
-    .from(table)
-    .delete()
-    .eq("id", id)
-    .then(({ error }) => logError("delete", table, error));
+export function pushDelete(table: string, id: string): Promise<boolean> {
+  if (!supabase) return Promise.resolve(true);
+  return Promise.resolve(supabase.from(table).delete().eq("id", id))
+    .then(({ error }) => {
+      if (error) {
+        logError("delete", table, error);
+        return false;
+      }
+      return true;
+    })
+    .catch((error: unknown) => {
+      logError("delete", table, error);
+      return false;
+    });
 }
 
 // Wipes every row in a cloud table — used by Settings → Reset All Data.

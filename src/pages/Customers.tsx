@@ -351,7 +351,7 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
   const markOrderBilled = useOrdersStore((s) => s.markBilled);
   const currency = useSettingsStore((s) => s.currencySymbol);
   const allCustomers = useCustomersStore((s) => s.customers);
-  const mergeCustomer = useCustomersStore((s) => s.mergeCustomer);
+  const mergeCustomerSafely = useCustomersStore((s) => s.mergeCustomerSafely);
   const updateCustomer = useCustomersStore((s) => s.updateCustomer);
   const [detailBill, setDetailBill] = useState<Bill | null>(null);
   const [checkoutBill, setCheckoutBill] = useState<Bill | null>(null);
@@ -402,8 +402,7 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
     );
 
   function confirmMerge(target: Customer) {
-    reassignCustomer(customer.id, customer.name, target.id, target.name);
-    mergeCustomer(customer.id, target.id);
+    mergeCustomerSafely(customer.id, customer.name, target.id, target.name);
     setMergeTarget(null);
     onClose();
   }

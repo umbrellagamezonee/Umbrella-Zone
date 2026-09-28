@@ -11,6 +11,7 @@ import {
   pushDeleteAll,
   keepLocalOnly,
 } from "../lib/cloudSync";
+import { useBillsStore, pushBillById } from "./useBillsStore";
 
 const walkIn: Customer = {
   id: "walk-in",
@@ -60,8 +61,21 @@ const toRow = (c: Customer): CustomerRow => ({
   created_at: new Date(c.createdAt).toISOString(),
 });
 
+// A merge not yet fully confirmed saved to the cloud — see
+// mergeCustomerSafely below. billIds are the specific bills
+// reassignCustomer touched, kept so a retry can re-push exactly those
+// (reading their current, already-locally-corrected data) without having
+// to re-derive "which bills belong to this merge" after the source
+// customer id has already stopped appearing anywhere locally.
+interface PendingMerge {
+  targetId: string;
+  targetName: string;
+  billIds: string[];
+}
+
 interface CustomersState {
   customers: Customer[];
+  pendingMerges: Record<string, PendingMerge>;
   addCustomer: (data: { name: string; phone: string; email: string }) => Customer;
   findOrCreateCustomer: (data: { name: string; phone: string }) => Customer;
   updateCustomer: (id: string, patch: { name?: string; phone?: string; email?: string }) => void;
@@ -71,7 +85,17 @@ interface CustomersState {
   // automatically the moment useBillsStore.reassignCustomer rewrites its
   // bills onto the target's id/name, since credit is always computed fresh
   // from bills rather than carried as a number on the customer record.
-  mergeCustomer: (sourceId: string, targetId: string) => void;
+  // Only applies locally and makes one attempt at saving to the cloud —
+  // use mergeCustomerSafely (below) to actually merge, which wraps this
+  // with the same retry-until-confirmed handling as the rest of today's
+  // fixes.
+  mergeCustomer: (sourceId: string, targetId: string) => Promise<boolean>;
+  // Merges sourceId into targetId and keeps retrying (bill reassignment +
+  // the customer update/delete) until the cloud actually confirms every
+  // part — a merge that only half-lands (e.g. the connection drops right
+  // after the local UI updates) would otherwise leave both profiles
+  // sitting in Supabase, still separate, with no error shown to anyone.
+  mergeCustomerSafely: (sourceId: string, sourceName: string, targetId: string, targetName: string) => void;
   resetAll: () => void;
 }
 
@@ -79,6 +103,7 @@ export const useCustomersStore = create<CustomersState>()(
   persist(
     (set, get) => ({
       customers: [walkIn],
+      pendingMerges: {},
 
       addCustomer: (data) => {
         const customer: Customer = {
@@ -147,10 +172,10 @@ export const useCustomersStore = create<CustomersState>()(
       },
 
       mergeCustomer: (sourceId, targetId) => {
-        if (sourceId === targetId || sourceId === "walk-in" || targetId === "walk-in") return;
+        if (sourceId === targetId || sourceId === "walk-in" || targetId === "walk-in") return Promise.resolve(true);
         const source = get().customers.find((c) => c.id === sourceId);
         const target = get().customers.find((c) => c.id === targetId);
-        if (!source || !target) return;
+        if (!source || !target) return Promise.resolve(true);
         const merged: Customer = {
           ...target,
           // Keep whichever profile actually has contact details filled in.
@@ -162,14 +187,33 @@ export const useCustomersStore = create<CustomersState>()(
             .filter((c) => c.id !== sourceId)
             .map((c) => (c.id === targetId ? merged : c)),
         }));
-        pushUpdate(TABLE, targetId, { phone: merged.phone, email: merged.email });
-        pushDelete(TABLE, sourceId);
+        return Promise.all([
+          pushUpdate(TABLE, targetId, { phone: merged.phone, email: merged.email }),
+          pushDelete(TABLE, sourceId),
+        ]).then(([updateOk, deleteOk]) => updateOk && deleteOk);
+      },
+
+      mergeCustomerSafely: (sourceId, sourceName, targetId, targetName) => {
+        useBillsStore
+          .getState()
+          .reassignCustomer(sourceId, sourceName, targetId, targetName)
+          .then(({ ok: billsOk, billIds }) =>
+            get()
+              .mergeCustomer(sourceId, targetId)
+              .then((customerOk) => {
+                if (billsOk && customerOk) return;
+                set((state) => ({
+                  pendingMerges: { ...state.pendingMerges, [sourceId]: { targetId, targetName, billIds } },
+                }));
+                retryPendingMerge(sourceId);
+              })
+          );
       },
 
       // Keeps the "walk-in" sentinel (never a real cloud row) and wipes
       // everyone else.
       resetAll: () => {
-        set({ customers: [walkIn] });
+        set({ customers: [walkIn], pendingMerges: {} });
         pushDeleteAll(TABLE);
       },
     }),
@@ -194,6 +238,45 @@ export const useCustomersStore = create<CustomersState>()(
   )
 );
 
+// In-flight guard so a merge already being retried isn't retried twice at
+// once by a concurrent flush.
+const mergeRetryInFlight = new Set<string>();
+
+// Re-pushes exactly what a pending merge still needs: each reassigned
+// bill (read fresh from useBillsStore, which already has the correct
+// customer id locally regardless of whether the earlier push succeeded),
+// the target's contact details, and the source's delete — the last two
+// via mergeCustomer, which is safe to call again since deleting an
+// already-deleted row, or upserting the same phone/email, is a no-op
+// either way. Only clears the pending entry once every part is confirmed.
+function retryPendingMerge(sourceId: string) {
+  if (mergeRetryInFlight.has(sourceId)) return;
+  const pending = useCustomersStore.getState().pendingMerges[sourceId];
+  if (!pending) return;
+  mergeRetryInFlight.add(sourceId);
+  Promise.all([
+    ...pending.billIds.map((id) => pushBillById(id)),
+    useCustomersStore.getState().mergeCustomer(sourceId, pending.targetId),
+  ]).then((results) => {
+    mergeRetryInFlight.delete(sourceId);
+    if (!results.every(Boolean)) return;
+    useCustomersStore.setState((state) => {
+      const rest = { ...state.pendingMerges };
+      delete rest[sourceId];
+      return { pendingMerges: rest };
+    });
+  });
+}
+
+function flushPendingMerges() {
+  for (const sourceId of Object.keys(useCustomersStore.getState().pendingMerges)) retryPendingMerge(sourceId);
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener("online", flushPendingMerges);
+  setInterval(flushPendingMerges, 30_000);
+}
+
 setupSync<CustomerRow, Customer>(
   TABLE,
   fromRow,
@@ -203,16 +286,23 @@ setupSync<CustomerRow, Customer>(
   // resolving (e.g. typing a name for a new order right after reload) must
   // not vanish — losing it here is exactly what makes that order fall back
   // to showing "Walk-in" (its customerId no longer resolves to anyone).
-  (customers) =>
+  (customers) => {
     useCustomersStore.setState((state) => ({
+      // A source customer whose delete hasn't confirmed yet would
+      // otherwise reappear here the moment a fresh fetch pulls its still-
+      // present cloud row back in — drop it again locally; the retry above
+      // is already working on actually deleting it.
       customers: [
         walkIn,
-        ...customers,
+        ...customers.filter((c) => !(c.id in useCustomersStore.getState().pendingMerges)),
         ...keepLocalOnly(customers, state.customers.filter((c) => c.id !== "walk-in")),
       ],
-    })),
+    }));
+    flushPendingMerges();
+  },
   (customer) =>
     useCustomersStore.setState((state) => {
+      if (customer.id in state.pendingMerges) return {};
       const exists = state.customers.some((c) => c.id === customer.id);
       return {
         customers: exists
