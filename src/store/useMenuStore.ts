@@ -127,6 +127,13 @@ const itemToRow = (i: MenuItem): ItemRow => ({
 interface MenuState {
   categories: MenuCategory[];
   items: MenuItem[];
+  // Stock changes made locally but not yet confirmed saved to the cloud —
+  // the common cause is the network dropping for a moment right when
+  // someone adds an item to an order. Kept in persisted state (not just
+  // memory) so a page reload before the connection recovers doesn't lose
+  // track of what still needs sending — see sendStockDelta/
+  // flushPendingStockDeltas below, keyed by menu item id.
+  pendingStockDeltas: Record<string, number>;
   addItem: (item: Omit<MenuItem, "id">) => void;
   updateItem: (id: string, patch: Partial<MenuItem>) => void;
   removeItem: (id: string) => void;
@@ -137,64 +144,64 @@ interface MenuState {
 
 export const useMenuStore = create<MenuState>()(
   persist(
-    (set, get) => ({
-      categories: seedCategories,
-      items: seedItems,
-
-      addItem: (item) => {
-        const created: MenuItem = { ...item, id: crypto.randomUUID() };
-        set((state) => ({ items: [...state.items, created] }));
-        pushInsert(ITEM_TABLE, itemToRow(created));
-      },
-
-      updateItem: (id, patch) => {
-        set((state) => ({
-          items: state.items.map((i) => (i.id === id ? { ...i, ...patch } : i)),
-        }));
-        const updated = get().items.find((i) => i.id === id);
-        if (updated) pushUpsert(ITEM_TABLE, itemToRow(updated));
-      },
-
-      removeItem: (id) => {
-        set((state) => ({ items: state.items.filter((i) => i.id !== id) }));
-        pushDelete(ITEM_TABLE, id);
-      },
-
-      deductStock: (id, qty) => {
+    (set, get) => {
+      // Shared by deductStock/restock — applies the change locally right
+      // away (so the person ordering sees it instantly) and queues it to be
+      // sent to the cloud, retried until it actually lands rather than
+      // assumed sent the moment the request goes out.
+      const applyStockDelta = (id: string, delta: number) => {
         const before = get().items.find((i) => i.id === id);
         if (!before || before.stockQty == null) return;
         set((state) => ({
           items: state.items.map((i) =>
-            i.id === id && i.stockQty != null
-              ? { ...i, stockQty: Math.max(0, i.stockQty - qty) }
-              : i
+            i.id === id && i.stockQty != null ? { ...i, stockQty: Math.max(0, i.stockQty + delta) } : i
           ),
+          pendingStockDeltas: {
+            ...state.pendingStockDeltas,
+            [id]: (state.pendingStockDeltas[id] ?? 0) + delta,
+          },
         }));
-        const updated = get().items.find((i) => i.id === id);
-        // Atomic "-= qty" on the server — several orders for the same item
-        // within the same second (busy canteen) can't lose a deduction to
-        // the network delivering requests out of order.
-        if (updated) pushIncrement("increment_stock_qty", { p_id: id, p_delta: -qty }, ITEM_TABLE, itemToRow(updated));
-      },
+        sendStockDelta(id);
+      };
 
-      restock: (id, qty) => {
-        const before = get().items.find((i) => i.id === id);
-        if (!before || before.stockQty == null) return;
-        set((state) => ({
-          items: state.items.map((i) =>
-            i.id === id && i.stockQty != null ? { ...i, stockQty: i.stockQty + qty } : i
-          ),
-        }));
-        const updated = get().items.find((i) => i.id === id);
-        if (updated) pushIncrement("increment_stock_qty", { p_id: id, p_delta: qty }, ITEM_TABLE, itemToRow(updated));
-      },
+      return {
+        categories: seedCategories,
+        items: seedItems,
+        pendingStockDeltas: {},
 
-      resetAll: () => {
-        set({ categories: [], items: [] });
-        pushDeleteAll(CAT_TABLE);
-        pushDeleteAll(ITEM_TABLE);
-      },
-    }),
+        addItem: (item) => {
+          const created: MenuItem = { ...item, id: crypto.randomUUID() };
+          set((state) => ({ items: [...state.items, created] }));
+          pushInsert(ITEM_TABLE, itemToRow(created));
+        },
+
+        updateItem: (id, patch) => {
+          set((state) => ({
+            items: state.items.map((i) => (i.id === id ? { ...i, ...patch } : i)),
+          }));
+          const updated = get().items.find((i) => i.id === id);
+          if (updated) pushUpsert(ITEM_TABLE, itemToRow(updated));
+        },
+
+        removeItem: (id) => {
+          set((state) => ({ items: state.items.filter((i) => i.id !== id) }));
+          pushDelete(ITEM_TABLE, id);
+        },
+
+        // Atomic "-= qty" on the server, via increment_stock_qty — several
+        // orders for the same item within the same second (busy canteen)
+        // can't lose a deduction to the network delivering requests out of
+        // order.
+        deductStock: (id, qty) => applyStockDelta(id, -qty),
+        restock: (id, qty) => applyStockDelta(id, qty),
+
+        resetAll: () => {
+          set({ categories: [], items: [], pendingStockDeltas: {} });
+          pushDeleteAll(CAT_TABLE);
+          pushDeleteAll(ITEM_TABLE);
+        },
+      };
+    },
     {
       name: "cuebill-menu",
       // v3: collapsed the old freeform categories down to the fixed
@@ -212,6 +219,71 @@ export const useMenuStore = create<MenuState>()(
     }
   )
 );
+
+// In-flight guard so a delta already on its way to the server isn't sent
+// again by a concurrent flush (e.g. the periodic retry firing while an
+// earlier send for the same item is still in the air).
+const stockDeltaInFlight = new Set<string>();
+
+// Sends whatever's still queued in pendingStockDeltas for one item.
+// Re-reads the queue after the request settles (rather than trusting the
+// amount it started with) since more of the same item could have been
+// ordered while this was in flight — that gets picked up by one more call
+// instead of waiting for the next flush.
+function sendStockDelta(id: string) {
+  if (stockDeltaInFlight.has(id)) return;
+  const pending = useMenuStore.getState().pendingStockDeltas[id];
+  if (!pending) return;
+  const item = useMenuStore.getState().items.find((i) => i.id === id);
+  if (!item) {
+    // Item's gone (deleted) — nothing left to reconcile this delta against.
+    useMenuStore.setState((state) => {
+      const rest = { ...state.pendingStockDeltas };
+      delete rest[id];
+      return { pendingStockDeltas: rest };
+    });
+    return;
+  }
+  stockDeltaInFlight.add(id);
+  pushIncrement("increment_stock_qty", { p_id: id, p_delta: pending }, ITEM_TABLE, itemToRow(item)).then((ok) => {
+    stockDeltaInFlight.delete(id);
+    if (!ok) return;
+    useMenuStore.setState((state) => {
+      const remaining = (state.pendingStockDeltas[id] ?? 0) - pending;
+      const rest = { ...state.pendingStockDeltas };
+      if (remaining === 0) delete rest[id];
+      else rest[id] = remaining;
+      return { pendingStockDeltas: rest };
+    });
+    if (useMenuStore.getState().pendingStockDeltas[id]) sendStockDelta(id);
+  });
+}
+
+// Retries every stock change still waiting on a confirmed save to the
+// cloud. Called on reconnect, periodically as a safety net for a
+// connection that looks "online" but can't actually reach Supabase, and
+// once after every fresh sync — so a delta that went unsent (network
+// dropped the instant someone tapped "add to order") gets caught and
+// resent instead of silently staying wrong until someone notices stock
+// doesn't match what's physically left.
+function flushPendingStockDeltas() {
+  for (const id of Object.keys(useMenuStore.getState().pendingStockDeltas)) sendStockDelta(id);
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener("online", flushPendingStockDeltas);
+  setInterval(flushPendingStockDeltas, 30_000);
+}
+
+// A stock change still waiting on a confirmed save to the cloud (see
+// pendingStockDeltas above) hasn't landed in the row this device is about
+// to receive here — adding it back on top keeps what's on screen correct
+// instead of it flashing back to the pre-deduction number until the retry
+// above catches up.
+function applyPendingStockDelta(incoming: MenuItem, pending: number | undefined): MenuItem {
+  if (!pending || incoming.stockQty == null) return incoming;
+  return { ...incoming, stockQty: Math.max(0, incoming.stockQty + pending) };
+}
 
 // One-time cleanup for the cloud side of the same category collapse — the
 // local `migrate` above only fixes this device's own persisted storage, but
@@ -287,17 +359,22 @@ setupSync<ItemRow, MenuItem>(
   (items) => {
     useMenuStore.setState((state) => {
       const byId = new Map(state.items.map((i) => [i.id, i]));
-      const merged = items.map((i) => keepLocalCostPrice(i, byId.get(i.id)));
+      const merged = items.map((i) => {
+        const withCost = keepLocalCostPrice(i, byId.get(i.id));
+        return applyPendingStockDelta(withCost, state.pendingStockDeltas[i.id]);
+      });
       // An item added in the gap between this fetch starting and resolving
       // must not vanish — same reasoning as keepLocalOnly's own comment.
       return { items: [...merged, ...keepLocalOnly(items, state.items)] };
     });
     ensureFixedCategories();
+    flushPendingStockDeltas();
   },
   (item) =>
     useMenuStore.setState((state) => {
       const existing = state.items.find((i) => i.id === item.id);
-      const merged = keepLocalCostPrice(item, existing);
+      const withCost = keepLocalCostPrice(item, existing);
+      const merged = applyPendingStockDelta(withCost, state.pendingStockDeltas[item.id]);
       return {
         items: existing ? state.items.map((i) => (i.id === item.id ? merged : i)) : [...state.items, merged],
       };

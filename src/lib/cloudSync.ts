@@ -261,21 +261,35 @@ export function pushUpsert<TRow extends object>(table: string, row: TRow) {
 // Falls back to the old absolute-snapshot upsert if the increment function
 // hasn't been created yet (see supabase/migration-atomic-counters.sql) —
 // same "keep working before the migration runs" pattern as insertWithRetry.
+//
+// Returns whether the delta actually made it to the server. A dropped wifi
+// connection (or any other network failure, not just a Postgrest-level
+// error) rejects the request instead of resolving it with an `error` field —
+// without a .catch() that rejection was going unhandled and silent, so the
+// delta looked "sent" from here even though the server never saw it. The
+// caller (useMenuStore's stock tracking) uses this to know when it needs to
+// keep retrying rather than treat the local optimistic update as done.
 export function pushIncrement<TRow extends object>(
   fn: string,
   args: Record<string, unknown>,
   fallbackTable: string,
   fallbackRow: TRow
-) {
-  if (!supabase) return;
-  supabase.rpc(fn, args).then(({ error }) => {
-    if (!error) return;
-    if (/function .* does not exist/i.test(error.message ?? "")) {
-      upsertWithRetry(fallbackTable, fallbackRow as Record<string, unknown>);
-      return;
-    }
-    logError(`rpc ${fn}`, fn, error);
-  });
+): Promise<boolean> {
+  if (!supabase) return Promise.resolve(true);
+  return Promise.resolve(supabase.rpc(fn, args))
+    .then(({ error }) => {
+      if (!error) return true;
+      if (/function .* does not exist/i.test(error.message ?? "")) {
+        upsertWithRetry(fallbackTable, fallbackRow as Record<string, unknown>);
+        return true;
+      }
+      logError(`rpc ${fn}`, fn, error);
+      return false;
+    })
+    .catch((error: unknown) => {
+      logError(`rpc ${fn}`, fn, error);
+      return false;
+    });
 }
 
 // A scoped column update — touches only the given fields, unlike pushUpsert
