@@ -30,7 +30,7 @@ import {
   creditSettlementDetails,
   sumBillMoney,
 } from "../lib/billing";
-import { billPersonName, billPlace } from "../lib/billLabel";
+import { billPersonName, billPlace, isCreditSettlement } from "../lib/billLabel";
 import { useCustomersStore } from "../store/useCustomersStore";
 import { orderedTables } from "../store/useTablesStore";
 import { BillDetailModal } from "../components/BillDetailModal";
@@ -105,11 +105,30 @@ export function Reports() {
         .reduce((sum, b) => sum + billCollected(b), 0),
     [bills]
   );
+  // Cash/account collected today already includes money from someone settling
+  // an older debt today — it's real cash in hand regardless of which day the
+  // original charge was billed on. This is just the part of that total that
+  // came from settling old credit, purely so "collected today" doesn't read
+  // as a mystery number bigger than what actually got billed today.
+  const settledTodayCashUpi = useMemo(
+    () =>
+      bills
+        .filter((b) => isToday(b.createdAt) && b.status === "paid" && isCreditSettlement(b))
+        .reduce((sum, b) => sum + billCollected(b), 0),
+    [bills]
+  );
 
   const collectedThisMonth = useMemo(
     () =>
       monthBills
         .filter((b) => b.status !== "cancelled")
+        .reduce((sum, b) => sum + billCollected(b), 0),
+    [monthBills]
+  );
+  const settledThisMonthCashUpi = useMemo(
+    () =>
+      monthBills
+        .filter((b) => b.status === "paid" && isCreditSettlement(b))
         .reduce((sum, b) => sum + billCollected(b), 0),
     [monthBills]
   );
@@ -159,12 +178,22 @@ export function Reports() {
           <p className="text-xl font-bold text-[var(--color-success)] mt-1">
             {formatMoney(collectedToday, currency)}
           </p>
+          {settledTodayCashUpi > 0 && (
+            <p className="text-[10px] text-[var(--color-text-faint)] mt-1">
+              incl. {formatMoney(settledTodayCashUpi, currency)} old credit settled today
+            </p>
+          )}
         </Card>
         <Card>
           <p className="text-xs text-[var(--color-text-dim)]">THIS MONTH</p>
           <p className="text-xl font-bold text-[var(--color-success)] mt-1">
             {formatMoney(collectedThisMonth, currency)}
           </p>
+          {settledThisMonthCashUpi > 0 && (
+            <p className="text-[10px] text-[var(--color-text-faint)] mt-1">
+              incl. {formatMoney(settledThisMonthCashUpi, currency)} old credit settled
+            </p>
+          )}
         </Card>
       </div>
 
@@ -1243,17 +1272,19 @@ function GallaSummaryModal({ date, onClose }: { date: string; onClose: () => voi
     [expenses, date]
   );
 
-  const { cash, upi, credit: creditGiven } = useMemo(() => {
+  const { cash, upi, credit: creditGiven, settled: creditSettled } = useMemo(() => {
     let cash = 0;
     let upi = 0;
     let credit = 0;
+    let settled = 0;
     for (const b of dayActive) {
       const m = billMoney(b);
       cash += m.cash;
       upi += m.upi;
       credit += m.credit;
+      if (isCreditSettlement(b)) settled += m.cash + m.upi;
     }
-    return { cash, upi, credit };
+    return { cash, upi, credit, settled };
   }, [dayActive]);
   const expensesTotal = dayExpenses.reduce((s, e) => s + e.amount, 0);
   const netCash = cash + upi - expensesTotal;
@@ -1296,6 +1327,20 @@ function GallaSummaryModal({ date, onClose }: { date: string; onClose: () => voi
             </p>
           </Card>
         </div>
+
+        {creditSettled > 0 && (
+          <Card>
+            <p className="text-xs text-[var(--color-text-dim)]">
+              {isDateToday ? "OLD CREDIT SETTLED TODAY" : "OLD CREDIT SETTLED THIS DAY"}
+            </p>
+            <p className="text-lg font-bold text-[var(--color-primary)] mt-1">
+              {formatMoney(creditSettled, currency)}
+            </p>
+            <p className="text-xs text-[var(--color-text-faint)] mt-1">
+              Someone paying off an older balance — already counted inside Cash/Account above, not extra.
+            </p>
+          </Card>
+        )}
 
         {dayExpenses.length > 0 && (
           <div>
