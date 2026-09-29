@@ -1,22 +1,46 @@
+import { useState } from "react";
 import { Modal } from "./ui/Modal";
 import { Card } from "./ui/Card";
 import { useCustomersStore } from "../store/useCustomersStore";
+import { useBillsStore } from "../store/useBillsStore";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { formatMoney, formatDateTime, formatTime } from "../lib/format";
 import { billMoney } from "../lib/billing";
 import { billPersonName, billPlace, isCreditSettlement } from "../lib/billLabel";
 import type { Bill } from "../types";
-import { Check, X, Trophy, Frown } from "lucide-react";
+import { Check, X, Trophy, Frown, Pencil } from "lucide-react";
 
 // Full read-only breakdown of one session/bill as a single numbered table:
 // row 1 is the table charge with its start/end time, then every food/drink
 // with its quantity, then the total — and the payment underneath. Same layout
 // whether the bill came from a table, a rematch, or a standalone canteen order.
-export function BillDetailModal({ bill, onClose }: { bill: Bill; onClose: () => void }) {
+// "Fix who lost" is the one editable thing here — everything else is exactly
+// what was billed and can't be changed from this screen.
+export function BillDetailModal({ bill: initialBill, onClose }: { bill: Bill; onClose: () => void }) {
   const customers = useCustomersStore((s) => s.customers);
+  const bills = useBillsStore((s) => s.bills);
+  const reassignBillLoser = useBillsStore((s) => s.reassignBillLoser);
+  // Read live so a just-made correction shows immediately instead of only
+  // after closing and reopening this modal.
+  const bill = bills.find((b) => b.id === initialBill.id) ?? initialBill;
   const currency = useSettingsStore((s) => s.currencySymbol);
   const customer = customers.find((c) => c.id === bill.customerId);
   const money = billMoney(bill);
+
+  const [pickingLoser, setPickingLoser] = useState(false);
+  const [confirmName, setConfirmName] = useState<string | null>(null);
+  // Only the simple, common case: one recorded loser, not split between
+  // several payers — a split bill's shares would need per-share handling
+  // (is that share already paid? by whom?), a genuinely different and
+  // riskier operation not supported here.
+  const currentLoser = bill.matchLosers?.length === 1 ? bill.matchLosers[0] : null;
+  const canFixLoser = !bill.shares && currentLoser != null && bill.status !== "cancelled";
+
+  function confirmChange() {
+    if (confirmName) reassignBillLoser(bill.id, confirmName);
+    setConfirmName(null);
+    setPickingLoser(false);
+  }
 
   const hasSession = bill.tableId != null;
   // A real table charge always has a matching non-zero duration it was
@@ -174,15 +198,41 @@ export function BillDetailModal({ bill, onClose }: { bill: Bill; onClose: () => 
 
         {bill.matchParticipants && bill.matchParticipants.length > 1 && (
           <Card>
-            <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-2">
-              WHO PLAYED
-            </p>
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)]">
+                WHO PLAYED
+              </p>
+              {canFixLoser && !pickingLoser && (
+                <button
+                  onClick={() => setPickingLoser(true)}
+                  className="flex items-center gap-1 text-xs font-medium text-[var(--color-primary)]"
+                >
+                  <Pencil size={12} /> Fix who lost
+                </button>
+              )}
+              {pickingLoser && (
+                <button
+                  onClick={() => {
+                    setPickingLoser(false);
+                    setConfirmName(null);
+                  }}
+                  className="text-xs font-medium text-[var(--color-text-faint)]"
+                >
+                  Cancel
+                </button>
+              )}
+            </div>
+            {pickingLoser && (
+              <p className="text-xs text-[var(--color-text-faint)] mb-2">
+                Tap who actually lost — the {money0(bill.total)} charge moves to them.
+              </p>
+            )}
             <div className="space-y-1.5">
               {bill.matchParticipants.map((name) => {
                 const lost = bill.matchLosers?.includes(name) ?? false;
                 const hasLosers = (bill.matchLosers?.length ?? 0) > 0;
-                return (
-                  <div key={name} className="flex items-center gap-2">
+                const content = (
+                  <>
                     {lost ? (
                       <Frown size={15} className="text-[var(--color-danger)] shrink-0" />
                     ) : (
@@ -197,10 +247,48 @@ export function BillDetailModal({ bill, onClose }: { bill: Bill; onClose: () => 
                     >
                       {lost ? "Lost · billed" : hasLosers ? "Won" : ""}
                     </span>
-                  </div>
+                  </>
+                );
+                if (!pickingLoser || lost) {
+                  return (
+                    <div key={name} className="flex items-center gap-2">
+                      {content}
+                    </div>
+                  );
+                }
+                return (
+                  <button
+                    key={name}
+                    onClick={() => setConfirmName(name)}
+                    className="w-full flex items-center gap-2 -mx-1 px-1 py-1 rounded-lg active:bg-[var(--color-surface-2)]"
+                  >
+                    {content}
+                  </button>
                 );
               })}
             </div>
+            {confirmName && (
+              <div className="mt-2.5 rounded-lg bg-[var(--color-warning)]/10 p-2.5 space-y-2">
+                <p className="text-xs">
+                  Bill {money0(bill.total)} to <span className="font-semibold">{confirmName}</span> instead
+                  of <span className="font-semibold">{currentLoser}</span>?
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setConfirmName(null)}
+                    className="flex-1 rounded-lg bg-[var(--color-surface-2)] py-1.5 text-xs font-medium"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={confirmChange}
+                    className="flex-1 rounded-lg bg-[var(--color-primary)] text-white py-1.5 text-xs font-medium"
+                  >
+                    Yes, move it
+                  </button>
+                </div>
+              </div>
+            )}
           </Card>
         )}
 
