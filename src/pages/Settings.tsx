@@ -1321,6 +1321,23 @@ function ExportExcelModal({ onClose }: { onClose: () => void }) {
       const dailyRows = dailyCollectionRows(activeBills, items, categories, orderedTables(tables), customers);
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(dailyRows), "Daily collection");
 
+      // A plain day-by-day Cash/Account/Credit number pulled out of the
+      // sheet above into its own, so it doesn't need to be found inside
+      // the much longer per-table/per-category breakdown.
+      const cashUpiCreditSummary: Row[] = dailyRows
+        .filter((r) => r.Item === "Total")
+        .map((r) => ({ Date: r.Date, Cash: r.Cash, Account: r.Account, Credit: r.Credit }));
+      if (cashUpiCreditSummary.length > 0) {
+        cashUpiCreditSummary.push({ Date: "", Cash: "", Account: "", Credit: "" });
+        cashUpiCreditSummary.push({
+          Date: "TOTAL",
+          Cash: sum(cashUpiCreditSummary, "Cash"),
+          Account: sum(cashUpiCreditSummary, "Account"),
+          Credit: sum(cashUpiCreditSummary, "Credit"),
+        });
+      }
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(cashUpiCreditSummary), "Cash-UPI-Credit Summary");
+
       // Every credit settlement ever recorded, with the date of the oldest
       // charge it started clearing — a settlement is assumed to clear
       // whatever's been owed the longest first, since there's no record of

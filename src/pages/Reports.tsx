@@ -825,11 +825,43 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
         addSheet(c.sheet, itemSheetRows, [30, 9, 9, 9, 7, 10, 11, 9, 9, 9, 9, 26, 11]);
       }
 
-      addSheet(
-        "Daily collection",
-        dailyCollectionRows(bills, menuItems, menuCategories, orderedTablesList, customers, rangeStartMs, rangeEndMs),
-        [16, 16, 16, 12, 12, 12, 26]
+      const dailyRowsForRange = dailyCollectionRows(
+        bills,
+        menuItems,
+        menuCategories,
+        orderedTablesList,
+        customers,
+        rangeStartMs,
+        rangeEndMs
       );
+      addSheet("Daily collection", dailyRowsForRange, [16, 16, 16, 12, 12, 12, 26]);
+
+      // A plain day-by-day Cash/Account/Credit number, nothing else — just
+      // the "Total" row already computed above for each date, pulled out
+      // into its own sheet so it doesn't need to be found inside the much
+      // longer per-table/per-category breakdown. Same figures either way:
+      // a credit settled later already shows as Cash/Account back on the
+      // day the original charge happened, not the day it was paid off.
+      const cashUpiCreditSummary = dailyRowsForRange
+        .filter((r) => r.Item === "Total")
+        .map((r) => ({
+          Date: r.Date,
+          Cash: r.Cash,
+          Account: r.Account,
+          Credit: r.Credit,
+        }));
+      if (cashUpiCreditSummary.length > 0) {
+        const total = (key: "Cash" | "Account" | "Credit") =>
+          round(cashUpiCreditSummary.reduce((s, r) => s + (Number(r[key]) || 0), 0));
+        cashUpiCreditSummary.push({ Date: "", Cash: "", Account: "", Credit: "" } as never);
+        cashUpiCreditSummary.push({
+          Date: "TOTAL",
+          Cash: total("Cash"),
+          Account: total("Account"),
+          Credit: total("Credit"),
+        });
+      }
+      addSheet("Cash-UPI-Credit Summary", cashUpiCreditSummary, [16, 12, 12, 12]);
 
       // Needs every bill ever recorded (not just this range) so a
       // settlement that clears old debt from before the range still shows
