@@ -1293,31 +1293,60 @@ function GallaSummaryModal({ date, onClose }: { date: string; onClose: () => voi
   const bills = useBillsStore((s) => s.bills);
   const expenses = useExpensesStore((s) => s.expenses);
   const currency = useSettingsStore((s) => s.currencySymbol);
+  const customers = useCustomersStore((s) => s.customers);
+  const menuItems = useMenuStore((s) => s.items);
+  const menuCategories = useMenuStore((s) => s.categories);
+  const tables = useTablesStore((s) => s.tables);
   const isDateToday = date === toDateInputValue(Date.now());
 
-  const dayActive = useMemo(
-    () => bills.filter((b) => toDateInputValue(b.createdAt) === date && b.status !== "cancelled"),
-    [bills, date]
-  );
   const dayExpenses = useMemo(
     () => expenses.filter((e) => toDateInputValue(e.createdAt) === date),
     [expenses, date]
   );
+  const orderedTablesList = useMemo(() => orderedTables(tables), [tables]);
 
+  // Today reads same-day money directly, the same as before — "cash in
+  // drawer" has to match what's physically in the till right now, not a
+  // retroactively adjusted number. Any other (past) date now uses the same
+  // trace-back-to-the-original-charge method as the Daily collection
+  // sheet and the exported reports, so this screen can't show a different
+  // number for a day than what gets downloaded — that mismatch (site says
+  // one thing, the sheet says another) was the actual complaint.
   const { cash, upi, credit: creditGiven, settled: creditSettled } = useMemo(() => {
-    let cash = 0;
-    let upi = 0;
-    let credit = 0;
-    let settled = 0;
-    for (const b of dayActive) {
-      const m = billMoney(b);
-      cash += m.cash;
-      upi += m.upi;
-      credit += m.credit;
-      if (isCreditSettlement(b)) settled += m.cash + m.upi;
+    if (isDateToday) {
+      let cash = 0;
+      let upi = 0;
+      let credit = 0;
+      let settled = 0;
+      const dayActive = bills.filter((b) => toDateInputValue(b.createdAt) === date && b.status !== "cancelled");
+      for (const b of dayActive) {
+        const m = billMoney(b);
+        cash += m.cash;
+        upi += m.upi;
+        credit += m.credit;
+        if (isCreditSettlement(b)) settled += m.cash + m.upi;
+      }
+      return { cash, upi, credit, settled };
     }
-    return { cash, upi, credit, settled };
-  }, [dayActive]);
+    // The range has to reach back to the start of history, not just this
+    // one day — a settlement made on this exact day for debt from earlier
+    // would otherwise find its own original charge "out of range" and
+    // fall back to counting itself on this day instead of tracing back,
+    // undercounting whichever earlier day it really belongs to and
+    // overcounting this one. Ending the range right after this day is
+    // still fine — a settlement can be processed later than the date it's
+    // attributed to regardless of where the range ends.
+    const dayEnd = dateInputValueToIstMidnight(date) + 86_400_000;
+    const rows = dailyCollectionRows(bills, menuItems, menuCategories, orderedTablesList, customers, -Infinity, dayEnd);
+    const label = formatDateKey(date, { day: "numeric", month: "long" });
+    const totalRow = rows.find((r) => r.Date === label && r.Item === "Total");
+    return {
+      cash: Number(totalRow?.Cash ?? 0),
+      upi: Number(totalRow?.Account ?? 0),
+      credit: Number(totalRow?.Credit ?? 0),
+      settled: 0,
+    };
+  }, [isDateToday, bills, date, menuItems, menuCategories, orderedTablesList, customers]);
   const expensesTotal = dayExpenses.reduce((s, e) => s + e.amount, 0);
   const netCash = cash + upi - expensesTotal;
 
