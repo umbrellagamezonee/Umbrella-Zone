@@ -27,3 +27,8 @@ server/data
 *.njsproj
 *.sln
 *.sw?
+
+# Credit report tool: local data, output and installs
+tools/credit-report/data
+tools/credit-report/out
+tools/credit-report/node_modules
