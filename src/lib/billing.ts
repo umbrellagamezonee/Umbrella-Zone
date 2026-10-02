@@ -457,22 +457,55 @@ export function dailyCollectionRows(
         const cash = s.paymentMethod === "cash" ? s.amount : 0;
         const upi = s.paymentMethod === "upi" ? s.amount : 0;
         const credit = s.paymentMethod === "credit" ? s.amount : 0;
-        let bucket: Bucket;
+        const pushShareChunk = (parts: ChunkPart[]) => {
+          const total = parts.reduce((x, p) => x + p.amount, 0);
+          if (total > 0.005) {
+            queueFor(keyForName(s.payerName)).push({ date: bill.createdAt, remaining: total, total, parts });
+          }
+        };
         if (s.label === "Table charge") {
           if (!bill.tableId || !bill.tableName) continue;
-          bucket = bucketFor(dailyTables, dateKey, bill.tableName);
-        } else {
-          const itemName = s.label.replace(/\s+x\d+$/, "");
-          bucket = bucketFor(dailyCategories, dateKey, categoryLabelFor(itemName));
+          const bucket = bucketFor(dailyTables, dateKey, bill.tableName);
+          addTo(bucket, cash, upi, credit, s.payerName);
+          if (credit > 0.005) pushShareChunk([{ bucket, amount: credit, customerName: s.payerName }]);
+          continue;
         }
-        addTo(bucket, cash, upi, credit, s.payerName);
-        if (credit > 0.005) {
-          queueFor(keyForName(s.payerName)).push({
-            date: bill.createdAt,
-            remaining: credit,
-            total: credit,
-            parts: [{ bucket, amount: credit, customerName: s.payerName }],
-          });
+        const itemName = s.label.replace(/\s+x\d+$/, "");
+        const billItems = bill.canteenItems.filter((i) => i.price * i.qty > 0);
+        const itemsRevenue = billItems.reduce((x, i) => x + i.price * i.qty, 0);
+        // A share named after one item — straight into that item's category.
+        const namedAfterItem = itemNameToCatId.has(itemName.trim().toLowerCase());
+        // Otherwise the label is generic, not an item name: "Food" (a table
+        // bill's canteen part, covering everything ordered) or an older
+        // "Share" (a payer's cut of the whole bill, table and food). Looking
+        // those up as item names dumped them all under "Other" — spread them
+        // over what the bill actually contained instead, the same way a
+        // non-split bill's money is: table vs food by face value, food across
+        // items by each one's share of the food total.
+        const isFoodShare = /^food$/i.test(itemName.trim());
+        const tableWeight =
+          !isFoodShare && bill.tableId && bill.tableName && bill.tableCharge > 0 ? bill.tableCharge : 0;
+        const canteenWeight = itemsRevenue > 0 && bill.canteenCharge > 0 ? bill.canteenCharge : 0;
+        const totalWeight = tableWeight + canteenWeight;
+        if (namedAfterItem || totalWeight <= 0) {
+          const bucket = bucketFor(dailyCategories, dateKey, categoryLabelFor(itemName));
+          addTo(bucket, cash, upi, credit, s.payerName);
+          if (credit > 0.005) pushShareChunk([{ bucket, amount: credit, customerName: s.payerName }]);
+        } else {
+          const parts: ChunkPart[] = [];
+          const put = (bucket: Bucket, frac: number) => {
+            const partCredit = credit * frac;
+            addTo(bucket, cash * frac, upi * frac, partCredit, s.payerName);
+            if (partCredit > 0.005) parts.push({ bucket, amount: partCredit, customerName: s.payerName });
+          };
+          if (tableWeight > 0) put(bucketFor(dailyTables, dateKey, bill.tableName!), tableWeight / totalWeight);
+          if (canteenWeight > 0) {
+            for (const item of billItems) {
+              const frac = ((item.price * item.qty) / itemsRevenue) * (canteenWeight / totalWeight);
+              put(bucketFor(dailyCategories, dateKey, categoryLabelFor(item.name)), frac);
+            }
+          }
+          pushShareChunk(parts);
         }
       }
       continue;
