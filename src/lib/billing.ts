@@ -290,6 +290,8 @@ interface DailyTotals {
   // settlement that couldn't be traced back onto an earlier row in this report.
   untracedCash: number;
   untracedUpi: number;
+  // Credit given that day, person by person.
+  people: Map<string, { issued: number; pending: number }>;
 }
 
 // Day-by-day cash/account/credit breakdown, one block per date — what the
@@ -322,13 +324,12 @@ interface DailyTotals {
 // actually paid. So a table played on the 22nd but only settled on the
 // 25th shows as real cash on the 22nd once the report is regenerated after
 // the 25th — this sheet always reflects where things stand as of right
-// now, not a frozen snapshot of billing day. This only works when the
-// original charge's own date falls inside this report's date range; a
-// settlement clearing older debt from before the range keeps showing under
-// "Credit settlement" on its own date instead, since there's no earlier row
-// in THIS report to attach it to. "Credit from" lists whoever still owes
-// whatever's left of a row's Credit figure, so it doesn't need to be looked
-// up elsewhere.
+// now, not a frozen snapshot of billing day. Tracing always covers the whole
+// history, so a given day shows the same figures whichever dates the report
+// is run for; a settlement whose charge can't be found at all (an advance,
+// or a debt that was never recorded) stays under "Credit settlement" on its
+// own date. "Credit from" lists whoever still owes whatever's left of a
+// row's Credit figure, so it doesn't need to be looked up elsewhere.
 //
 // A table/category that a bill merely touched but nothing was actually
 // billed or collected for yet doesn't get a row at all — a table played on
@@ -338,7 +339,7 @@ interface DailyTotals {
 // created before the range, or a settlement clearing one from before it,
 // still gets matched up correctly. rangeStartMs/rangeEndMs (default: no
 // limit, the whole history) only control which dates' rows actually get
-// printed, and how far back a settlement can reach to reattribute itself.
+// printed.
 //
 // Credit means exactly what the app's own credit balance means: only a bill
 // that's actually paid counts (a stuck-open bill, or a split bill's credit
@@ -398,8 +399,19 @@ function buildDailyCollection(
     // much of it has since been paid off (see creditHisaab).
     issued: number;
     creditByCustomer: Map<string, number>;
+    // Same split of `issued`, by who took the credit — so a day's credit can
+    // be listed person by person (given / since paid / still owed).
+    issuedByCustomer: Map<string, number>;
   };
-  const newBucket = (): Bucket => ({ total: 0, cash: 0, upi: 0, credit: 0, issued: 0, creditByCustomer: new Map() });
+  const newBucket = (): Bucket => ({
+    total: 0,
+    cash: 0,
+    upi: 0,
+    credit: 0,
+    issued: 0,
+    creditByCustomer: new Map(),
+    issuedByCustomer: new Map(),
+  });
   const addTo = (b: Bucket, cash: number, upi: number, credit: number, customerName?: string) => {
     b.cash += cash;
     b.upi += upi;
@@ -408,6 +420,7 @@ function buildDailyCollection(
     b.total += cash + upi;
     if (credit > 0.005 && customerName) {
       b.creditByCustomer.set(customerName, (b.creditByCustomer.get(customerName) ?? 0) + credit);
+      b.issuedByCustomer.set(customerName, (b.issuedByCustomer.get(customerName) ?? 0) + credit);
     }
   };
   const dailyTables = new Map<string, Map<string, Bucket>>();
@@ -448,28 +461,25 @@ function buildDailyCollection(
     queue.push(chunk);
     const pool = advances.get(key);
     if (!pool) return;
-    const inRange = chunk.date >= rangeStartMs && chunk.date < rangeEndMs;
     while (chunk.remaining > 0.005 && pool.length > 0) {
       const adv = pool[0];
       const take = Math.min(adv.amount, chunk.remaining);
       const frac = take / adv.amount;
       const takeCash = adv.cash * frac;
       const takeUpi = adv.upi * frac;
-      if (inRange) {
-        for (const part of chunk.parts) {
-          const partFrac = chunk.total > 0 ? part.amount / chunk.total : 0;
-          const partTake = take * partFrac;
-          part.bucket.credit = Math.max(0, part.bucket.credit - partTake);
-          const prevByCustomer = part.bucket.creditByCustomer.get(part.customerName) ?? 0;
-          part.bucket.creditByCustomer.set(part.customerName, Math.max(0, round(prevByCustomer - partTake)));
-          part.bucket.cash += takeCash * partFrac;
-          part.bucket.upi += takeUpi * partFrac;
-          part.bucket.total += (takeCash + takeUpi) * partFrac;
-        }
-        adv.bucket.cash -= takeCash;
-        adv.bucket.upi -= takeUpi;
-        adv.bucket.total -= takeCash + takeUpi;
+      for (const part of chunk.parts) {
+        const partFrac = chunk.total > 0 ? part.amount / chunk.total : 0;
+        const partTake = take * partFrac;
+        part.bucket.credit = Math.max(0, part.bucket.credit - partTake);
+        const prevByCustomer = part.bucket.creditByCustomer.get(part.customerName) ?? 0;
+        part.bucket.creditByCustomer.set(part.customerName, Math.max(0, prevByCustomer - partTake));
+        part.bucket.cash += takeCash * partFrac;
+        part.bucket.upi += takeUpi * partFrac;
+        part.bucket.total += (takeCash + takeUpi) * partFrac;
       }
+      adv.bucket.cash -= takeCash;
+      adv.bucket.upi -= takeUpi;
+      adv.bucket.total -= takeCash + takeUpi;
       adv.amount -= take;
       adv.cash -= takeCash;
       adv.upi -= takeUpi;
@@ -507,24 +517,15 @@ function buildDailyCollection(
         const chunkFrac = take / settleAmount;
         const takeCash = cashPool * chunkFrac;
         const takeUpi = upiPool * chunkFrac;
-        const inRange = chunk.date >= rangeStartMs && chunk.date < rangeEndMs;
         for (const part of chunk.parts) {
           const partFrac = chunk.total > 0 ? part.amount / chunk.total : 0;
           const partTake = take * partFrac;
-          if (inRange) {
-            part.bucket.credit = Math.max(0, part.bucket.credit - partTake);
-            const prevByCustomer = part.bucket.creditByCustomer.get(part.customerName) ?? 0;
-            part.bucket.creditByCustomer.set(part.customerName, Math.max(0, round(prevByCustomer - partTake)));
-            part.bucket.cash += takeCash * partFrac;
-            part.bucket.upi += takeUpi * partFrac;
-            part.bucket.total += (takeCash + takeUpi) * partFrac;
-          } else {
-            // The charge this is clearing is from before this report's own
-            // range — nowhere in THIS report to trace it back to, so the
-            // money still shows up, just under the settlement's own date
-            // instead of disappearing.
-            addTo(bucketFor(dailyCategories, dateKey, "Credit settlement"), takeCash * partFrac, takeUpi * partFrac, 0);
-          }
+          part.bucket.credit = Math.max(0, part.bucket.credit - partTake);
+          const prevByCustomer = part.bucket.creditByCustomer.get(part.customerName) ?? 0;
+          part.bucket.creditByCustomer.set(part.customerName, Math.max(0, prevByCustomer - partTake));
+          part.bucket.cash += takeCash * partFrac;
+          part.bucket.upi += takeUpi * partFrac;
+          part.bucket.total += (takeCash + takeUpi) * partFrac;
         }
         chunk.remaining -= take;
         left -= take;
@@ -610,7 +611,8 @@ function buildDailyCollection(
       continue;
     }
 
-    const customerName = customers.find((c) => c.id === bill.customerId)?.name ?? "Unknown";
+    const customerName =
+      customers.find((c) => c.id === bill.customerId)?.name ?? settlementPersonName(bill, undefined);
     const chunkParts: ChunkPart[] = [];
 
     if (bill.tableId && bill.tableName && bill.tableCharge > 0) {
@@ -668,6 +670,19 @@ function buildDailyCollection(
   for (const dateKey of dateKeys) {
     const label = formatDateKey(dateKey, { day: "numeric", month: "long" });
     const dayTotal = newBucket();
+    const people = new Map<string, { issued: number; pending: number }>();
+    const countPeople = (b: Bucket) => {
+      for (const [name, amt] of b.issuedByCustomer) {
+        const cur = people.get(name) ?? { issued: 0, pending: 0 };
+        cur.issued += amt;
+        people.set(name, cur);
+      }
+      for (const [name, amt] of b.creditByCustomer) {
+        const cur = people.get(name) ?? { issued: 0, pending: 0 };
+        cur.pending += amt;
+        people.set(name, cur);
+      }
+    };
     const tableMap = dailyTables.get(dateKey);
     // A table that's since been deleted from the list still has real
     // billing on its dates — print it after the current ones rather than
@@ -678,7 +693,10 @@ function buildDailyCollection(
       // Credit given on a row that's since been wiped out entirely by a
       // discount has no cash and nothing left owed — nothing to print, but it
       // was still given, and the day's "credit diya" has to include it.
-      if (b) dayTotal.issued += b.issued;
+      if (b) {
+        dayTotal.issued += b.issued;
+        countPeople(b);
+      }
       if (isEmpty(b)) continue;
       rows.push({
         Date: label,
@@ -697,7 +715,10 @@ function buildDailyCollection(
     const catMap = dailyCategories.get(dateKey);
     for (const label2 of categoryOrder) {
       const b = catMap?.get(label2);
-      if (b) dayTotal.issued += b.issued;
+      if (b) {
+        dayTotal.issued += b.issued;
+        countPeople(b);
+      }
       if (isEmpty(b)) continue;
       rows.push({
         Date: label,
@@ -722,6 +743,7 @@ function buildDailyCollection(
       issued: dayTotal.issued,
       untracedCash: untraced?.cash ?? 0,
       untracedUpi: untraced?.upi ?? 0,
+      people,
     });
     rows.push({
       Date: label,
@@ -759,6 +781,10 @@ export interface CreditHisaabDay {
   // isn't in this report (older than its range, or never recorded).
   untracedCash: number;
   untracedUpi: number;
+  // Who took the credit given that day: how much, how much of it has since
+  // been paid off, and what they still owe from it. Adds up to the day's
+  // issued / settled / pending above.
+  people: { name: string; issued: number; settled: number; pending: number }[];
 }
 
 export interface CreditHisaab {
@@ -795,6 +821,15 @@ export function creditHisaab(
     pending: round(d.credit),
     untracedCash: round(d.untracedCash),
     untracedUpi: round(d.untracedUpi),
+    people: [...d.people.entries()]
+      .map(([name, v]) => ({
+        name,
+        issued: round(v.issued),
+        settled: round(v.issued - v.pending),
+        pending: round(v.pending),
+      }))
+      .filter((x) => x.issued > 0.005 || x.pending > 0.005)
+      .sort((a, b) => b.pending - a.pending || b.issued - a.issued || a.name.localeCompare(b.name)),
   }));
   const sum = (f: (d: CreditHisaabDay) => number) => round(out.reduce((s, d) => s + f(d), 0));
   return {

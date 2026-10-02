@@ -24,8 +24,9 @@ export function loadAll() {
   const orders: any[] = read("final_orders.json").map((r: any) => ({ id: r.id, tableId: r.table_id, customerId: r.customer_id, guestName: r.guest_name, items: r.items ?? [], note: r.note ?? "", status: r.status, createdAt: new Date(r.created_at).getTime() }));
   // the app's store: every non-deleted bill (cancelled ones included)
   const bills: any[] = read("final_bills.json").filter((r: any) => !r.deleted_at).map(billFromRow);
-  const menuItems: any[] = read("final_menuitems.json").map((r: any) => ({ id: r.id, categoryId: r.category_id, name: r.name, price: Number(r.price), costPrice: null, stockQty: null, lowStockThreshold: 0 }));
+  const menuItems: any[] = read("final_menuitems.json").map((r: any) => ({ id: r.id, categoryId: r.category_id, name: r.name, price: Number(r.price), costPrice: r.cost_price != null ? Number(r.cost_price) : null, stockQty: r.stock_qty != null ? Number(r.stock_qty) : null, lowStockThreshold: Number(r.low_stock_threshold ?? 0) }));
+  const expenses: any[] = fs.existsSync(path.join(dir, "final_expenses.json")) ? read("final_expenses.json").map((r: any) => ({ id: r.id, category: r.category, amount: Number(r.amount), note: r.note ?? "", createdAt: new Date(r.created_at).getTime() })) : [];
   const menuCategories: any[] = read("final_menucats.json").map((r: any) => ({ id: r.id, name: r.name }));
   const tables: any[] = read("final_tables.json").map((t: any) => ({ id: t.id, name: t.name }));
-  return { customers, orders, bills, menuItems, menuCategories, tables };
+  return { customers, orders, bills, menuItems, menuCategories, tables, expenses };
 }

@@ -27,7 +27,7 @@ async function fetchAll(table) {
 (async () => {
   const dir = path.join(__dirname, "data");
   fs.mkdirSync(dir, { recursive: true });
-  const tables = { bills: "final_bills", canteen_orders: "final_orders", menu_items: "final_menuitems", menu_categories: "final_menucats", billing_tables: "final_tables", customers: "final_customers" };
+  const tables = { expenses: "final_expenses", bills: "final_bills", canteen_orders: "final_orders", menu_items: "final_menuitems", menu_categories: "final_menucats", billing_tables: "final_tables", customers: "final_customers" };
   for (const [table, file] of Object.entries(tables)) {
     const rows = await fetchAll(table);
     fs.writeFileSync(path.join(dir, file + ".json"), JSON.stringify(rows));
