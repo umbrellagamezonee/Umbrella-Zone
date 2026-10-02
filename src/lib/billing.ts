@@ -750,3 +750,92 @@ export function sumBillMoney(bills: Bill[]): BillMoney {
   }
   return total;
 }
+
+// What actually came into the galla on one date, kept in two parts so it's
+// always clear where the money came from: the day's own bills, and someone
+// paying off an older balance that day (a "credit settlement"). This is the
+// "din ka paisa" view — real cash/account received that day, whichever
+// day's charge it was for. dailyCollectionRows is the other view ("din ka
+// hisaab") that counts a later settlement back on the day it was charged.
+// The Galla Summary screen and the exported Galla sheet both read this one
+// function, so they can't show different numbers for the same day.
+export interface GallaDay {
+  freshCash: number;
+  freshUpi: number;
+  settledCash: number;
+  settledUpi: number;
+  forgiven: number;
+  settledCount: number;
+  creditGiven: number;
+}
+
+export function gallaByDate(bills: Bill[]): Map<string, GallaDay> {
+  const days = new Map<string, GallaDay>();
+  for (const bill of bills) {
+    if (bill.status === "cancelled") continue;
+    const dateKey = toDateInputValue(bill.createdAt);
+    let day = days.get(dateKey);
+    if (!day) {
+      day = { freshCash: 0, freshUpi: 0, settledCash: 0, settledUpi: 0, forgiven: 0, settledCount: 0, creditGiven: 0 };
+      days.set(dateKey, day);
+    }
+    const m = billMoney(bill);
+    if (isCreditSettlement(bill)) {
+      if (bill.status !== "paid") continue;
+      day.settledCash += m.cash;
+      day.settledUpi += m.upi;
+      day.forgiven += bill.discount;
+      day.settledCount += 1;
+    } else {
+      day.freshCash += m.cash;
+      day.freshUpi += m.upi;
+      day.creditGiven += m.credit;
+    }
+  }
+  return days;
+}
+
+export function gallaSummaryRows(
+  bills: Bill[],
+  rangeStartMs = -Infinity,
+  rangeEndMs = Infinity
+): Record<string, string | number>[] {
+  const round = (n: number) => Math.round(n * 100) / 100;
+  const days = gallaByDate(bills);
+  const keys = [...days.keys()]
+    .filter((k) => {
+      const ms = dateInputValueToIstMidnight(k);
+      return ms >= rangeStartMs && ms < rangeEndMs;
+    })
+    .sort();
+  const rows: Record<string, string | number>[] = keys.map((k) => {
+    const d = days.get(k)!;
+    return {
+      Date: formatDateKey(k, { day: "numeric", month: "long" }),
+      "Naye bills - Cash": round(d.freshCash),
+      "Naye bills - Account": round(d.freshUpi),
+      "Credit settle - Cash": round(d.settledCash),
+      "Credit settle - Account": round(d.settledUpi),
+      "Total Cash": round(d.freshCash + d.settledCash),
+      "Total Account": round(d.freshUpi + d.settledUpi),
+      "Credit diya (naya)": round(d.creditGiven),
+      "Credit maaf (discount)": round(d.forgiven),
+      "Settle kitne": d.settledCount,
+    };
+  });
+  if (rows.length === 0) return rows;
+  const total = (key: string) => round(rows.reduce((s, r) => s + (Number(r[key]) || 0), 0));
+  rows.push({
+    Date: "TOTAL",
+    "Naye bills - Cash": total("Naye bills - Cash"),
+    "Naye bills - Account": total("Naye bills - Account"),
+    "Credit settle - Cash": total("Credit settle - Cash"),
+    "Credit settle - Account": total("Credit settle - Account"),
+    "Total Cash": total("Total Cash"),
+    "Total Account": total("Total Account"),
+    "Credit diya (naya)": total("Credit diya (naya)"),
+    "Credit maaf (discount)": total("Credit maaf (discount)"),
+    "Settle kitne": total("Settle kitne"),
+  });
+  return rows;
+}

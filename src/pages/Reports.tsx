@@ -29,6 +29,8 @@ import {
   canteenItemPayments,
   creditSettlementDetails,
   sumBillMoney,
+  gallaByDate,
+  gallaSummaryRows,
 } from "../lib/billing";
 import { billPersonName, billPlace, isCreditSettlement } from "../lib/billLabel";
 import { useCustomersStore } from "../store/useCustomersStore";
@@ -848,20 +850,29 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
           Date: r.Date,
           Cash: r.Cash,
           Account: r.Account,
-          Credit: r.Credit,
+          "Credit baaki": r.Credit,
         }));
       if (cashUpiCreditSummary.length > 0) {
-        const total = (key: "Cash" | "Account" | "Credit") =>
+        const total = (key: "Cash" | "Account" | "Credit baaki") =>
           round(cashUpiCreditSummary.reduce((s, r) => s + (Number(r[key]) || 0), 0));
-        cashUpiCreditSummary.push({ Date: "", Cash: "", Account: "", Credit: "" } as never);
+        cashUpiCreditSummary.push({ Date: "", Cash: "", Account: "", "Credit baaki": "" } as never);
         cashUpiCreditSummary.push({
           Date: "TOTAL",
           Cash: total("Cash"),
           Account: total("Account"),
-          Credit: total("Credit"),
+          "Credit baaki": total("Credit baaki"),
         });
       }
-      addSheet("Cash-UPI-Credit Summary", cashUpiCreditSummary, [16, 12, 12, 12]);
+      // Two sheets, two clearly different questions — "Din ka hisaab" is how
+      // each day's business was paid for (a credit settled later counts back
+      // on the day it was charged); "Galla (din ka paisa)" next to it is the
+      // money that actually came in each day, with settlements broken out.
+      // The Galla Summary screen shows these same two views under these same
+      // names, from the same functions.
+      addSheet("Din ka hisaab", cashUpiCreditSummary, [16, 12, 12, 14]);
+      addSheet("Galla (din ka paisa)", gallaSummaryRows(bills, rangeStartMs, rangeEndMs), [
+        16, 16, 16, 16, 16, 12, 12, 14, 16, 12,
+      ]);
 
       // Needs every bill ever recorded (not just this range) so a
       // settlement that clears old debt from before the range still shows
@@ -1298,6 +1309,7 @@ function GallaSummaryModal({ date, onClose }: { date: string; onClose: () => voi
   const menuCategories = useMenuStore((s) => s.categories);
   const tables = useTablesStore((s) => s.tables);
   const isDateToday = date === toDateInputValue(Date.now());
+  const money = (n: number) => formatMoney(n, currency);
 
   const dayExpenses = useMemo(
     () => expenses.filter((e) => toDateInputValue(e.createdAt) === date),
@@ -1305,37 +1317,52 @@ function GallaSummaryModal({ date, onClose }: { date: string; onClose: () => voi
   );
   const orderedTablesList = useMemo(() => orderedTables(tables), [tables]);
 
-  // Today reads same-day money directly, the same as before — "cash in
-  // drawer" has to match what's physically in the till right now, not a
-  // retroactively adjusted number. Any other (past) date now uses the same
-  // trace-back-to-the-original-charge method as the Daily collection
-  // sheet and the exported reports, so this screen can't show a different
-  // number for a day than what gets downloaded — that mismatch (site says
-  // one thing, the sheet says another) was the actual complaint.
-  const { cash, upi, credit: creditGiven, settled: creditSettled } = useMemo(() => {
-    if (isDateToday) {
-      let cash = 0;
-      let upi = 0;
-      let credit = 0;
-      let settled = 0;
-      const dayActive = bills.filter((b) => toDateInputValue(b.createdAt) === date && b.status !== "cancelled");
-      for (const b of dayActive) {
-        const m = billMoney(b);
-        cash += m.cash;
-        upi += m.upi;
-        credit += m.credit;
-        if (isCreditSettlement(b)) settled += m.cash + m.upi;
-      }
-      return { cash, upi, credit, settled };
-    }
-    // The range has to reach back to the start of history, not just this
-    // one day — a settlement made on this exact day for debt from earlier
-    // would otherwise find its own original charge "out of range" and
-    // fall back to counting itself on this day instead of tracing back,
-    // undercounting whichever earlier day it really belongs to and
-    // overcounting this one. Ending the range right after this day is
-    // still fine — a settlement can be processed later than the date it's
-    // attributed to regardless of where the range ends.
+  // Two views of the same day, kept side by side and named so nobody has to
+  // guess which one they're looking at. The cards and the "kahan se aaya"
+  // table are the galla — real money that came in on this date, including
+  // someone settling an older balance. The "din ka hisaab" block at the
+  // bottom is the same day as the exported sheets show it, with a later
+  // settlement counted back on the day it was charged. Both come from the
+  // same functions the exports use (gallaByDate / dailyCollectionRows), so
+  // this screen and the downloaded sheets can't disagree.
+  const galla = useMemo(
+    () =>
+      gallaByDate(bills).get(date) ?? {
+        freshCash: 0,
+        freshUpi: 0,
+        settledCash: 0,
+        settledUpi: 0,
+        forgiven: 0,
+        settledCount: 0,
+        creditGiven: 0,
+      },
+    [bills, date]
+  );
+  const cash = galla.freshCash + galla.settledCash;
+  const upi = galla.freshUpi + galla.settledUpi;
+  const creditSettled = galla.settledCash + galla.settledUpi;
+
+  const settlements = useMemo(
+    () =>
+      bills
+        .filter((b) => b.status === "paid" && isCreditSettlement(b) && toDateInputValue(b.createdAt) === date)
+        .sort((a, b) => a.createdAt - b.createdAt)
+        .map((b) => ({
+          id: b.id,
+          name: billPersonName(b, customers.find((c) => c.id === b.customerId)),
+          at: b.createdAt,
+          cash: b.amountCash,
+          upi: b.amountUpi,
+          forgiven: b.discount,
+        })),
+    [bills, customers, date]
+  );
+
+  // The range has to reach back to the start of history, not just this one
+  // day — a settlement made on this exact day for older debt would
+  // otherwise find its own original charge "out of range" and count
+  // itself on this day instead of tracing back to where it belongs.
+  const hisaab = useMemo(() => {
     const dayEnd = dateInputValueToIstMidnight(date) + 86_400_000;
     const rows = dailyCollectionRows(bills, menuItems, menuCategories, orderedTablesList, customers, -Infinity, dayEnd);
     const label = formatDateKey(date, { day: "numeric", month: "long" });
@@ -1344,9 +1371,9 @@ function GallaSummaryModal({ date, onClose }: { date: string; onClose: () => voi
       cash: Number(totalRow?.Cash ?? 0),
       upi: Number(totalRow?.Account ?? 0),
       credit: Number(totalRow?.Credit ?? 0),
-      settled: 0,
     };
-  }, [isDateToday, bills, date, menuItems, menuCategories, orderedTablesList, customers]);
+  }, [bills, date, menuItems, menuCategories, orderedTablesList, customers]);
+
   const expensesTotal = dayExpenses.reduce((s, e) => s + e.amount, 0);
   const netCash = cash + upi - expensesTotal;
 
@@ -1357,51 +1384,127 @@ function GallaSummaryModal({ date, onClose }: { date: string; onClose: () => voi
           <p className="text-xs text-[var(--color-text-dim)]">
             {isDateToday ? "Net cash in drawer" : "Net collected that day"}
           </p>
-          <p className="text-3xl font-bold text-[var(--color-primary)]">
-            {formatMoney(netCash, currency)}
-          </p>
+          <p className="text-3xl font-bold text-[var(--color-primary)]">{money(netCash)}</p>
         </div>
 
         <div className="grid grid-cols-2 gap-3">
           <Card>
             <p className="text-xs text-[var(--color-text-dim)]">CASH</p>
-            <p className="text-lg font-bold text-[var(--color-success)] mt-1">
-              {formatMoney(cash, currency)}
-            </p>
+            <p className="text-lg font-bold text-[var(--color-success)] mt-1">{money(cash)}</p>
           </Card>
           <Card>
             <p className="text-xs text-[var(--color-text-dim)]">ACCOUNT</p>
-            <p className="text-lg font-bold text-[var(--color-success)] mt-1">
-              {formatMoney(upi, currency)}
-            </p>
+            <p className="text-lg font-bold text-[var(--color-success)] mt-1">{money(upi)}</p>
           </Card>
           <Card>
             <p className="text-xs text-[var(--color-text-dim)]">CREDIT GIVEN</p>
-            <p className="text-lg font-bold text-[var(--color-warning)] mt-1">
-              {formatMoney(creditGiven, currency)}
-            </p>
+            <p className="text-lg font-bold text-[var(--color-warning)] mt-1">{money(galla.creditGiven)}</p>
+            <p className="text-[10px] text-[var(--color-text-faint)] mt-0.5">naya udhaar</p>
           </Card>
           <Card>
             <p className="text-xs text-[var(--color-text-dim)]">EXPENSES</p>
-            <p className="text-lg font-bold text-[var(--color-danger)] mt-1">
-              -{formatMoney(expensesTotal, currency)}
-            </p>
+            <p className="text-lg font-bold text-[var(--color-danger)] mt-1">-{money(expensesTotal)}</p>
           </Card>
         </div>
 
-        {creditSettled > 0 && (
-          <Card>
-            <p className="text-xs text-[var(--color-text-dim)]">
-              {isDateToday ? "OLD CREDIT SETTLED TODAY" : "OLD CREDIT SETTLED THIS DAY"}
-            </p>
-            <p className="text-lg font-bold text-[var(--color-primary)] mt-1">
-              {formatMoney(creditSettled, currency)}
-            </p>
-            <p className="text-xs text-[var(--color-text-faint)] mt-1">
-              Someone paying off an older balance — already counted inside Cash/Account above, not extra.
-            </p>
-          </Card>
-        )}
+        <Card>
+          <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-2">
+            CASH / ACCOUNT KAHAN SE AAYA
+          </p>
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-[11px] text-[var(--color-text-faint)] text-right">
+                <th className="text-left font-medium pb-1"></th>
+                <th className="font-medium pb-1">Cash</th>
+                <th className="font-medium pb-1">Account</th>
+              </tr>
+            </thead>
+            <tbody className="text-right">
+              <tr className="border-t border-[var(--color-border)]">
+                <td className="text-left py-1.5 text-[var(--color-text-dim)]">Din ke naye bills</td>
+                <td>{money(galla.freshCash)}</td>
+                <td>{money(galla.freshUpi)}</td>
+              </tr>
+              <tr className="border-t border-[var(--color-border)]">
+                <td className="text-left py-1.5 text-[var(--color-text-dim)]">Purana credit settle</td>
+                <td>{money(galla.settledCash)}</td>
+                <td>{money(galla.settledUpi)}</td>
+              </tr>
+              <tr className="border-t-2 border-[var(--color-border)] font-semibold">
+                <td className="text-left py-1.5">Total galla</td>
+                <td>{money(cash)}</td>
+                <td>{money(upi)}</td>
+              </tr>
+            </tbody>
+          </table>
+        </Card>
+
+        <details
+          className="rounded-xl bg-[var(--color-surface-2)] overflow-hidden"
+          open={settlements.length > 0 && settlements.length <= 6}
+        >
+          <summary className="flex items-center justify-between gap-2 px-3 py-2.5 cursor-pointer select-none list-none text-xs font-semibold tracking-wide text-[var(--color-text-dim)]">
+            <span>CREDIT SETTLE — KISNE KITNA DIYA ({settlements.length})</span>
+            <span className="text-[var(--color-primary)]">{money(creditSettled)}</span>
+          </summary>
+          <div className="px-3 pb-3 space-y-2">
+            {settlements.length === 0 ? (
+              <p className="text-xs text-[var(--color-text-faint)]">
+                {isDateToday ? "Aaj" : "Is din"} kisi ne purana credit settle nahi kiya.
+              </p>
+            ) : (
+              <>
+                {settlements.map((s) => (
+                  <div key={s.id} className="flex items-start justify-between gap-2 text-sm">
+                    <div className="min-w-0">
+                      <p className="font-medium truncate">{s.name}</p>
+                      <p className="text-[11px] text-[var(--color-text-faint)]">{formatTime(s.at)}</p>
+                    </div>
+                    <div className="text-right text-xs shrink-0">
+                      {s.cash > 0 && <p className="text-[var(--color-success)]">Cash {money(s.cash)}</p>}
+                      {s.upi > 0 && <p className="text-[var(--color-success)]">Account {money(s.upi)}</p>}
+                      {s.forgiven > 0 && <p className="text-[var(--color-warning)]">Maaf {money(s.forgiven)}</p>}
+                    </div>
+                  </div>
+                ))}
+                <p className="text-[11px] text-[var(--color-text-faint)] pt-1 border-t border-[var(--color-border)]">
+                  Total: Cash {money(galla.settledCash)} + Account {money(galla.settledUpi)}
+                  {galla.forgiven > 0 ? ` (maaf ${money(galla.forgiven)} alag)` : ""}. Ye paisa upar Cash/Account
+                  mein pehle se shaamil hai, alag se nahi.
+                </p>
+              </>
+            )}
+          </div>
+        </details>
+
+        <Card>
+          <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-1">
+            DIN KA HISAAB (Excel sheet jaisa)
+          </p>
+          <p className="text-[11px] text-[var(--color-text-faint)] mb-2">
+            Is din ke bills ka hisaab — baad mein jo credit chuka wo bhi isi din ke Cash/Account mein gina gaya. Credit
+            wahi dikhta hai jo abhi bhi baaki hai.
+          </p>
+          <div className="grid grid-cols-3 gap-2 text-center">
+            <div>
+              <p className="text-[11px] text-[var(--color-text-dim)]">Cash</p>
+              <p className="font-bold text-[var(--color-success)]">{money(hisaab.cash)}</p>
+            </div>
+            <div>
+              <p className="text-[11px] text-[var(--color-text-dim)]">Account</p>
+              <p className="font-bold text-[var(--color-success)]">{money(hisaab.upi)}</p>
+            </div>
+            <div>
+              <p className="text-[11px] text-[var(--color-text-dim)]">Credit baaki</p>
+              <p className="font-bold text-[var(--color-warning)]">{money(hisaab.credit)}</p>
+            </div>
+          </div>
+          <p className="text-[10px] text-[var(--color-text-faint)] mt-2">
+            Upar ka galla = us din asal mein jo paisa aaya. Ye hisaab = us din ke kaam ka. Dono alag cheez hain, isliye
+            number alag ho sakte hain — dono Excel mein bhi isi naam se hain (&quot;Galla&quot; aur &quot;Din ka
+            hisaab&quot;).
+          </p>
+        </Card>
 
         {dayExpenses.length > 0 && (
           <div>
@@ -1415,9 +1518,7 @@ function GallaSummaryModal({ date, onClose }: { date: string; onClose: () => voi
                     <p className="text-sm font-medium">{e.category}</p>
                     <p className="text-xs text-[var(--color-text-dim)]">{e.note}</p>
                   </div>
-                  <p className="text-sm font-semibold text-[var(--color-danger)]">
-                    -{formatMoney(e.amount, currency)}
-                  </p>
+                  <p className="text-sm font-semibold text-[var(--color-danger)]">-{money(e.amount)}</p>
                 </Card>
               ))}
             </div>

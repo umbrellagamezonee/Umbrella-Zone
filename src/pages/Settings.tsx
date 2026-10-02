@@ -14,7 +14,7 @@ import { useExpensesStore } from "../store/useExpensesStore";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { markRestoreInProgress } from "../lib/cloudSync";
 import { formatMoney, formatDateTime, IST_TIME_ZONE } from "../lib/format";
-import { creditBalanceFor, dailyCollectionRows, categoryStockProfit, creditSettlementDetails } from "../lib/billing";
+import { creditBalanceFor, dailyCollectionRows, categoryStockProfit, creditSettlementDetails, gallaSummaryRows } from "../lib/billing";
 import { normalizeName } from "../lib/customerName";
 import {
   LayoutGrid,
@@ -1326,17 +1326,20 @@ function ExportExcelModal({ onClose }: { onClose: () => void }) {
       // the much longer per-table/per-category breakdown.
       const cashUpiCreditSummary: Row[] = dailyRows
         .filter((r) => r.Item === "Total")
-        .map((r) => ({ Date: r.Date, Cash: r.Cash, Account: r.Account, Credit: r.Credit }));
+        .map((r) => ({ Date: r.Date, Cash: r.Cash, Account: r.Account, "Credit baaki": r.Credit }));
       if (cashUpiCreditSummary.length > 0) {
-        cashUpiCreditSummary.push({ Date: "", Cash: "", Account: "", Credit: "" });
+        cashUpiCreditSummary.push({ Date: "", Cash: "", Account: "", "Credit baaki": "" });
         cashUpiCreditSummary.push({
           Date: "TOTAL",
           Cash: sum(cashUpiCreditSummary, "Cash"),
           Account: sum(cashUpiCreditSummary, "Account"),
-          Credit: sum(cashUpiCreditSummary, "Credit"),
+          "Credit baaki": sum(cashUpiCreditSummary, "Credit baaki"),
         });
       }
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(cashUpiCreditSummary), "Cash-UPI-Credit Summary");
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(cashUpiCreditSummary), "Din ka hisaab");
+      // The other half of the same pair — what actually came in each day,
+      // with credit settlements broken out (see Reports' Galla Summary).
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(gallaSummaryRows(activeBills)), "Galla (din ka paisa)");
 
       // Every credit settlement ever recorded, with the date of the oldest
       // charge it started clearing — a settlement is assumed to clear
