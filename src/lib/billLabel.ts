@@ -29,6 +29,16 @@ export function billPlace(bill: Bill): string {
   return "Canteen";
 }
 
+// Who a credit settlement was FOR. A settlement bill carries no name of its
+// own — only the customer id — so when that profile has since been deleted
+// there's nothing to show but the placeholder "Credit settlement". Say plainly
+// that the profile is gone instead, with enough of its id to tell two apart.
+export function settlementPersonName(bill: Bill, customer: Customer | undefined): string {
+  if (customer && !customer.isWalkIn) return customer.name;
+  if (!bill.customerId || bill.customerId === "walk-in" || customer?.isWalkIn) return "Walk-in / koi customer nahi";
+  return `Delete hua profile #${bill.customerId.slice(0, 4)}`;
+}
+
 export function isCreditSettlement(bill: Bill): boolean {
   return !bill.tableId && bill.tableName === "Credit settlement";
 }

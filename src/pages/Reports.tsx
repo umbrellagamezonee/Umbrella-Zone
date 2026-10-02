@@ -31,8 +31,12 @@ import {
   sumBillMoney,
   gallaByDate,
   gallaSummaryRows,
+  creditHisaab,
+  creditHisaabSheetRows,
+  creditPendingReport,
+  creditPendingSheetRows,
 } from "../lib/billing";
-import { billPersonName, billPlace, isCreditSettlement } from "../lib/billLabel";
+import { billPersonName, billPlace, isCreditSettlement, settlementPersonName } from "../lib/billLabel";
 import { useCustomersStore } from "../store/useCustomersStore";
 import { orderedTables } from "../store/useTablesStore";
 import { BillDetailModal } from "../components/BillDetailModal";
@@ -707,6 +711,20 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
         XLSX.utils.book_append_sheet(wb, ws, name.slice(0, 31));
       }
 
+      // The credit picture goes first: day by day how much came in as
+      // cash/account and how much credit was given and since paid off (for
+      // this range), then exactly who owes right now (always as of today,
+      // whatever range is picked). Both tie to each other and to the Credits
+      // page — see creditPendingSheetRows.
+      addSheet(
+        "Credit hisaab",
+        creditHisaabSheetRows(
+          creditHisaab(bills, menuItems, menuCategories, orderedTablesList, customers, rangeStartMs, rangeEndMs)
+        ),
+        [44, 12, 12, 13, 17, 13]
+      );
+      addSheet("Credit baaki - kiska", creditPendingSheetRows(creditPendingReport(bills, customers, orders)), [56, 26, 20, 14]);
+
       // Day-by-day, every table and every canteen category together in one
       // simple total-per-item view — reuses the same per-date figures as the
       // Daily collection sheet, just added back into one number instead of
@@ -838,38 +856,6 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
       );
       addSheet("Daily collection", dailyRowsForRange, [16, 16, 16, 12, 12, 12, 26]);
 
-      // A plain day-by-day Cash/Account/Credit number, nothing else — just
-      // the "Total" row already computed above for each date, pulled out
-      // into its own sheet so it doesn't need to be found inside the much
-      // longer per-table/per-category breakdown. Same figures either way:
-      // a credit settled later already shows as Cash/Account back on the
-      // day the original charge happened, not the day it was paid off.
-      const cashUpiCreditSummary = dailyRowsForRange
-        .filter((r) => r.Item === "Total")
-        .map((r) => ({
-          Date: r.Date,
-          Cash: r.Cash,
-          Account: r.Account,
-          "Credit baaki": r.Credit,
-        }));
-      if (cashUpiCreditSummary.length > 0) {
-        const total = (key: "Cash" | "Account" | "Credit baaki") =>
-          round(cashUpiCreditSummary.reduce((s, r) => s + (Number(r[key]) || 0), 0));
-        cashUpiCreditSummary.push({ Date: "", Cash: "", Account: "", "Credit baaki": "" } as never);
-        cashUpiCreditSummary.push({
-          Date: "TOTAL",
-          Cash: total("Cash"),
-          Account: total("Account"),
-          "Credit baaki": total("Credit baaki"),
-        });
-      }
-      // Two sheets, two clearly different questions — "Din ka hisaab" is how
-      // each day's business was paid for (a credit settled later counts back
-      // on the day it was charged); "Galla (din ka paisa)" next to it is the
-      // money that actually came in each day, with settlements broken out.
-      // The Galla Summary screen shows these same two views under these same
-      // names, from the same functions.
-      addSheet("Din ka hisaab", cashUpiCreditSummary, [16, 12, 12, 14]);
       addSheet("Galla (din ka paisa)", gallaSummaryRows(bills, rangeStartMs, rangeEndMs), [
         16, 16, 16, 16, 16, 12, 12, 14, 16, 12,
       ]);
@@ -885,6 +871,9 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
           Date: formatDateTime(r.date),
           Customer: r.customerName,
           "Amount settled": round(r.amount),
+          Cash: round(r.cash),
+          Account: round(r.upi),
+          "Maaf (discount)": round(r.discount),
           "Oldest unpaid since": r.oldestUnpaidSince != null ? formatDateTime(r.oldestUnpaidSince) : "—",
           "Days pending": r.oldestUnpaidSince != null ? Math.round((r.date - r.oldestUnpaidSince) / 86400000) : "",
         }));
@@ -893,11 +882,14 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
           Date: "",
           Customer: "TOTAL",
           "Amount settled": round(settlementRows.reduce((s, r) => s + r["Amount settled"], 0)),
+          Cash: round(settlementRows.reduce((s, r) => s + r.Cash, 0)),
+          Account: round(settlementRows.reduce((s, r) => s + r.Account, 0)),
+          "Maaf (discount)": round(settlementRows.reduce((s, r) => s + r["Maaf (discount)"], 0)),
           "Oldest unpaid since": "",
           "Days pending": "",
         });
       }
-      addSheet("Credit Settlements", settlementRows, [18, 22, 13, 18, 12]);
+      addSheet("Credit Settlements", settlementRows, [18, 22, 13, 10, 10, 14, 18, 12]);
 
       // How the period's money actually arrived — cash and account already
       // include settlements paid in this range (real money someone's
@@ -1349,7 +1341,7 @@ function GallaSummaryModal({ date, onClose }: { date: string; onClose: () => voi
         .sort((a, b) => a.createdAt - b.createdAt)
         .map((b) => ({
           id: b.id,
-          name: billPersonName(b, customers.find((c) => c.id === b.customerId)),
+          name: settlementPersonName(b, customers.find((c) => c.id === b.customerId)),
           at: b.createdAt,
           cash: b.amountCash,
           upi: b.amountUpi,
@@ -1364,13 +1356,15 @@ function GallaSummaryModal({ date, onClose }: { date: string; onClose: () => voi
   // itself on this day instead of tracing back to where it belongs.
   const hisaab = useMemo(() => {
     const dayEnd = dateInputValueToIstMidnight(date) + 86_400_000;
-    const rows = dailyCollectionRows(bills, menuItems, menuCategories, orderedTablesList, customers, -Infinity, dayEnd);
-    const label = formatDateKey(date, { day: "numeric", month: "long" });
-    const totalRow = rows.find((r) => r.Date === label && r.Item === "Total");
+    const day = creditHisaab(bills, menuItems, menuCategories, orderedTablesList, customers, -Infinity, dayEnd).days.find(
+      (d) => d.dateKey === date
+    );
     return {
-      cash: Number(totalRow?.Cash ?? 0),
-      upi: Number(totalRow?.Account ?? 0),
-      credit: Number(totalRow?.Credit ?? 0),
+      cash: day?.cash ?? 0,
+      upi: day?.upi ?? 0,
+      issued: day?.issued ?? 0,
+      settled: day?.settled ?? 0,
+      pending: day?.pending ?? 0,
     };
   }, [bills, date, menuItems, menuCategories, orderedTablesList, customers]);
 
@@ -1479,13 +1473,12 @@ function GallaSummaryModal({ date, onClose }: { date: string; onClose: () => voi
 
         <Card>
           <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-1">
-            DIN KA HISAAB (Excel sheet jaisa)
+            DIN KA HISAAB (Excel ki &quot;Credit hisaab&quot; sheet jaisa)
           </p>
           <p className="text-[11px] text-[var(--color-text-faint)] mb-2">
-            Is din ke bills ka hisaab — baad mein jo credit chuka wo bhi isi din ke Cash/Account mein gina gaya. Credit
-            wahi dikhta hai jo abhi bhi baaki hai.
+            Is din ke bills ka hisaab — baad mein jo credit chuka wo bhi isi din ke Cash/Account mein gina gaya.
           </p>
-          <div className="grid grid-cols-3 gap-2 text-center">
+          <div className="grid grid-cols-2 gap-x-2 gap-y-3 text-center">
             <div>
               <p className="text-[11px] text-[var(--color-text-dim)]">Cash</p>
               <p className="font-bold text-[var(--color-success)]">{money(hisaab.cash)}</p>
@@ -1495,14 +1488,22 @@ function GallaSummaryModal({ date, onClose }: { date: string; onClose: () => voi
               <p className="font-bold text-[var(--color-success)]">{money(hisaab.upi)}</p>
             </div>
             <div>
-              <p className="text-[11px] text-[var(--color-text-dim)]">Credit baaki</p>
-              <p className="font-bold text-[var(--color-warning)]">{money(hisaab.credit)}</p>
+              <p className="text-[11px] text-[var(--color-text-dim)]">Credit diya</p>
+              <p className="font-bold text-[var(--color-warning)]">{money(hisaab.issued)}</p>
             </div>
+            <div>
+              <p className="text-[11px] text-[var(--color-text-dim)]">Isme se settle hua</p>
+              <p className="font-bold text-[var(--color-success)]">{money(hisaab.settled)}</p>
+            </div>
+          </div>
+          <div className="mt-3 flex items-center justify-between border-t border-[var(--color-border)] pt-2">
+            <p className="text-xs text-[var(--color-text-dim)]">Credit baaki (diya − settle)</p>
+            <p className="font-bold text-[var(--color-warning)]">{money(hisaab.pending)}</p>
           </div>
           <p className="text-[10px] text-[var(--color-text-faint)] mt-2">
             Upar ka galla = us din asal mein jo paisa aaya. Ye hisaab = us din ke kaam ka. Dono alag cheez hain, isliye
-            number alag ho sakte hain — dono Excel mein bhi isi naam se hain (&quot;Galla&quot; aur &quot;Din ka
-            hisaab&quot;).
+            number alag ho sakte hain. Poori date-wise list Excel ki &quot;Credit hisaab&quot; sheet mein hai, aur kiska
+            credit baaki hai wo &quot;Credit baaki - kiska&quot; sheet mein.
           </p>
         </Card>
 

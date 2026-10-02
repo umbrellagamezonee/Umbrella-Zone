@@ -14,7 +14,17 @@ import { useExpensesStore } from "../store/useExpensesStore";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { markRestoreInProgress } from "../lib/cloudSync";
 import { formatMoney, formatDateTime, IST_TIME_ZONE } from "../lib/format";
-import { creditBalanceFor, dailyCollectionRows, categoryStockProfit, creditSettlementDetails, gallaSummaryRows } from "../lib/billing";
+import {
+  creditBalanceFor,
+  dailyCollectionRows,
+  categoryStockProfit,
+  creditSettlementDetails,
+  gallaSummaryRows,
+  creditHisaab,
+  creditHisaabSheetRows,
+  creditPendingReport,
+  creditPendingSheetRows,
+} from "../lib/billing";
 import { normalizeName } from "../lib/customerName";
 import {
   LayoutGrid,
@@ -1089,6 +1099,27 @@ function ExportExcelModal({ onClose }: { onClose: () => void }) {
       // Stock & Profit sheet, is based only on real (non-cancelled) bills.
       const activeBills = bills.filter((b) => b.status !== "cancelled");
 
+      // The two sheets to open first, so the credit picture is the first
+      // thing in the file instead of buried among the rest: day by day how
+      // much came in as cash/account and how much credit was given and since
+      // paid off, then exactly who still owes. Both tie to each other and to
+      // the Credits page (see creditPendingSheetRows).
+      const addFirstSheet = (rows: Row[], name: string, widths: number[]) => {
+        const ws = XLSX.utils.json_to_sheet(rows);
+        ws["!cols"] = widths.map((wch) => ({ wch }));
+        XLSX.utils.book_append_sheet(wb, ws, name);
+      };
+      addFirstSheet(
+        creditHisaabSheetRows(creditHisaab(activeBills, items, categories, orderedTables(tables), customers)),
+        "Credit hisaab",
+        [44, 12, 12, 13, 17, 13]
+      );
+      addFirstSheet(
+        creditPendingSheetRows(creditPendingReport(bills, customers, orders)),
+        "Credit baaki - kiska",
+        [56, 26, 20, 14]
+      );
+
       const billRows: Row[] = [...bills]
         .sort((a, b) => a.createdAt - b.createdAt)
         .map((b) => {
@@ -1321,24 +1352,10 @@ function ExportExcelModal({ onClose }: { onClose: () => void }) {
       const dailyRows = dailyCollectionRows(activeBills, items, categories, orderedTables(tables), customers);
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(dailyRows), "Daily collection");
 
-      // A plain day-by-day Cash/Account/Credit number pulled out of the
-      // sheet above into its own, so it doesn't need to be found inside
-      // the much longer per-table/per-category breakdown.
-      const cashUpiCreditSummary: Row[] = dailyRows
-        .filter((r) => r.Item === "Total")
-        .map((r) => ({ Date: r.Date, Cash: r.Cash, Account: r.Account, "Credit baaki": r.Credit }));
-      if (cashUpiCreditSummary.length > 0) {
-        cashUpiCreditSummary.push({ Date: "", Cash: "", Account: "", "Credit baaki": "" });
-        cashUpiCreditSummary.push({
-          Date: "TOTAL",
-          Cash: sum(cashUpiCreditSummary, "Cash"),
-          Account: sum(cashUpiCreditSummary, "Account"),
-          "Credit baaki": sum(cashUpiCreditSummary, "Credit baaki"),
-        });
-      }
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(cashUpiCreditSummary), "Din ka hisaab");
-      // The other half of the same pair — what actually came in each day,
-      // with credit settlements broken out (see Reports' Galla Summary).
+      // What actually came into the galla each day, with credit settlements
+      // broken out (see Reports' Galla Summary). The Credit hisaab sheet at
+      // the front is the other view — a later settlement counted back on the
+      // day it was charged.
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(gallaSummaryRows(activeBills)), "Galla (din ka paisa)");
 
       // Every credit settlement ever recorded, with the date of the oldest
@@ -1351,6 +1368,9 @@ function ExportExcelModal({ onClose }: { onClose: () => void }) {
           Date: new Date(r.date).toLocaleString([], { timeZone: IST_TIME_ZONE }),
           Customer: r.customerName,
           "Amount settled": r.amount,
+          Cash: r.cash,
+          Account: r.upi,
+          "Maaf (discount)": r.discount,
           "Oldest unpaid since": r.oldestUnpaidSince != null ? new Date(r.oldestUnpaidSince).toLocaleString([], { timeZone: IST_TIME_ZONE }) : "—",
           "Days pending": r.oldestUnpaidSince != null ? Math.round((r.date - r.oldestUnpaidSince) / 86400000) : "",
         }));
@@ -1359,6 +1379,9 @@ function ExportExcelModal({ onClose }: { onClose: () => void }) {
           Date: "",
           Customer: "TOTAL",
           "Amount settled": sum(settlementRows, "Amount settled"),
+          Cash: sum(settlementRows, "Cash"),
+          Account: sum(settlementRows, "Account"),
+          "Maaf (discount)": sum(settlementRows, "Maaf (discount)"),
           "Oldest unpaid since": "",
           "Days pending": "",
         });
@@ -1375,7 +1398,9 @@ function ExportExcelModal({ onClose }: { onClose: () => void }) {
     <Modal title="Export Data (Excel)" onClose={onClose}>
       <div className="space-y-4">
         <p className="text-sm text-[var(--color-text-dim)]">
-          Everything in one Excel file (.xlsx) — Bills, Canteen Items, Customers, Expenses,
+          Everything in one Excel file (.xlsx) — first two sheets are Credit hisaab (day by day:
+          cash, account, credit diya, kitna settle hua, kitna baaki) and Credit baaki - kiska
+          (jinka credit sach mein baaki hai), then Bills, Canteen Items, Customers, Expenses,
           Stock &amp; Profit, Category Stock &amp; Profit (Food/Drinks/Cigarette/Chocolate
           Sale/Purchase/Profit across all time), Daily collection (day-by-day cash/account
           by table and item), and Credit Settlements (every payoff, with how much and the

@@ -1,6 +1,6 @@
 import type { Bill, CanteenOrder, Customer, Expense, MenuCategory, MenuItem, PaymentMethod } from "../types";
 import { normalizeName } from "./customerName";
-import { isCreditSettlement } from "./billLabel";
+import { isCreditSettlement, settlementPersonName } from "./billLabel";
 import { toDateInputValue, formatDateKey, dateInputValueToIstMidnight } from "./format";
 
 export interface BillMoney {
@@ -280,6 +280,18 @@ export interface DailyCollectionRow {
   [key: string]: string | number;
 }
 
+interface DailyTotals {
+  dateKey: string;
+  cash: number;
+  upi: number;
+  credit: number;
+  issued: number;
+  // Cash/account that landed on this date under "Credit settlement" — a
+  // settlement that couldn't be traced back onto an earlier row in this report.
+  untracedCash: number;
+  untracedUpi: number;
+}
+
 // Day-by-day cash/account/credit breakdown, one block per date — what the
 // owner hands to their accountant: for each day, how much of each table's
 // and each canteen category's billing came in as cash, as account, and how
@@ -327,6 +339,12 @@ export interface DailyCollectionRow {
 // still gets matched up correctly. rangeStartMs/rangeEndMs (default: no
 // limit, the whole history) only control which dates' rows actually get
 // printed, and how far back a settlement can reach to reattribute itself.
+//
+// Credit means exactly what the app's own credit balance means: only a bill
+// that's actually paid counts (a stuck-open bill, or a split bill's credit
+// share while the bill is still open, isn't credit yet), and a customer who
+// paid ahead of being owed anything has that advance netted against their
+// next charge.
 export function dailyCollectionRows(
   allBills: Bill[],
   menuItems: MenuItem[],
@@ -336,6 +354,26 @@ export function dailyCollectionRows(
   rangeStartMs = -Infinity,
   rangeEndMs = Infinity
 ): DailyCollectionRow[] {
+  return buildDailyCollection(
+    allBills,
+    menuItems,
+    menuCategories,
+    orderedTablesList,
+    customers,
+    rangeStartMs,
+    rangeEndMs
+  ).rows;
+}
+
+function buildDailyCollection(
+  allBills: Bill[],
+  menuItems: MenuItem[],
+  menuCategories: MenuCategory[],
+  orderedTablesList: { name: string }[],
+  customers: Customer[],
+  rangeStartMs: number,
+  rangeEndMs: number
+): { rows: DailyCollectionRow[]; days: DailyTotals[] } {
   const round = (n: number) => Math.round(n * 100) / 100;
 
   const catIdToLabel = new Map<string, string>();
@@ -355,13 +393,18 @@ export function dailyCollectionRows(
     cash: number;
     upi: number;
     credit: number;
+    // Credit originally given on this row, before any settlement was traced
+    // back onto it — `credit` is what's still owed, `issued - credit` is how
+    // much of it has since been paid off (see creditHisaab).
+    issued: number;
     creditByCustomer: Map<string, number>;
   };
-  const newBucket = (): Bucket => ({ total: 0, cash: 0, upi: 0, credit: 0, creditByCustomer: new Map() });
+  const newBucket = (): Bucket => ({ total: 0, cash: 0, upi: 0, credit: 0, issued: 0, creditByCustomer: new Map() });
   const addTo = (b: Bucket, cash: number, upi: number, credit: number, customerName?: string) => {
     b.cash += cash;
     b.upi += upi;
     b.credit += credit;
+    b.issued += credit;
     b.total += cash + upi;
     if (credit > 0.005 && customerName) {
       b.creditByCustomer.set(customerName, (b.creditByCustomer.get(customerName) ?? 0) + credit);
@@ -393,6 +436,49 @@ export function dailyCollectionRows(
     return customers.find((c) => normalizeName(c.name) === nameKey)?.id ?? `name:${nameKey}`;
   };
 
+  // A customer who pays before anything is owed (or pays more than they
+  // owed) is sitting on an advance. The app's own balance nets it against
+  // their NEXT charge, so this does too — otherwise a later bill would look
+  // like fresh credit here while the Credits page already shows it cleared.
+  // Until that happens the money stays on the settlement's own date.
+  type Advance = { bucket: Bucket; cash: number; upi: number; amount: number };
+  const advances = new Map<string, Advance[]>();
+  const pushChunk = (key: string, chunk: DebtChunk) => {
+    const queue = queueFor(key);
+    queue.push(chunk);
+    const pool = advances.get(key);
+    if (!pool) return;
+    const inRange = chunk.date >= rangeStartMs && chunk.date < rangeEndMs;
+    while (chunk.remaining > 0.005 && pool.length > 0) {
+      const adv = pool[0];
+      const take = Math.min(adv.amount, chunk.remaining);
+      const frac = take / adv.amount;
+      const takeCash = adv.cash * frac;
+      const takeUpi = adv.upi * frac;
+      if (inRange) {
+        for (const part of chunk.parts) {
+          const partFrac = chunk.total > 0 ? part.amount / chunk.total : 0;
+          const partTake = take * partFrac;
+          part.bucket.credit = Math.max(0, part.bucket.credit - partTake);
+          const prevByCustomer = part.bucket.creditByCustomer.get(part.customerName) ?? 0;
+          part.bucket.creditByCustomer.set(part.customerName, Math.max(0, round(prevByCustomer - partTake)));
+          part.bucket.cash += takeCash * partFrac;
+          part.bucket.upi += takeUpi * partFrac;
+          part.bucket.total += (takeCash + takeUpi) * partFrac;
+        }
+        adv.bucket.cash -= takeCash;
+        adv.bucket.upi -= takeUpi;
+        adv.bucket.total -= takeCash + takeUpi;
+      }
+      adv.amount -= take;
+      adv.cash -= takeCash;
+      adv.upi -= takeUpi;
+      chunk.remaining -= take;
+      if (adv.amount <= 0.005) pool.shift();
+    }
+    if (chunk.remaining <= 0.005) queue.pop();
+  };
+
   const sorted = allBills
     .filter((b) => b.status !== "cancelled")
     .slice()
@@ -400,6 +486,12 @@ export function dailyCollectionRows(
 
   for (const bill of sorted) {
     const dateKey = toDateInputValue(bill.createdAt);
+
+    // A non-split bill nobody has settled yet (checkout started, no payment
+    // method ever picked) hasn't turned into cash, account or credit — the
+    // app lists it under what's still pending instead (see customerOpenBills),
+    // not as credit.
+    if (!bill.shares && bill.status !== "paid") continue;
 
     if (isCreditSettlement(bill)) {
       const key = bill.customerId ?? `name:${normalizeName(bill.tableName ?? "")}`;
@@ -420,7 +512,7 @@ export function dailyCollectionRows(
           const partFrac = chunk.total > 0 ? part.amount / chunk.total : 0;
           const partTake = take * partFrac;
           if (inRange) {
-            part.bucket.credit = Math.max(0, round(part.bucket.credit - partTake));
+            part.bucket.credit = Math.max(0, part.bucket.credit - partTake);
             const prevByCustomer = part.bucket.creditByCustomer.get(part.customerName) ?? 0;
             part.bucket.creditByCustomer.set(part.customerName, Math.max(0, round(prevByCustomer - partTake)));
             part.bucket.cash += takeCash * partFrac;
@@ -444,7 +536,11 @@ export function dailyCollectionRows(
         // bill that's since been deleted). Still real money, so it goes
         // under the settlement's own date rather than being dropped.
         const frac = left / settleAmount;
-        addTo(bucketFor(dailyCategories, dateKey, "Credit settlement"), cashPool * frac, upiPool * frac, 0);
+        const bucket = bucketFor(dailyCategories, dateKey, "Credit settlement");
+        addTo(bucket, cashPool * frac, upiPool * frac, 0);
+        const pool = advances.get(key) ?? [];
+        pool.push({ bucket, cash: cashPool * frac, upi: upiPool * frac, amount: left });
+        advances.set(key, pool);
       }
       continue;
     }
@@ -456,11 +552,14 @@ export function dailyCollectionRows(
         if (s.status !== "paid" || !s.paymentMethod) continue;
         const cash = s.paymentMethod === "cash" ? s.amount : 0;
         const upi = s.paymentMethod === "upi" ? s.amount : 0;
-        const credit = s.paymentMethod === "credit" ? s.amount : 0;
+        // A credit share on a split bill that's still open isn't on anyone's
+        // credit balance yet (creditBalanceFor only counts paid bills), so it
+        // isn't counted here either until the bill closes.
+        const credit = s.paymentMethod === "credit" && bill.status === "paid" ? s.amount : 0;
         const pushShareChunk = (parts: ChunkPart[]) => {
           const total = parts.reduce((x, p) => x + p.amount, 0);
           if (total > 0.005) {
-            queueFor(keyForName(s.payerName)).push({ date: bill.createdAt, remaining: total, total, parts });
+            pushChunk(keyForName(s.payerName), { date: bill.createdAt, remaining: total, total, parts });
           }
         };
         if (s.label === "Table charge") {
@@ -540,7 +639,7 @@ export function dailyCollectionRows(
 
     if (chunkParts.length > 0 && bill.customerId) {
       const total = chunkParts.reduce((s, p) => s + p.amount, 0);
-      if (total > 0.005) queueFor(bill.customerId).push({ date: bill.createdAt, remaining: total, total, parts: chunkParts });
+      if (total > 0.005) pushChunk(bill.customerId, { date: bill.createdAt, remaining: total, total, parts: chunkParts });
     }
   }
 
@@ -564,12 +663,22 @@ export function dailyCollectionRows(
   const isEmpty = (b: Bucket | undefined): b is undefined =>
     !b || (Math.abs(b.total) < 0.005 && Math.abs(b.credit) < 0.005);
   const rows: DailyCollectionRow[] = [];
+  const days: DailyTotals[] = [];
+  const listedTables = new Set(uniqueTables.map((t) => t.name));
   for (const dateKey of dateKeys) {
     const label = formatDateKey(dateKey, { day: "numeric", month: "long" });
     const dayTotal = newBucket();
     const tableMap = dailyTables.get(dateKey);
-    for (const t of uniqueTables) {
+    // A table that's since been deleted from the list still has real
+    // billing on its dates — print it after the current ones rather than
+    // leaving its money out of the day's total.
+    const removedTables = [...(tableMap?.keys() ?? [])].filter((name) => !listedTables.has(name)).sort();
+    for (const t of [...uniqueTables, ...removedTables.map((name) => ({ name }))]) {
       const b = tableMap?.get(t.name);
+      // Credit given on a row that's since been wiped out entirely by a
+      // discount has no cash and nothing left owed — nothing to print, but it
+      // was still given, and the day's "credit diya" has to include it.
+      if (b) dayTotal.issued += b.issued;
       if (isEmpty(b)) continue;
       rows.push({
         Date: label,
@@ -588,6 +697,7 @@ export function dailyCollectionRows(
     const catMap = dailyCategories.get(dateKey);
     for (const label2 of categoryOrder) {
       const b = catMap?.get(label2);
+      if (b) dayTotal.issued += b.issued;
       if (isEmpty(b)) continue;
       rows.push({
         Date: label,
@@ -603,6 +713,16 @@ export function dailyCollectionRows(
       dayTotal.upi += b.upi;
       dayTotal.credit += b.credit;
     }
+    const untraced = catMap?.get("Credit settlement");
+    days.push({
+      dateKey,
+      cash: dayTotal.cash,
+      upi: dayTotal.upi,
+      credit: dayTotal.credit,
+      issued: dayTotal.issued,
+      untracedCash: untraced?.cash ?? 0,
+      untracedUpi: untraced?.upi ?? 0,
+    });
     rows.push({
       Date: label,
       Item: "Total",
@@ -613,6 +733,118 @@ export function dailyCollectionRows(
       "Credit from": "",
     });
     rows.push({ Date: "", Item: "", "Total collection": "", Cash: "", Account: "", Credit: "", "Credit from": "" });
+  }
+  return { rows, days };
+}
+
+// One line per date for the plain "Credit hisaab" sheet and the PDF built
+// from it: how much of that day's billing came in as cash and as account
+// (a credit paid off later already counted back on the day it was charged),
+// how much credit was given that day, how much of THAT credit has since been
+// paid off (cash + account + any discount given), and what's still owed. Per
+// line, diya - settle = baaki, and the three totals at the bottom add up the
+// same way — so total credit given, minus total settled, is exactly what's
+// still pending, with nothing else to reconcile. It comes from the very same
+// pass as dailyCollectionRows, so it can't disagree with the Daily
+// collection / Din ka hisaab figures for the same day.
+export interface CreditHisaabDay {
+  dateKey: string;
+  label: string;
+  cash: number;
+  upi: number;
+  issued: number;
+  settled: number;
+  pending: number;
+  // Part of cash/upi above that came from a settlement whose original charge
+  // isn't in this report (older than its range, or never recorded).
+  untracedCash: number;
+  untracedUpi: number;
+}
+
+export interface CreditHisaab {
+  days: CreditHisaabDay[];
+  total: { cash: number; upi: number; issued: number; settled: number; pending: number; untracedCash: number; untracedUpi: number };
+}
+
+export function creditHisaab(
+  allBills: Bill[],
+  menuItems: MenuItem[],
+  menuCategories: MenuCategory[],
+  orderedTablesList: { name: string }[],
+  customers: Customer[],
+  rangeStartMs = -Infinity,
+  rangeEndMs = Infinity
+): CreditHisaab {
+  const round = (n: number) => Math.round(n * 100) / 100;
+  const { days } = buildDailyCollection(
+    allBills,
+    menuItems,
+    menuCategories,
+    orderedTablesList,
+    customers,
+    rangeStartMs,
+    rangeEndMs
+  );
+  const out: CreditHisaabDay[] = days.map((d) => ({
+    dateKey: d.dateKey,
+    label: formatDateKey(d.dateKey, { day: "numeric", month: "long" }),
+    cash: round(d.cash),
+    upi: round(d.upi),
+    issued: round(d.issued),
+    settled: round(d.issued - d.credit),
+    pending: round(d.credit),
+    untracedCash: round(d.untracedCash),
+    untracedUpi: round(d.untracedUpi),
+  }));
+  const sum = (f: (d: CreditHisaabDay) => number) => round(out.reduce((s, d) => s + f(d), 0));
+  return {
+    days: out,
+    total: {
+      cash: sum((d) => d.cash),
+      upi: sum((d) => d.upi),
+      issued: sum((d) => d.issued),
+      settled: sum((d) => d.settled),
+      pending: sum((d) => d.pending),
+      untracedCash: sum((d) => d.untracedCash),
+      untracedUpi: sum((d) => d.untracedUpi),
+    },
+  };
+}
+
+// The same thing as sheet rows, for both Excel exports: one line per date, a
+// TOTAL line, then the three headline numbers spelled out in plain words.
+export function creditHisaabSheetRows(h: CreditHisaab): Record<string, string | number>[] {
+  const blank = { Date: "", Cash: "", Account: "", "Credit diya": "", "Credit settle hua": "", "Credit baaki": "" };
+  const rows: Record<string, string | number>[] = h.days.map((d) => ({
+    Date: d.label,
+    Cash: d.cash,
+    Account: d.upi,
+    "Credit diya": d.issued,
+    "Credit settle hua": d.settled,
+    "Credit baaki": d.pending,
+  }));
+  if (rows.length === 0) return rows;
+  rows.push({
+    Date: "TOTAL",
+    Cash: h.total.cash,
+    Account: h.total.upi,
+    "Credit diya": h.total.issued,
+    "Credit settle hua": h.total.settled,
+    "Credit baaki": h.total.pending,
+  });
+  rows.push({ ...blank });
+  rows.push({ ...blank, Date: "KUL HISAAB" });
+  rows.push({ ...blank, Date: "Total credit diya", "Credit diya": h.total.issued });
+  rows.push({ ...blank, Date: "Total credit settle hua (Cash + Account + maaf)", "Credit settle hua": h.total.settled });
+  rows.push({ ...blank, Date: "Credit baaki (diya - settle)", "Credit baaki": h.total.pending });
+  if (h.total.untracedCash + h.total.untracedUpi > 0.005) {
+    rows.push({ ...blank });
+    rows.push({
+      ...blank,
+      Date: "Note: purane credit / advance ka paisa (upar Cash/Account mein shaamil)",
+      Cash: h.total.untracedCash,
+      Account: h.total.untracedUpi,
+    });
   }
   return rows;
 }
@@ -674,7 +906,11 @@ export function canteenItemPayments(bills: Bill[]): Map<string, ItemPayment> {
 export interface CreditSettlementDetail {
   date: number;
   customerName: string;
+  // cash + account + discount — what got cleared off their tab.
   amount: number;
+  cash: number;
+  upi: number;
+  discount: number;
   oldestUnpaidSince: number | null;
 }
 
@@ -720,8 +956,16 @@ export function creditSettlementDetails(allBills: Bill[], customers: Customer[])
       const amount = Math.round((bill.amountPaid + bill.discount) * 100) / 100;
       if (amount <= 0) continue;
       const oldest = consume(queueFor(key), amount);
-      const customerName = customers.find((c) => c.id === bill.customerId)?.name ?? bill.tableName ?? "Unknown";
-      results.push({ date: bill.createdAt, customerName, amount, oldestUnpaidSince: oldest });
+      const customerName = settlementPersonName(bill, customers.find((c) => c.id === bill.customerId));
+      results.push({
+        date: bill.createdAt,
+        customerName,
+        amount,
+        cash: bill.amountCash,
+        upi: bill.amountUpi,
+        discount: bill.discount,
+        oldestUnpaidSince: oldest,
+      });
       continue;
     }
     if (bill.shares) {
@@ -837,5 +1081,224 @@ export function gallaSummaryRows(
     "Credit maaf (discount)": total("Credit maaf (discount)"),
     "Settle kitne": total("Settle kitne"),
   });
+  return rows;
+}
+
+// One customer's credit story in three numbers — how much they took on credit
+// in total, how much they've paid back (cash + account + any discount), and
+// what that leaves. Same rules as creditBalanceFor (paid bills only, a split
+// bill's own shares matched by name), just kept in two parts so a list can
+// show "diya" and "settle" next to each other. balance can go negative: that
+// is a customer who paid more than they owed (an advance).
+export function creditParts(bills: Bill[], customerId: string, nameKey: string): { given: number; settled: number; balance: number } {
+  let given = 0;
+  let settled = 0;
+  for (const b of bills) {
+    if (b.status !== "paid") continue;
+    const matches = b.shares
+      ? b.shares.some((s) => normalizeName(s.payerName) === nameKey)
+      : b.customerId === customerId;
+    if (!matches) continue;
+    if (isCreditSettlement(b)) settled += b.amountPaid + b.discount;
+    else given += personBillView(b, nameKey).onCredit;
+  }
+  const round = (n: number) => Math.round(n * 100) / 100;
+  return { given: round(given), settled: round(settled), balance: round(given - settled) };
+}
+
+export interface CreditDueRow {
+  customerId: string;
+  name: string;
+  phone: string;
+  // Credit already on the books (bills that are paid/closed on credit, less
+  // whatever's been settled). Negative when they've paid ahead.
+  billed: number;
+  // Food served but not yet billed, plus bills stuck open — real money owed,
+  // just not on the credit ledger yet.
+  notBilledYet: number;
+  total: number;
+}
+
+export interface CreditOtherRow {
+  name: string;
+  amount: number;
+}
+
+export interface CreditPendingReport {
+  // Everyone the Credits page lists, in its own order, with its own total.
+  due: CreditDueRow[];
+  dueBilled: number;
+  dueNotBilledYet: number;
+  dueTotal: number;
+  // What those customers really owe on credit already billed — only those
+  // actually owing (a customer who's paid ahead counts as 0, not as a minus).
+  // Plus noProfileTotal this is the "Credit baaki" total of creditHisaab.
+  owingBilled: number;
+  // An advance sitting on a customer who ALSO has an unbilled order: the
+  // Credits page nets the two, so its total is smaller by this much.
+  advanceUsedOnPending: number;
+  // owingBilled + noProfileTotal
+  creditBaaki: number;
+  // Credit still owed under a name with no customer profile (profile deleted,
+  // walk-in, or a split-bill payer who was never added) — real money, but the
+  // Credits page has no row to show it on.
+  noProfile: CreditOtherRow[];
+  noProfileTotal: number;
+  // Everyone (customers and no-profile names alike) who paid more than they
+  // owed — their balance is below zero, so they appear in no "owes" list.
+  advance: CreditOtherRow[];
+  advanceTotal: number;
+  // Total credit given minus total settled over every paid bill, advances
+  // included as minuses — creditBaaki - advanceTotal.
+  netBilled: number;
+  // A split bill's credit share that doesn't count until its bill closes.
+  openSplitCredit: number;
+}
+
+export function creditPendingReport(bills: Bill[], customers: Customer[], orders: CanteenOrder[]): CreditPendingReport {
+  const round = (n: number) => Math.round(n * 100) / 100;
+  const live = bills.filter((b) => b.status !== "cancelled");
+  const realCustomers = customers.filter((c) => !c.isWalkIn);
+
+  const due: CreditDueRow[] = [];
+  const advance: CreditOtherRow[] = [];
+  let owingBilled = 0;
+  let advanceUsedOnPending = 0;
+  for (const c of realCustomers) {
+    const billed = creditBalanceFor(live, c.id, normalizeName(c.name));
+    const notBilledYet =
+      customerPendingOrders(orders, bills, c.id).reduce((s, o) => s + orderTotal(o), 0) +
+      customerOpenBills(live, c.id).reduce((s, b) => s + b.amountDue, 0);
+    if (billed > 0) owingBilled += billed;
+    if (billed > 0 || notBilledYet > 0) {
+      if (billed < 0) advanceUsedOnPending += -billed;
+      due.push({ customerId: c.id, name: c.name, phone: c.phone, billed, notBilledYet: round(notBilledYet), total: round(billed + notBilledYet) });
+    }
+    if (billed < -0.005) advance.push({ name: c.name, amount: round(-billed) });
+  }
+  due.sort((a, b) => b.total - a.total);
+
+  // Everything left over: paid bills whose customer isn't one of the real
+  // profiles above. A split-bill share belongs to whoever's NAME it carries,
+  // so it only lands here when no real profile has that name.
+  const isRealId = (id: string | null) => !!id && realCustomers.some((c) => c.id === id);
+  const realNameKeys = new Set(realCustomers.map((c) => normalizeName(c.name)));
+  const profileById = new Map(customers.map((c) => [c.id, c]));
+  const noProfileBalance = new Map<string, { name: string; amount: number }>();
+  const addNoProfile = (key: string, name: string, delta: number) => {
+    const cur = noProfileBalance.get(key) ?? { name, amount: 0 };
+    cur.amount += delta;
+    noProfileBalance.set(key, cur);
+  };
+  const labelFor = (customerId: string | null, bill: Bill): { key: string; name: string } => {
+    if (!customerId || customerId === "walk-in" || profileById.get(customerId)?.isWalkIn) {
+      return { key: "none:walkin", name: "Walk-in / koi customer nahi" };
+    }
+    const named = !bill.tableId && bill.tableName && !isCreditSettlement(bill) ? bill.tableName : null;
+    return {
+      key: `deleted:${customerId}`,
+      name: named ? `${named} (profile delete)` : `Delete hua profile #${customerId.slice(0, 4)}`,
+    };
+  };
+  let openSplitCredit = 0;
+  for (const b of live) {
+    if (b.shares && b.status !== "paid") {
+      for (const s of b.shares) {
+        if (s.status === "paid" && s.paymentMethod === "credit") openSplitCredit += s.amount;
+      }
+      continue;
+    }
+    if (b.status !== "paid") continue;
+    if (b.shares) {
+      for (const s of b.shares) {
+        if (s.status !== "paid" || s.paymentMethod !== "credit" || s.amount <= 0) continue;
+        const nameKey = normalizeName(s.payerName);
+        if (realNameKeys.has(nameKey)) continue;
+        addNoProfile(`name:${nameKey}`, s.payerName, s.amount);
+      }
+      continue;
+    }
+    if (isRealId(b.customerId)) continue;
+    const { key, name } = labelFor(b.customerId, b);
+    if (isCreditSettlement(b)) addNoProfile(key, name, -(b.amountPaid + b.discount));
+    else if (b.amountDue > 0) addNoProfile(key, name, b.amountDue);
+  }
+  const noProfile: CreditOtherRow[] = [];
+  for (const { name, amount } of noProfileBalance.values()) {
+    if (amount > 0.005) noProfile.push({ name, amount: round(amount) });
+    else if (amount < -0.005) advance.push({ name, amount: round(-amount) });
+  }
+  noProfile.sort((a, b) => b.amount - a.amount);
+  advance.sort((a, b) => b.amount - a.amount);
+
+  const sum = (rows: { amount: number }[]) => round(rows.reduce((s, r) => s + r.amount, 0));
+  const dueBilled = round(due.reduce((s, r) => s + r.billed, 0));
+  const noProfileTotal = sum(noProfile);
+  const advanceTotal = sum(advance);
+  return {
+    due,
+    dueBilled,
+    dueNotBilledYet: round(due.reduce((s, r) => s + r.notBilledYet, 0)),
+    dueTotal: round(due.reduce((s, r) => s + r.total, 0)),
+    owingBilled: round(owingBilled),
+    advanceUsedOnPending: round(advanceUsedOnPending),
+    creditBaaki: round(owingBilled + noProfileTotal),
+    noProfile,
+    noProfileTotal,
+    advance,
+    advanceTotal,
+    netBilled: round(owingBilled + noProfileTotal - advanceTotal),
+    openSplitCredit: round(openSplitCredit),
+  };
+}
+
+// "Kiska credit baaki hai" as sheet rows, for both Excel exports: the same
+// customers, in the same order, with the same totals as the Credits page,
+// then whoever the Credits page can't show, anyone who's paid ahead, and the
+// two short sums that tie this list to the Credit hisaab sheet's baaki and
+// to the Credits page's own header total.
+export function creditPendingSheetRows(r: CreditPendingReport): Record<string, string | number>[] {
+  const COL_BILLED = "Credit baaki (bill ho chuka)";
+  const COL_UNBILLED = "Serve hue, bill baaki";
+  const COL_TOTAL = "Total baaki";
+  const row = (name: string, billed: string | number, unbilled: string | number, total: string | number) => ({
+    Naam: name,
+    [COL_BILLED]: billed,
+    [COL_UNBILLED]: unbilled,
+    [COL_TOTAL]: total,
+  });
+  const blank = row("", "", "", "");
+  const rows: Record<string, string | number>[] = [];
+  for (const d of r.due) rows.push(row(d.name, d.billed, d.notBilledYet, d.total));
+  rows.push(row("TOTAL (app ke Credits page jaisa)", r.dueBilled, r.dueNotBilledYet, r.dueTotal));
+
+  if (r.noProfile.length > 0) {
+    rows.push({ ...blank });
+    rows.push(row("BINA PROFILE KE BAAKI (Credits page pe nahi dikhta)", "", "", ""));
+    for (const n of r.noProfile) rows.push(row(n.name, n.amount, "", n.amount));
+    rows.push(row("TOTAL (bina profile)", r.noProfileTotal, "", r.noProfileTotal));
+  }
+  if (r.advance.length > 0) {
+    rows.push({ ...blank });
+    rows.push(row("ADVANCE — inhone credit se zyada de diya (baaki nahi)", "", "", ""));
+    for (const n of r.advance) rows.push(row(n.name, -n.amount, "", -n.amount));
+    rows.push(row("TOTAL (advance)", -r.advanceTotal, "", -r.advanceTotal));
+  }
+
+  rows.push({ ...blank });
+  rows.push(row("HISAAB MILAAN", "", "", ""));
+  rows.push(row("Customers ka credit baaki (sirf jinka baaki hai)", "", "", r.owingBilled));
+  rows.push(row("+ Bina profile ke baaki", "", "", r.noProfileTotal));
+  rows.push(row("= KUL CREDIT BAAKI (Credit hisaab sheet ke baaki ke barabar)", "", "", r.creditBaaki));
+  rows.push({ ...blank });
+  rows.push(row("App ke Credits page ke total tak:", "", "", ""));
+  rows.push(row("Customers ka credit baaki", "", "", r.owingBilled));
+  rows.push(row("+ Serve hue, bill nahi bane", "", "", r.dueNotBilledYet));
+  if (r.advanceUsedOnPending > 0.005) rows.push(row("- Advance jo inhi orders mein adjust hua", "", "", -r.advanceUsedOnPending));
+  rows.push(row("= Credits page ka total", "", "", r.dueTotal));
+  if (r.openSplitCredit > 0.005) {
+    rows.push({ ...blank });
+    rows.push(row("Note: split bill ka credit hissa (bill abhi open hai, band hone par judega)", "", "", r.openSplitCredit));
+  }
   return rows;
 }
