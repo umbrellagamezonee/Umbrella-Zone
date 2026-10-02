@@ -736,7 +736,7 @@ function MonthlyReportModal({ onClose }: { onClose: () => void }) {
         creditHisaabSheetRows(
           creditHisaab(bills, menuItems, menuCategories, orderedTablesList, customers, rangeStartMs, rangeEndMs)
         ),
-        [44, 12, 12, 13, 17, 13]
+        [44, 16, 16, 13, 17, 13, 18, 18]
       );
       addSheet("Credit baaki - kiska", creditPendingSheetRows(creditPendingReport(bills, customers, orders)), [56, 26, 20, 14]);
 
@@ -1488,37 +1488,25 @@ function GallaSummaryModal({ date, onClose }: { date: string; onClose: () => voi
 
         <Card>
           <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-1">
-            DIN KA HISAAB (Excel ki &quot;Credit hisaab&quot; sheet jaisa)
+            IS DIN KA CREDIT
           </p>
-          <p className="text-[11px] text-[var(--color-text-faint)] mb-2">
-            Is din ke bills ka hisaab — baad mein jo credit chuka wo bhi isi din ke Cash/Account mein gina gaya.
-          </p>
-          <div className="grid grid-cols-2 gap-x-2 gap-y-3 text-center">
-            <div>
-              <p className="text-[11px] text-[var(--color-text-dim)]">Cash</p>
-              <p className="font-bold text-[var(--color-success)]">{money(hisaab.cash)}</p>
-            </div>
-            <div>
-              <p className="text-[11px] text-[var(--color-text-dim)]">Account</p>
-              <p className="font-bold text-[var(--color-success)]">{money(hisaab.upi)}</p>
-            </div>
+          <div className="grid grid-cols-3 gap-2 text-center">
             <div>
               <p className="text-[11px] text-[var(--color-text-dim)]">Credit diya</p>
               <p className="font-bold text-[var(--color-warning)]">{money(hisaab.issued)}</p>
             </div>
             <div>
-              <p className="text-[11px] text-[var(--color-text-dim)]">Isme se settle hua</p>
+              <p className="text-[11px] text-[var(--color-text-dim)]">Isme se chuka</p>
               <p className="font-bold text-[var(--color-success)]">{money(hisaab.settled)}</p>
             </div>
-          </div>
-          <div className="mt-3 flex items-center justify-between border-t border-[var(--color-border)] pt-2">
-            <p className="text-xs text-[var(--color-text-dim)]">Credit baaki (diya − settle)</p>
-            <p className="font-bold text-[var(--color-warning)]">{money(hisaab.pending)}</p>
+            <div>
+              <p className="text-[11px] text-[var(--color-text-dim)]">Credit baaki</p>
+              <p className="font-bold text-[var(--color-warning)]">{money(hisaab.pending)}</p>
+            </div>
           </div>
           <p className="text-[10px] text-[var(--color-text-faint)] mt-2">
-            Upar ka galla = us din asal mein jo paisa aaya. Ye hisaab = us din ke kaam ka. Dono alag cheez hain, isliye
-            number alag ho sakte hain. Poori date-wise list Excel ki &quot;Credit hisaab&quot; sheet mein hai, aur kiska
-            credit baaki hai wo &quot;Credit baaki - kiska&quot; sheet mein.
+            Credit diya − chuka = baaki. Upar ka Cash / Account us din asal mein aaya paisa hai. Table / canteen ke hisaab se poora hisaab aur
+            kaun sa paisa kis din ke credit ka tha — Reports mein "Din ka Hisaab" kholo.
           </p>
         </Card>
 

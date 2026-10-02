@@ -292,6 +292,12 @@ interface DailyTotals {
   untracedUpi: number;
   // Credit given that day, person by person.
   people: Map<string, { issued: number; pending: number }>;
+  // See moveMoney: cash/account that arrived this day but is counted on
+  // another day's figures, and the reverse.
+  movedOutCash: number;
+  movedOutUpi: number;
+  movedInCash: number;
+  movedInUpi: number;
 }
 
 // Day-by-day cash/account/credit breakdown, one block per date — what the
@@ -454,8 +460,30 @@ function buildDailyCollection(
   // their NEXT charge, so this does too — otherwise a later bill would look
   // like fresh credit here while the Credits page already shows it cleared.
   // Until that happens the money stays on the settlement's own date.
-  type Advance = { bucket: Bucket; cash: number; upi: number; amount: number };
+  type Advance = { bucket: Bucket; dateKey: string; cash: number; upi: number; amount: number };
   const advances = new Map<string, Advance[]>();
+
+  // A payment that clears another day's credit is counted back on THAT day,
+  // so a day's "bills" cash/account differs from what physically came in that
+  // day by exactly two things: money that arrived today but is counted on
+  // another day (movedOut), and money that arrived on another day but is
+  // counted today (movedIn). Kept per date so a screen can show that bridge
+  // instead of two unexplained numbers.
+  type Flow = { outCash: number; outUpi: number; inCash: number; inUpi: number };
+  const flows = new Map<string, Flow>();
+  const flowFor = (key: string) => {
+    if (!flows.has(key)) flows.set(key, { outCash: 0, outUpi: 0, inCash: 0, inUpi: 0 });
+    return flows.get(key)!;
+  };
+  const moveMoney = (arrivedOn: string, countedOn: string, cash: number, upi: number) => {
+    if (arrivedOn === countedOn) return;
+    const out = flowFor(arrivedOn);
+    out.outCash += cash;
+    out.outUpi += upi;
+    const into = flowFor(countedOn);
+    into.inCash += cash;
+    into.inUpi += upi;
+  };
   const pushChunk = (key: string, chunk: DebtChunk) => {
     const queue = queueFor(key);
     queue.push(chunk);
@@ -467,6 +495,7 @@ function buildDailyCollection(
       const frac = take / adv.amount;
       const takeCash = adv.cash * frac;
       const takeUpi = adv.upi * frac;
+      moveMoney(adv.dateKey, toDateInputValue(chunk.date), takeCash, takeUpi);
       for (const part of chunk.parts) {
         const partFrac = chunk.total > 0 ? part.amount / chunk.total : 0;
         const partTake = take * partFrac;
@@ -517,6 +546,7 @@ function buildDailyCollection(
         const chunkFrac = take / settleAmount;
         const takeCash = cashPool * chunkFrac;
         const takeUpi = upiPool * chunkFrac;
+        moveMoney(dateKey, toDateInputValue(chunk.date), takeCash, takeUpi);
         for (const part of chunk.parts) {
           const partFrac = chunk.total > 0 ? part.amount / chunk.total : 0;
           const partTake = take * partFrac;
@@ -540,7 +570,7 @@ function buildDailyCollection(
         const bucket = bucketFor(dailyCategories, dateKey, "Credit settlement");
         addTo(bucket, cashPool * frac, upiPool * frac, 0);
         const pool = advances.get(key) ?? [];
-        pool.push({ bucket, cash: cashPool * frac, upi: upiPool * frac, amount: left });
+        pool.push({ bucket, dateKey, cash: cashPool * frac, upi: upiPool * frac, amount: left });
         advances.set(key, pool);
       }
       continue;
@@ -744,6 +774,10 @@ function buildDailyCollection(
       untracedCash: untraced?.cash ?? 0,
       untracedUpi: untraced?.upi ?? 0,
       people,
+      movedOutCash: flows.get(dateKey)?.outCash ?? 0,
+      movedOutUpi: flows.get(dateKey)?.outUpi ?? 0,
+      movedInCash: flows.get(dateKey)?.inCash ?? 0,
+      movedInUpi: flows.get(dateKey)?.inUpi ?? 0,
     });
     rows.push({
       Date: label,
@@ -756,6 +790,30 @@ function buildDailyCollection(
     });
     rows.push({ Date: "", Item: "", "Total collection": "", Cash: "", Account: "", Credit: "", "Credit from": "" });
   }
+  // A day on which money arrived but ALL of it was counted back on earlier
+  // days (someone only paid off old credit) has no billing of its own, so no
+  // rows above — but it still needs an entry so its bridge to the galla shows.
+  const printed = new Set(dateKeys);
+  for (const [dateKey, f] of flows) {
+    if (printed.has(dateKey)) continue;
+    const ms = dateInputValueToIstMidnight(dateKey);
+    if (ms < rangeStartMs || ms >= rangeEndMs) continue;
+    days.push({
+      dateKey,
+      cash: 0,
+      upi: 0,
+      credit: 0,
+      issued: 0,
+      untracedCash: 0,
+      untracedUpi: 0,
+      people: new Map(),
+      movedOutCash: f.outCash,
+      movedOutUpi: f.outUpi,
+      movedInCash: f.inCash,
+      movedInUpi: f.inUpi,
+    });
+  }
+  days.sort((a, b) => a.dateKey.localeCompare(b.dateKey));
   return { rows, days };
 }
 
@@ -785,11 +843,32 @@ export interface CreditHisaabDay {
   // been paid off, and what they still owe from it. Adds up to the day's
   // issued / settled / pending above.
   people: { name: string; issued: number; settled: number; pending: number }[];
+  // What physically came into the galla that day (the Galla Summary figures).
+  // cash/upi above are that day's BILLS' figures instead, so:
+  //   gallaCash = cash + movedOutCash - movedInCash   (same for account)
+  // movedOut = money that arrived this day but is counted on another day's
+  // figures; movedIn = money that arrived on another day but is counted here.
+  gallaCash: number;
+  gallaUpi: number;
+  movedOutCash: number;
+  movedOutUpi: number;
+  movedInCash: number;
+  movedInUpi: number;
 }
 
 export interface CreditHisaab {
   days: CreditHisaabDay[];
-  total: { cash: number; upi: number; issued: number; settled: number; pending: number; untracedCash: number; untracedUpi: number };
+  total: {
+    cash: number;
+    upi: number;
+    issued: number;
+    settled: number;
+    pending: number;
+    untracedCash: number;
+    untracedUpi: number;
+    gallaCash: number;
+    gallaUpi: number;
+  };
 }
 
 export function creditHisaab(
@@ -811,6 +890,7 @@ export function creditHisaab(
     rangeStartMs,
     rangeEndMs
   );
+  const galla = gallaByDate(allBills);
   const out: CreditHisaabDay[] = days.map((d) => ({
     dateKey: d.dateKey,
     label: formatDateKey(d.dateKey, { day: "numeric", month: "long" }),
@@ -830,6 +910,12 @@ export function creditHisaab(
       }))
       .filter((x) => x.issued > 0.005 || x.pending > 0.005)
       .sort((a, b) => b.pending - a.pending || b.issued - a.issued || a.name.localeCompare(b.name)),
+    gallaCash: round((galla.get(d.dateKey)?.freshCash ?? 0) + (galla.get(d.dateKey)?.settledCash ?? 0)),
+    gallaUpi: round((galla.get(d.dateKey)?.freshUpi ?? 0) + (galla.get(d.dateKey)?.settledUpi ?? 0)),
+    movedOutCash: round(d.movedOutCash),
+    movedOutUpi: round(d.movedOutUpi),
+    movedInCash: round(d.movedInCash),
+    movedInUpi: round(d.movedInUpi),
   }));
   const sum = (f: (d: CreditHisaabDay) => number) => round(out.reduce((s, d) => s + f(d), 0));
   return {
@@ -842,6 +928,8 @@ export function creditHisaab(
       pending: sum((d) => d.pending),
       untracedCash: sum((d) => d.untracedCash),
       untracedUpi: sum((d) => d.untracedUpi),
+      gallaCash: sum((d) => d.gallaCash),
+      gallaUpi: sum((d) => d.gallaUpi),
     },
   };
 }
@@ -849,23 +937,43 @@ export function creditHisaab(
 // The same thing as sheet rows, for both Excel exports: one line per date, a
 // TOTAL line, then the three headline numbers spelled out in plain words.
 export function creditHisaabSheetRows(h: CreditHisaab): Record<string, string | number>[] {
-  const blank = { Date: "", Cash: "", Account: "", "Credit diya": "", "Credit settle hua": "", "Credit baaki": "" };
+  // Two Cash/Account pairs, named so they can't be mixed up: the day's BILLS'
+  // figures (a credit paid later is counted back on the day it was given) and
+  // what actually came into the galla that day (the Galla Summary figures).
+  const CASH = "Cash (us din ke bills ka)";
+  const ACCOUNT = "Account (us din ke bills ka)";
+  const G_CASH = "Galla Cash (us din aaya)";
+  const G_ACCOUNT = "Galla Account (us din aaya)";
+  const blank = {
+    Date: "",
+    [CASH]: "",
+    [ACCOUNT]: "",
+    "Credit diya": "",
+    "Credit settle hua": "",
+    "Credit baaki": "",
+    [G_CASH]: "",
+    [G_ACCOUNT]: "",
+  };
   const rows: Record<string, string | number>[] = h.days.map((d) => ({
     Date: d.label,
-    Cash: d.cash,
-    Account: d.upi,
+    [CASH]: d.cash,
+    [ACCOUNT]: d.upi,
     "Credit diya": d.issued,
     "Credit settle hua": d.settled,
     "Credit baaki": d.pending,
+    [G_CASH]: d.gallaCash,
+    [G_ACCOUNT]: d.gallaUpi,
   }));
   if (rows.length === 0) return rows;
   rows.push({
     Date: "TOTAL",
-    Cash: h.total.cash,
-    Account: h.total.upi,
+    [CASH]: h.total.cash,
+    [ACCOUNT]: h.total.upi,
     "Credit diya": h.total.issued,
     "Credit settle hua": h.total.settled,
     "Credit baaki": h.total.pending,
+    [G_CASH]: h.total.gallaCash,
+    [G_ACCOUNT]: h.total.gallaUpi,
   });
   rows.push({ ...blank });
   rows.push({ ...blank, Date: "KUL HISAAB" });
@@ -877,10 +985,15 @@ export function creditHisaabSheetRows(h: CreditHisaab): Record<string, string | 
     rows.push({
       ...blank,
       Date: "Note: purane credit / advance ka paisa (upar Cash/Account mein shaamil)",
-      Cash: h.total.untracedCash,
-      Account: h.total.untracedUpi,
+      [CASH]: h.total.untracedCash,
+      [ACCOUNT]: h.total.untracedUpi,
     });
   }
+  rows.push({ ...blank });
+  rows.push({
+    ...blank,
+    Date: "Cash/Account ke do set: pehla = us din ke bills ka hisaab (baad mein chuka credit usi din mein), aakhri do = us din asal mein galla mein aaya (Galla Summary jaisa).",
+  });
   return rows;
 }
 

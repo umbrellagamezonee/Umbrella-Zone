@@ -77,15 +77,17 @@ function equationBox(y, items, o = {}) {
 // ================= PAGE 1: din-wise hisaab =================
 title("Credit Hisaab - din ke hisaab se", `Cash, Account aur Credit - 17 Sep se aaj tak (${asOfText} tak ka data)`);
 const cols1 = [
-  { h: "Din", w: 130, align: "left" },
-  { h: "Cash", w: 118 },
-  { h: "Account", w: 118 },
-  { h: "Credit diya", w: 118 },
-  { h: "Credit settle hua", w: 144 },
-  { h: "Credit baaki", w: 142 },
+  { h: "Din", w: 96, align: "left" },
+  { h: "Cash (bills ka)", w: 92 },
+  { h: "Account (bills ka)", w: 100 },
+  { h: "Credit diya", w: 86 },
+  { h: "Credit settle hua", w: 104 },
+  { h: "Credit baaki", w: 92 },
+  { h: "Galla Cash", w: 96 },
+  { h: "Galla Account", w: 104 },
 ];
-const rows1 = h.days.map((x) => ({ cells: [x.label, num(x.cash), num(x.upi), num(x.issued), num(x.settled), num(x.pending)] }));
-rows1.push({ bold: true, cells: ["TOTAL", fmt(T.cash), fmt(T.upi), fmt(T.issued), fmt(T.settled), fmt(T.pending)] });
+const rows1 = h.days.map((x) => ({ cells: [x.label, num(x.cash), num(x.upi), num(x.issued), num(x.settled), num(x.pending), num(x.gallaCash), num(x.gallaUpi)] }));
+rows1.push({ bold: true, cells: ["TOTAL", fmt(T.cash), fmt(T.upi), fmt(T.issued), fmt(T.settled), fmt(T.pending), fmt(T.gallaCash), fmt(T.gallaUpi)] });
 let y = table(cols1, rows1, 62, { rowH: 18.5, font: 9.5 });
 
 y = equationBox(y + 12, [
@@ -98,7 +100,8 @@ doc.y = y + 4;
 para(
   [
     "Har din ki line mein: Credit diya - Credit settle hua = Credit baaki. Jo credit baad mein chuka (cash ya account se, ya maaf), wo usi din ke hisaab mein gina gaya jis din ka wo credit tha.",
-    `Cash aur Account mein wo paisa bhi jud gaya jo baad mein credit chukane mein aaya. Isme Rs. ${fmt(T.untracedCash + T.untracedUpi)} aisa hai jo purane credit / advance ka tha aur kisi din se match nahi hua.`,
+    "'Cash / Account (bills ka)' = us din ke bills ka hisaab (baad mein chuka credit usi din mein gina gaya). 'Galla Cash / Account' = us din asal mein jo paisa aaya (Galla Summary jaisa). Dono ka total barabar hai, bas din alag-alag ho sakte hain.",
+    `Isme Rs. ${fmt(T.untracedCash + T.untracedUpi)} aisa hai jo purane credit / advance ka tha aur kisi din se match nahi hua.`,
   ],
   8.6
 );

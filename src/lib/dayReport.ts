@@ -73,6 +73,17 @@ export function buildDayReport(input: {
   const dayEnd = dayStart + 86_400_000;
   const label = formatDateKey(date, { day: "numeric", month: "long" });
 
+  const galla: GallaDay = gallaByDate(live).get(date) ?? {
+    freshCash: 0,
+    freshUpi: 0,
+    settledCash: 0,
+    settledUpi: 0,
+    forgiven: 0,
+    settledCount: 0,
+    creditGiven: 0,
+  };
+
+  // A day with no billing and no payments at all still gets a (zero) entry.
   const day: CreditHisaabDay = creditHisaab(live, menuItems, menuCategories, tables, customers, dayStart, dayEnd).days.find(
     (d) => d.dateKey === date
   ) ?? {
@@ -86,16 +97,12 @@ export function buildDayReport(input: {
     untracedCash: 0,
     untracedUpi: 0,
     people: [],
-  };
-
-  const galla: GallaDay = gallaByDate(live).get(date) ?? {
-    freshCash: 0,
-    freshUpi: 0,
-    settledCash: 0,
-    settledUpi: 0,
-    forgiven: 0,
-    settledCount: 0,
-    creditGiven: 0,
+    gallaCash: round(galla.freshCash + galla.settledCash),
+    gallaUpi: round(galla.freshUpi + galla.settledUpi),
+    movedOutCash: 0,
+    movedOutUpi: 0,
+    movedInCash: 0,
+    movedInUpi: 0,
   };
 
   const customerById = new Map(customers.map((c) => [c.id, c]));
@@ -200,15 +207,9 @@ export function dayReportSheets(r: DayReport): SheetSpec[] {
 
   sheets.push({
     name: "Din ka hisaab",
-    widths: [70, 14, 14, 14],
+    widths: [78, 14, 14, 14],
     rows: [
-      { ...blank, Cheez: "1) US DIN KE BILLS KA HISAAB (baad mein chuka credit usi din mein gina gaya)" },
-      { Cheez: "Cash / Account", Cash: d.cash, Account: d.upi, Rakam: round(d.cash + d.upi) },
-      { ...blank, Cheez: "Credit diya", Rakam: d.issued },
-      { ...blank, Cheez: "Isme se settle hua (Cash + Account + maaf)", Rakam: d.settled },
-      { ...blank, Cheez: "CREDIT BAAKI (diya - settle)", Rakam: d.pending },
-      { ...blank },
-      { ...blank, Cheez: "2) GALLA - US DIN ASAL MEIN JO PAISA AAYA" },
+      { ...blank, Cheez: "1) US DIN KITNA PAISA AAYA - GALLA (Galla Summary jaisa)" },
       { Cheez: "Din ke naye bills", Cash: g.freshCash, Account: g.freshUpi, Rakam: round(g.freshCash + g.freshUpi) },
       {
         Cheez: `Purana credit settle (${g.settledCount} logon ne)`,
@@ -220,7 +221,26 @@ export function dayReportSheets(r: DayReport): SheetSpec[] {
       { ...blank, Cheez: "Kharcha (expenses)", Rakam: -spent },
       { ...blank, Cheez: "Kharcha ke baad bacha", Rakam: round(galla - spent) },
       { ...blank },
-      { ...blank, Cheez: "Us din naya credit diya gaya", Rakam: g.creditGiven },
+      { ...blank, Cheez: "2) US DIN KA CREDIT" },
+      { ...blank, Cheez: "Naya credit diya", Rakam: d.issued },
+      { ...blank, Cheez: "Isme se ab tak chuka (Cash + Account + maaf)", Rakam: d.settled },
+      { ...blank, Cheez: "CREDIT BAAKI (diya - chuka)", Rakam: d.pending },
+      { ...blank },
+      { ...blank, Cheez: "3) US DIN KE BILLS KA HISAAB - GALLA SE KAISE MILTA HAI" },
+      { Cheez: "Galla - us din asal mein aaya", Cash: round(d.gallaCash), Account: round(d.gallaUpi), Rakam: round(d.gallaCash + d.gallaUpi) },
+      {
+        Cheez: "- Us din aaya, par dusre din ke credit ka tha (wahan gina gaya)",
+        Cash: -d.movedOutCash,
+        Account: -d.movedOutUpi,
+        Rakam: -round(d.movedOutCash + d.movedOutUpi),
+      },
+      {
+        Cheez: "+ Dusre din aaya, par is din ke credit ka tha",
+        Cash: d.movedInCash,
+        Account: d.movedInUpi,
+        Rakam: round(d.movedInCash + d.movedInUpi),
+      },
+      { Cheez: "= Us din ke bills ka hisaab", Cash: d.cash, Account: d.upi, Rakam: round(d.cash + d.upi) },
     ],
   });
 

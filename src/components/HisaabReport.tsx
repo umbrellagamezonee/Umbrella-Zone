@@ -165,7 +165,7 @@ export function HisaabReport({ initialDate, onClose }: { initialDate: string; on
         dayReportSheets(day).forEach(add);
         XLSX.writeFile(wb, `Din-Hisaab-${date}.xlsx`);
       } else if (credit && pending) {
-        add({ name: "Credit hisaab", rows: creditHisaabSheetRows(credit), widths: [44, 12, 12, 13, 17, 13] });
+        add({ name: "Credit hisaab", rows: creditHisaabSheetRows(credit), widths: [44, 16, 16, 13, 17, 13, 18, 18] });
         add({ name: "Credit baaki - kiska", rows: creditPendingSheetRows(pending), widths: [56, 26, 20, 14] });
         XLSX.writeFile(wb, `Credit-Hisaab-${toDateInputValue(openedAt)}.xlsx`);
       }
@@ -186,25 +186,18 @@ export function HisaabReport({ initialDate, onClose }: { initialDate: string; on
   const spent = day.expenses.reduce((s, e) => s + e.amount, 0);
   const dateLabel = formatDateKey(date, { day: "numeric", month: "long", year: "numeric" });
 
+  const d = day.day;
   const dayView = (
     <div className="space-y-6">
-      <Section title="1) Us din ke bills ka hisaab">
+      <Section title="1) Us din kitna paisa aaya — Galla (Galla Summary jaisa)">
         <Tiles
           items={[
-            { label: "Cash", value: money(day.day.cash), tone: "good" },
-            { label: "Account", value: money(day.day.upi), tone: "good" },
-            { label: "Credit diya", value: money(day.day.issued), tone: "warn" },
-            { label: "Isme se settle hua", value: money(day.day.settled), tone: "good" },
-            { label: "CREDIT BAAKI", value: money(day.day.pending), tone: "bad", strong: true },
+            { label: "Cash", value: money(galla.cash), tone: "good" },
+            { label: "Account", value: money(galla.upi), tone: "good" },
+            { label: "Kharcha", value: "-" + money(spent), tone: "bad" },
+            { label: "Kharcha ke baad bacha", value: money(galla.cash + galla.upi - spent), strong: true },
           ]}
         />
-        <Note>
-          Credit diya − settle hua = baaki. Jo credit baad mein chuka (cash / account / maaf) wo usi din ke Cash/Account
-          mein gina gaya jis din ka wo credit tha.
-        </Note>
-      </Section>
-
-      <Section title="2) Galla — us din asal mein jo paisa aaya">
         <Table
           cols={["", "Cash", "Account", "Cash + Account"]}
           rows={[
@@ -232,13 +225,74 @@ export function HisaabReport({ initialDate, onClose }: { initialDate: string; on
           ]}
         />
         <Note>
-          Galla = us din jo paisa gulle mein aaya, chahe wo kisi bhi din ke credit ka ho ({money(g.settledCash + g.settledUpi)} purane
-          credit ka hai). Upar ka "Cash/Account" = us din ke bills ka hisaab. Dono alag sawaal hain, isliye alag number aate hain.
-          Us din naya credit {money(g.creditGiven)} diya gaya.
+          Galla = us din jo paisa gulle mein aaya, chahe wo kisi bhi din ke credit ka ho ({money(g.settledCash + g.settledUpi)} purane credit ka
+          hai). Ye wahi hai jo Galla Summary mein dikhta hai.
         </Note>
       </Section>
 
-      <Section title="3) Table aur Canteen ka hisaab">
+      <Section title={`2) ${dateLabel} ka credit`}>
+        <Tiles
+          items={[
+            { label: "Naya credit diya", value: money(d.issued), tone: "warn" },
+            { label: "Isme se ab tak chuka", value: money(d.settled), tone: "good" },
+            { label: "CREDIT BAAKI", value: money(d.pending), tone: "bad", strong: true },
+          ]}
+        />
+        <Note>Credit diya − chuka = baaki. Jo credit baad mein chuka (cash / account / maaf) wo usi din ke credit mein ginta hai jis din ka wo credit tha.</Note>
+        {d.people.length === 0 ? (
+          <Note>Is din koi naya credit nahi diya gaya.</Note>
+        ) : (
+          <Table
+            cols={["Kisne liya", "Credit liya", "Isme se chuka", "Abhi baaki"]}
+            rows={[
+              ...d.people.map((p) => ({ cells: [p.name, dash(p.issued), dash(p.settled), dash(p.pending)] })),
+              { bold: true, cells: ["TOTAL", fmt(d.issued), fmt(d.settled), fmt(d.pending)] },
+            ]}
+          />
+        )}
+        <p className="text-xs font-semibold pt-2">
+          Is din purana credit kisne chukaya ({day.settlements.length})
+        </p>
+        {day.settlements.length === 0 ? (
+          <Note>Is din kisi ne purana credit settle nahi kiya.</Note>
+        ) : (
+          <Table
+            cols={["Time", "Naam", "Cash", "Account", "Maaf"]}
+            rows={[
+              ...day.settlements.map((s) => ({ cells: [formatTime(s.t), s.name, dash(s.cash), dash(s.upi), dash(s.disc)] })),
+              { bold: true, cells: ["", "TOTAL", fmt(g.settledCash), fmt(g.settledUpi), dash(g.forgiven)] },
+            ]}
+          />
+        )}
+      </Section>
+
+      <Section title="3) Us din ke bills ka hisaab — galla se kaise milta hai">
+        <Note>
+          Jo paisa baad mein credit chukane mein aaya wo us din ke hisaab mein gina jaata hai jis din ka wo credit tha — isliye us din ke bills ka
+          Cash/Account galla se alag hota hai. Ye milaan hai:
+        </Note>
+        <Table
+          cols={["", "Cash", "Account"]}
+          rows={[
+            { cells: ["Galla — us din asal mein aaya", fmt(galla.cash), fmt(galla.upi)] },
+            {
+              cells: [
+                "− Us din aaya, par dusre din ke credit ka tha (wahan gina gaya)",
+                "-" + fmt(d.movedOutCash),
+                "-" + fmt(d.movedOutUpi),
+              ],
+            },
+            {
+              cells: [
+                "+ Dusre din aaya, par is din ke credit ka tha",
+                "+" + fmt(d.movedInCash),
+                "+" + fmt(d.movedInUpi),
+              ],
+            },
+            { bold: true, cells: ["= Us din ke bills ka hisaab", fmt(d.cash), fmt(d.upi)] },
+          ]}
+        />
+        <p className="text-xs font-semibold pt-2">Table aur Canteen ke hisse mein</p>
         <Table
           cols={["", "Cash", "Account", "Cash + Account", "Credit baaki"]}
           rows={day.dailyRows.map((r) => ({
@@ -256,38 +310,10 @@ export function HisaabReport({ initialDate, onClose }: { initialDate: string; on
             ],
           }))}
         />
-        <Note>Food = Kitchen, Drinks = Fridge. Ye wahi Cash / Account / Credit baaki hai jo upar hai, bas table aur canteen ke hisse mein bata hua.</Note>
+        <Note>Food = Kitchen, Drinks = Fridge. Total wahi hai jo upar "= Us din ke bills ka hisaab" mein hai.</Note>
       </Section>
 
-      <Section title={`4) ${dateLabel} ka credit — kisne liya, kitna chuka, kitna baaki`}>
-        {day.day.people.length === 0 ? (
-          <Note>Is din koi naya credit nahi diya gaya.</Note>
-        ) : (
-          <Table
-            cols={["Naam", "Credit liya", "Isme se chuka", "Abhi baaki"]}
-            rows={[
-              ...day.day.people.map((p) => ({ cells: [p.name, dash(p.issued), dash(p.settled), dash(p.pending)] })),
-              { bold: true, cells: ["TOTAL", fmt(day.day.issued), fmt(day.day.settled), fmt(day.day.pending)] },
-            ]}
-          />
-        )}
-      </Section>
-
-      <Section title={`5) ${dateLabel} ko purana credit kisne chukaya (${day.settlements.length})`}>
-        {day.settlements.length === 0 ? (
-          <Note>Is din kisi ne purana credit settle nahi kiya.</Note>
-        ) : (
-          <Table
-            cols={["Time", "Naam", "Cash", "Account", "Maaf"]}
-            rows={[
-              ...day.settlements.map((s) => ({ cells: [formatTime(s.t), s.name, dash(s.cash), dash(s.upi), dash(s.disc)] })),
-              { bold: true, cells: ["", "TOTAL", fmt(g.settledCash), fmt(g.settledUpi), dash(g.forgiven)] },
-            ]}
-          />
-        )}
-      </Section>
-
-      <Section title="6) Canteen — category ke hisaab se" breakBefore>
+      <Section title="4) Canteen — category ke hisaab se" breakBefore>
         <Table
           cols={["Category", "Kitna bika", "Bika (Rs)", "Abhi bill nahi hua", "Bill mein Cash", "Account", "Credit baaki"]}
           rows={[
@@ -375,10 +401,28 @@ export function HisaabReport({ initialDate, onClose }: { initialDate: string; on
             ]}
           />
           <Table
-            cols={["Din", "Cash", "Account", "Credit diya", "Credit settle hua", "Credit baaki"]}
+            cols={[
+              "Din",
+              "Cash (bills ka)",
+              "Account (bills ka)",
+              "Credit diya",
+              "Credit settle hua",
+              "Credit baaki",
+              "Galla Cash",
+              "Galla Account",
+            ]}
             rows={[
               ...credit.days.map((d) => ({
-                cells: [d.label, dash(d.cash), dash(d.upi), dash(d.issued), dash(d.settled), dash(d.pending)],
+                cells: [
+                  d.label,
+                  dash(d.cash),
+                  dash(d.upi),
+                  dash(d.issued),
+                  dash(d.settled),
+                  dash(d.pending),
+                  dash(d.gallaCash),
+                  dash(d.gallaUpi),
+                ],
               })),
               {
                 bold: true,
@@ -389,13 +433,16 @@ export function HisaabReport({ initialDate, onClose }: { initialDate: string; on
                   fmt(credit.total.issued),
                   fmt(credit.total.settled),
                   fmt(credit.total.pending),
+                  fmt(credit.total.gallaCash),
+                  fmt(credit.total.gallaUpi),
                 ],
               },
             ]}
           />
           <Note>
-            Har din ki line mein: Credit diya − Credit settle hua = Credit baaki. Cash aur Account mein wo paisa bhi jud gaya jo baad mein credit chukane
-            mein aaya.
+            Har din ki line mein: Credit diya − Credit settle hua = Credit baaki. "Cash/Account (bills ka)" = us din ke bills ka hisaab — jo paisa baad mein
+            credit chukane mein aaya wo usi din mein gina gaya jis din ka credit tha. "Galla Cash/Account" = us din asal mein jo paisa aaya (Galla Summary
+            jaisa). Dono ka total barabar hai, bas din alag-alag ho sakte hain.
             {credit.total.untracedCash + credit.total.untracedUpi > 0.005
               ? ` Isme ${money(credit.total.untracedCash + credit.total.untracedUpi)} aisa hai jo purane credit / advance ka tha aur kisi din se match nahi hua.`
               : ""}

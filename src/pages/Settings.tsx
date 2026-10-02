@@ -1112,7 +1112,7 @@ function ExportExcelModal({ onClose }: { onClose: () => void }) {
       addFirstSheet(
         creditHisaabSheetRows(creditHisaab(activeBills, items, categories, orderedTables(tables), customers)),
         "Credit hisaab",
-        [44, 12, 12, 13, 17, 13]
+        [44, 16, 16, 13, 17, 13, 18, 18]
       );
       addFirstSheet(
         creditPendingSheetRows(creditPendingReport(bills, customers, orders)),

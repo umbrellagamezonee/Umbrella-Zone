@@ -83,49 +83,60 @@ const day = d.day;
 const g = d.galla;
 const exp = d.expenses.reduce((s, e) => s + e.amount, 0);
 
-// ================= PAGE 1: din ka hisaab =================
+// ================= PAGE 1: galla + credit =================
 title(`${dayTitle} - Din ka hisaab`, `Cash, Account aur Credit (${asOfText} tak ka data)`);
-let y = subhead("1) Us din ke bills ka hisaab", 70);
-y = tiles(y + 2, [
-  { label: "Cash", value: money(day.cash), color: "#1b6e2d" },
-  { label: "Account", value: money(day.upi), color: "#1b6e2d" },
-  { label: "Credit diya", value: money(day.issued), color: "#9a3b00" },
-  { label: "Isme se settle hua", value: money(day.settled), color: "#1b6e2d" },
-  { label: "CREDIT BAAKI", value: money(day.pending), color: "#b00020", fill: "#ffecec", border: "#b00020" },
-], { gap: 10, vsize: 15 });
-doc.font("Helvetica").fontSize(8.6).fillColor("#333").text("Credit diya - settle hua = baaki. Jo credit baad mein chuka (cash / account / maaf) wo usi din ke Cash/Account mein gina gaya jis din ka wo credit tha.", L, y + 5, { width: W });
-
-y = subhead("2) Galla - us din asal mein jo paisa aaya (Galla Summary jaisa)", doc.y + 12);
 const gc = g.freshCash + g.settledCash;
 const gu = g.freshUpi + g.settledUpi;
+let y = subhead("1) Us din kitna paisa aaya - Galla (Galla Summary jaisa)", 70);
+y = tiles(y + 2, [
+  { label: "Cash", value: money(gc), color: "#1b6e2d" },
+  { label: "Account", value: money(gu), color: "#1b6e2d" },
+  { label: "Kharcha", value: "-" + money(exp), color: "#b00020" },
+  { label: "Kharcha ke baad bacha", value: money(gc + gu - exp), fill: "#eef3ff", border: "#2d4a9a" },
+], { gap: 10, vsize: 16 });
 y = table(
   [{ h: "", w: 330, align: "left" }, { h: "Cash", w: 145 }, { h: "Account", w: 145 }, { h: "Cash + Account", w: 150 }],
   [
-    { cells: ["Din ke naye bills (us din ke bills ka paisa)", num(g.freshCash), num(g.freshUpi), num(g.freshCash + g.freshUpi)] },
+    { cells: ["Din ke naye bills", num(g.freshCash), num(g.freshUpi), num(g.freshCash + g.freshUpi)] },
     { cells: [`Purana credit settle (${g.settledCount} logon ne)`, num(g.settledCash), num(g.settledUpi), num(g.settledCash + g.settledUpi)] },
     { bold: true, cells: ["TOTAL galla", fmt(gc), fmt(gu), fmt(gc + gu)] },
     { cells: [`Kharcha (expenses)${d.expenses.length ? ": " + d.expenses.map((e) => `${e.category} ${fmt(e.amount)}`).join(", ") : ""}`, "", "", "-" + fmt(exp)] },
     { bold: true, cells: ["Kharcha ke baad bacha", "", "", fmt(gc + gu - exp)] },
   ],
-  doc.y + 2, { rowH: 20, font: 9.5 }
+  y + 8, { rowH: 19, font: 9.3 }
 );
-doc.y = y + 4;
-para([
-  `Galla = us din jo paisa gulle mein aaya, chahe wo kisi bhi din ke credit ka ho (${money(g.settledCash + g.settledUpi)} purane credit ka hai). Upar ka "Cash/Account" = us din ke bills ka hisaab. Dono alag sawaal hain, isliye alag number aate hain.`,
-  `Us din naya credit ${money(g.creditGiven)} diya gaya.`,
-]);
+doc.y = y + 3;
+para([`Galla = us din jo paisa gulle mein aaya, chahe wo kisi bhi din ke credit ka ho (${money(g.settledCash + g.settledUpi)} purane credit ka hai). Ye wahi hai jo Galla Summary mein dikhta hai.`]);
 
-// ================= PAGE 2: table + canteen =================
+y = subhead(`2) ${dayTitle} ka credit`, doc.y + 12);
+y = tiles(y + 2, [
+  { label: "Naya credit diya", value: money(day.issued), color: "#9a3b00" },
+  { label: "Isme se ab tak chuka", value: money(day.settled), color: "#1b6e2d" },
+  { label: "CREDIT BAAKI", value: money(day.pending), color: "#b00020", fill: "#ffecec", border: "#b00020" },
+], { gap: 10, vsize: 16 });
+doc.font("Helvetica").fontSize(8.6).fillColor("#333").text("Credit diya - chuka = baaki. Jo credit baad mein chuka (cash / account / maaf) wo usi din ke credit mein ginta hai jis din ka wo credit tha. Kisne kitna liya aur kisne purana credit chukaya - aage ke pages par.", L, y + 5, { width: W });
+
+// ================= PAGE 2: bills ka hisaab + table/canteen =================
 doc.addPage();
-title(`${dayTitle} - Table aur Canteen ka hisaab`, "Kis table / canteen ke hisse se kitna Cash, Account aur Credit baaki");
-const dr = d.dailyRows.filter((r) => r.item !== "");
+title(`${dayTitle} - Us din ke bills ka hisaab`, "Galla se kaise milta hai, aur Table / Canteen ke hisse mein");
 y = table(
-  [{ h: "", w: 250, align: "left" }, { h: "Cash", w: 130 }, { h: "Account", w: 130 }, { h: "Cash + Account", w: 130 }, { h: "Credit baaki", w: 130 }],
-  dr.map((r) => ({ bold: r.item === "Total", cells: [r.item === "Total" ? "TOTAL" : r.item === "Credit settlement" ? "Purane credit / advance (kisi din se match nahi)" : r.item, num(r.cash), num(r.upi), num(Number(r.cash) + Number(r.upi)), num(r.credit)] })),
-  70, { rowH: 19, font: 9.5 }
+  [{ h: "", w: 450, align: "left" }, { h: "Cash", w: 160 }, { h: "Account", w: 160 }],
+  [
+    { cells: ["Galla - us din asal mein aaya", fmt(day.gallaCash), fmt(day.gallaUpi)] },
+    { cells: ["- Us din aaya, par dusre din ke credit ka tha (wahan gina gaya)", "-" + fmt(day.movedOutCash), "-" + fmt(day.movedOutUpi)] },
+    { cells: ["+ Dusre din aaya, par is din ke credit ka tha", "+" + fmt(day.movedInCash), "+" + fmt(day.movedInUpi)] },
+    { bold: true, cells: ["= Us din ke bills ka hisaab", fmt(day.cash), fmt(day.upi)] },
+  ],
+  72, { rowH: 20, font: 9.5 }
 );
-doc.y = y + 6;
-para(["Food = Kitchen, Drinks = Fridge. Ye wahi Cash / Account / Credit baaki hai jo pehle page pe hai, bas table aur canteen ke hisse mein bata hua."]);
+doc.font("Helvetica").fontSize(8.6).fillColor("#333").text("Jo paisa baad mein credit chukane mein aaya wo us din ke hisaab mein gina jaata hai jis din ka wo credit tha - isliye us din ke bills ka Cash/Account galla se alag hota hai. Upar ka milaan dono ko jodta hai.", L, y + 5, { width: W });
+const dr = d.dailyRows.filter((r) => r.item !== "");
+table(
+  [{ h: "Table / Canteen ke hisse mein", w: 250, align: "left" }, { h: "Cash", w: 130 }, { h: "Account", w: 130 }, { h: "Cash + Account", w: 130 }, { h: "Credit baaki", w: 130 }],
+  dr.map((r) => ({ bold: r.item === "Total", cells: [r.item === "Total" ? "TOTAL" : r.item === "Credit settlement" ? "Purane credit / advance (kisi din se match nahi)" : r.item, num(r.cash), num(r.upi), num(Number(r.cash) + Number(r.upi)), num(r.credit)] })),
+  doc.y + 14, { rowH: 17, font: 9 }
+);
+doc.y = Math.min(doc.y, MAX_Y - 20);
 
 // ================= PAGE 3: us din ka credit, kisne liya =================
 doc.addPage();
