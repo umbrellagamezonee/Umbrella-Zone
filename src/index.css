@@ -39,3 +39,43 @@ body {
   background: var(--color-border);
   border-radius: 999px;
 }
+
+/* "Hisaab Report" (Reports page) prints as a clean white document: the app
+   itself is hidden, only that screen prints, laid out as normal flowing
+   pages instead of a scrolling overlay, with light colours whatever theme
+   the screen is using. */
+@media print {
+  html,
+  body {
+    height: auto !important;
+    background: #fff !important;
+  }
+  body > #root {
+    display: none !important;
+  }
+  .hisaab-overlay {
+    position: static !important;
+    inset: auto !important;
+    overflow: visible !important;
+    height: auto !important;
+    background: #fff !important;
+    color: #000 !important;
+    --color-bg: #fff;
+    --color-surface: #fff;
+    --color-surface-2: #eeeeee;
+    --color-border: #cfcfcf;
+    --color-text: #000;
+    --color-text-dim: #333;
+    --color-text-faint: #555;
+    --color-primary: #4c1d95;
+    --color-success: #15803d;
+    --color-warning: #b45309;
+    --color-danger: #b91c1c;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .hisaab-overlay section,
+  .hisaab-overlay tr {
+    break-inside: avoid;
+  }
+}

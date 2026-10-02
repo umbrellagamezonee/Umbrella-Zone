@@ -40,6 +40,7 @@ import { billPersonName, billPlace, isCreditSettlement, settlementPersonName } f
 import { useCustomersStore } from "../store/useCustomersStore";
 import { orderedTables } from "../store/useTablesStore";
 import { BillDetailModal } from "../components/BillDetailModal";
+import { HisaabReport } from "../components/HisaabReport";
 import type { Bill, Expense } from "../types";
 import {
   Wallet,
@@ -52,6 +53,7 @@ import {
   CalendarDays,
   LayoutGrid,
   FileSpreadsheet,
+  ScrollText,
   Pencil,
   Trash2,
   Plus,
@@ -73,6 +75,7 @@ export function Reports() {
   const [showInsights, setShowInsights] = useState(false);
   const [showTableReport, setShowTableReport] = useState(false);
   const [showMonthlyReport, setShowMonthlyReport] = useState(false);
+  const [showHisaab, setShowHisaab] = useState(false);
   const [checkDate, setCheckDate] = useState(() => toDateInputValue(Date.now()));
   const [detailBill, setDetailBill] = useState<Bill | null>(null);
   const isCheckingToday = checkDate === toDateInputValue(Date.now());
@@ -295,6 +298,17 @@ export function Reports() {
         </Card>
       </div>
 
+      <Card onClick={() => setShowHisaab(true)}>
+        <div className="flex items-center gap-2 text-[var(--color-primary)]">
+          <ScrollText size={16} />
+          <p className="text-sm font-semibold">Din ka Hisaab (PDF jaisa)</p>
+        </div>
+        <p className="text-xs text-[var(--color-text-faint)] mt-1">
+          Cash, Account, Credit, kisne credit liya / chukaya, kiska baaki hai, aur Kitchen / Cigarettes / Fridge / Chocolate ka har item — PDF bhi
+          bana sakte ho
+        </p>
+      </Card>
+
       <Card onClick={() => setShowTableReport(true)}>
         <div className="flex items-center gap-2 text-[var(--color-primary)]">
           <LayoutGrid size={16} />
@@ -449,6 +463,7 @@ export function Reports() {
       )}
       {showCafeReport && <CafeReportModal onClose={() => setShowCafeReport(false)} />}
       {showGalla && <GallaSummaryModal date={checkDate} onClose={() => setShowGalla(false)} />}
+      {showHisaab && <HisaabReport initialDate={checkDate} onClose={() => setShowHisaab(false)} />}
       {showInsights && <InsightsModal onClose={() => setShowInsights(false)} />}
       {showTableReport && <TableReportModal onClose={() => setShowTableReport(false)} />}
       {showMonthlyReport && <MonthlyReportModal onClose={() => setShowMonthlyReport(false)} />}

@@ -8,7 +8,6 @@ if not exist node_modules call npm install --no-audit --no-fund
 node fetch.js || goto :err
 call npx tsx day.ts %D% > nul || goto :err
 node day-pdf.js %D% || goto :err
-node day-xlsx.js %D% || goto :err
 echo.
 echo Ho gaya. Files yaha hain: %~dp0out
 explorer "%~dp0out"
