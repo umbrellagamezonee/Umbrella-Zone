@@ -3,7 +3,6 @@ import {
   REPORT_CATEGORIES,
   categoryStockProfit,
   creditHisaab,
-  dailyCollectionRows,
   gallaByDate,
   type CreditHisaabDay,
   type GallaDay,
@@ -45,7 +44,10 @@ export interface DayReport {
   galla: GallaDay;
   expenses: { category: string; note: string; amount: number }[];
   settlements: { t: number; name: string; cash: number; upi: number; disc: number }[];
-  dailyRows: { item: string; total: number | string; cash: number | string; upi: number | string; credit: number | string }[];
+  // The day split by table / canteen category, ending with a "Total" row:
+  // cash and account, credit given that day, how much of it has since been
+  // paid off, and what's still owed.
+  dailyRows: { item: string; cash: number; upi: number; issued: number; settled: number; credit: number }[];
   canteen: DayReportCategory[];
   // Canteen sale on order lines whose menu item has since been deleted.
   orphanSale: number;
@@ -103,6 +105,7 @@ export function buildDayReport(input: {
     movedOutUpi: 0,
     movedInCash: 0,
     movedInUpi: 0,
+    items: [],
   };
 
   const customerById = new Map(customers.map((c) => [c.id, c]));
@@ -117,9 +120,25 @@ export function buildDayReport(input: {
       disc: b.discount,
     }));
 
-  const dailyRows = dailyCollectionRows(live, menuItems, menuCategories, tables, customers, dayStart, dayEnd)
-    .filter((r) => r.Date === label && r.Item !== "")
-    .map((r) => ({ item: r.Item, total: r["Total collection"], cash: r.Cash, upi: r.Account, credit: r.Credit }));
+  const dailyRows = day.items.map((x) => ({
+    item: x.item,
+    cash: x.cash,
+    upi: x.upi,
+    issued: x.issued,
+    settled: round(x.issued - x.pending),
+    credit: x.pending,
+  }));
+  if (dailyRows.length > 0) {
+    const sumOf = (k: "cash" | "upi" | "issued" | "settled" | "credit") => round(dailyRows.reduce((t, r) => t + r[k], 0));
+    dailyRows.push({
+      item: "Total",
+      cash: sumOf("cash"),
+      upi: sumOf("upi"),
+      issued: sumOf("issued"),
+      settled: sumOf("settled"),
+      credit: sumOf("credit"),
+    });
+  }
 
   // Canteen: what was ordered that day, category by category, exactly as the
   // Monthly Report's category sheets count it.
@@ -246,23 +265,21 @@ export function dayReportSheets(r: DayReport): SheetSpec[] {
 
   sheets.push({
     name: "Table aur Canteen",
-    widths: [44, 12, 12, 16, 14],
-    rows: r.dailyRows.map((row) => {
-      const cash = Number(row.cash) || 0;
-      const upi = Number(row.upi) || 0;
-      return {
-        Item:
-          row.item === "Total"
-            ? "TOTAL"
-            : row.item === "Credit settlement"
-              ? "Purane credit / advance (kisi din se match nahi)"
-              : row.item,
-        Cash: cash,
-        Account: upi,
-        "Cash + Account": round(cash + upi),
-        "Credit baaki": Number(row.credit) || 0,
-      };
-    }),
+    widths: [44, 12, 12, 16, 13, 15, 14],
+    rows: r.dailyRows.map((row) => ({
+      Item:
+        row.item === "Total"
+          ? "TOTAL"
+          : row.item === "Credit settlement"
+            ? "Purane credit / advance (kisi din se match nahi)"
+            : row.item,
+      Cash: row.cash,
+      Account: row.upi,
+      "Cash + Account": round(row.cash + row.upi),
+      "Credit diya": row.issued,
+      "Isme se chuka": row.settled,
+      "Credit baaki": row.credit,
+    })),
   });
 
   const people = d.people.map((p) => ({

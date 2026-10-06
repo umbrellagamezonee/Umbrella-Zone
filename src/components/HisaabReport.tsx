@@ -294,7 +294,7 @@ export function HisaabReport({ initialDate, onClose }: { initialDate: string; on
         />
         <p className="text-xs font-semibold pt-2">Table aur Canteen ke hisse mein</p>
         <Table
-          cols={["", "Cash", "Account", "Cash + Account", "Credit baaki"]}
+          cols={["", "Cash", "Account", "Cash + Account", "Credit diya", "Isme se chuka", "Credit baaki"]}
           rows={day.dailyRows.map((r) => ({
             bold: r.item === "Total",
             cells: [
@@ -303,14 +303,20 @@ export function HisaabReport({ initialDate, onClose }: { initialDate: string; on
                 : r.item === "Credit settlement"
                   ? "Purane credit / advance (kisi din se match nahi)"
                   : r.item,
-              dash(Number(r.cash)),
-              dash(Number(r.upi)),
-              dash(Number(r.cash) + Number(r.upi)),
-              dash(Number(r.credit)),
+              dash(r.cash),
+              dash(r.upi),
+              dash(r.cash + r.upi),
+              dash(r.issued),
+              dash(r.settled),
+              dash(r.credit),
             ],
           }))}
         />
-        <Note>Food = Kitchen, Drinks = Fridge. Total wahi hai jo upar "= Us din ke bills ka hisaab" mein hai.</Note>
+        <Note>
+          Food = Kitchen, Drinks = Fridge. Credit diya − chuka = baaki. Jo bill pehle credit mein gaya aur baad mein settle hua (chahe usi
+          din) wo "Credit diya" mein bhi ginta hai aur "Isme se chuka" mein bhi. Total wahi hai jo upar "= Us din ke bills ka hisaab" aur
+          "{dateLabel} ka credit" mein hai.
+        </Note>
       </Section>
 
       <Section title="4) Canteen — category ke hisaab se" breakBefore>

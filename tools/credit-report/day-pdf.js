@@ -132,8 +132,8 @@ y = table(
 doc.font("Helvetica").fontSize(8.6).fillColor("#333").text("Jo paisa baad mein credit chukane mein aaya wo us din ke hisaab mein gina jaata hai jis din ka wo credit tha - isliye us din ke bills ka Cash/Account galla se alag hota hai. Upar ka milaan dono ko jodta hai.", L, y + 5, { width: W });
 const dr = d.dailyRows.filter((r) => r.item !== "");
 table(
-  [{ h: "Table / Canteen ke hisse mein", w: 250, align: "left" }, { h: "Cash", w: 130 }, { h: "Account", w: 130 }, { h: "Cash + Account", w: 130 }, { h: "Credit baaki", w: 130 }],
-  dr.map((r) => ({ bold: r.item === "Total", cells: [r.item === "Total" ? "TOTAL" : r.item === "Credit settlement" ? "Purane credit / advance (kisi din se match nahi)" : r.item, num(r.cash), num(r.upi), num(Number(r.cash) + Number(r.upi)), num(r.credit)] })),
+  [{ h: "Table / Canteen ke hisse mein", w: 190, align: "left" }, { h: "Cash", w: 90 }, { h: "Account", w: 90 }, { h: "Cash + Account", w: 105 }, { h: "Credit diya", w: 95 }, { h: "Isme se chuka", w: 100 }, { h: "Credit baaki", w: 100 }],
+  dr.map((r) => ({ bold: r.item === "Total", cells: [r.item === "Total" ? "TOTAL" : r.item === "Credit settlement" ? "Purane credit / advance (match nahi)" : r.item, num(r.cash), num(r.upi), num(Number(r.cash) + Number(r.upi)), num(r.issued), num(r.settled), num(r.credit)] })),
   doc.y + 14, { rowH: 17, font: 9 }
 );
 doc.y = Math.min(doc.y, MAX_Y - 20);

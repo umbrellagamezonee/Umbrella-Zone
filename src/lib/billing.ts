@@ -298,6 +298,9 @@ interface DailyTotals {
   movedOutUpi: number;
   movedInCash: number;
   movedInUpi: number;
+  // One entry per table / canteen category that had billing or money that
+  // day, in the same order the Daily collection rows print them.
+  items: { item: string; cash: number; upi: number; issued: number; pending: number }[];
 }
 
 // Day-by-day cash/account/credit breakdown, one block per date — what the
@@ -701,6 +704,10 @@ function buildDailyCollection(
     const label = formatDateKey(dateKey, { day: "numeric", month: "long" });
     const dayTotal = newBucket();
     const people = new Map<string, { issued: number; pending: number }>();
+    const items: DailyTotals["items"] = [];
+    const addItem = (name: string, b: Bucket) => {
+      if (b.issued > 0.005 || !isEmpty(b)) items.push({ item: name, cash: b.cash, upi: b.upi, issued: b.issued, pending: b.credit });
+    };
     const countPeople = (b: Bucket) => {
       for (const [name, amt] of b.issuedByCustomer) {
         const cur = people.get(name) ?? { issued: 0, pending: 0 };
@@ -726,6 +733,7 @@ function buildDailyCollection(
       if (b) {
         dayTotal.issued += b.issued;
         countPeople(b);
+        addItem(t.name, b);
       }
       if (isEmpty(b)) continue;
       rows.push({
@@ -748,6 +756,7 @@ function buildDailyCollection(
       if (b) {
         dayTotal.issued += b.issued;
         countPeople(b);
+        addItem(label2, b);
       }
       if (isEmpty(b)) continue;
       rows.push({
@@ -778,6 +787,7 @@ function buildDailyCollection(
       movedOutUpi: flows.get(dateKey)?.outUpi ?? 0,
       movedInCash: flows.get(dateKey)?.inCash ?? 0,
       movedInUpi: flows.get(dateKey)?.inUpi ?? 0,
+      items,
     });
     rows.push({
       Date: label,
@@ -811,6 +821,7 @@ function buildDailyCollection(
       movedOutUpi: f.outUpi,
       movedInCash: f.inCash,
       movedInUpi: f.inUpi,
+      items: [],
     });
   }
   days.sort((a, b) => a.dateKey.localeCompare(b.dateKey));
@@ -854,6 +865,9 @@ export interface CreditHisaabDay {
   movedOutUpi: number;
   movedInCash: number;
   movedInUpi: number;
+  // The day split by table / canteen category: cash, account, credit given
+  // and still owed — adds up to the day's cash / upi / issued / pending.
+  items: { item: string; cash: number; upi: number; issued: number; pending: number }[];
 }
 
 export interface CreditHisaab {
@@ -916,6 +930,13 @@ export function creditHisaab(
     movedOutUpi: round(d.movedOutUpi),
     movedInCash: round(d.movedInCash),
     movedInUpi: round(d.movedInUpi),
+    items: d.items.map((x) => ({
+      item: x.item,
+      cash: round(x.cash),
+      upi: round(x.upi),
+      issued: round(x.issued),
+      pending: round(x.pending),
+    })),
   }));
   const sum = (f: (d: CreditHisaabDay) => number) => round(out.reduce((s, d) => s + f(d), 0));
   return {
