@@ -132,9 +132,12 @@ y = table(
 doc.font("Helvetica").fontSize(8.6).fillColor("#333").text("Jo paisa baad mein credit chukane mein aaya wo us din ke hisaab mein gina jaata hai jis din ka wo credit tha - isliye us din ke bills ka Cash/Account galla se alag hota hai. Upar ka milaan dono ko jodta hai.", L, y + 5, { width: W });
 const dr = d.dailyRows.filter((r) => r.item !== "");
 table(
-  [{ h: "Table / Canteen ke hisse mein", w: 190, align: "left" }, { h: "Cash", w: 90 }, { h: "Account", w: 90 }, { h: "Cash + Account", w: 105 }, { h: "Credit diya", w: 95 }, { h: "Isme se chuka", w: 100 }, { h: "Credit baaki", w: 100 }],
-  dr.map((r) => ({ bold: r.item === "Total", cells: [r.item === "Total" ? "TOTAL" : r.item === "Credit settlement" ? "Purane credit / advance (match nahi)" : r.item, num(r.cash), num(r.upi), num(Number(r.cash) + Number(r.upi)), num(r.issued), num(r.settled), num(r.credit)] })),
-  doc.y + 14, { rowH: 17, font: 9 }
+  [{ h: "Table / Canteen ke hisse mein", w: 170, align: "left" }, { h: "Kul bill", w: 80 }, { h: "Cash", w: 80 }, { h: "Account", w: 80 }, { h: "Cash + Account", w: 95 }, { h: "Credit diya", w: 85 }, { h: "Isme se chuka", w: 90 }, { h: "Credit baaki", w: 90 }],
+  dr.map((r) => ({
+    bold: r.kind === "subtotal" || r.kind === "total",
+    cells: [r.kind === "total" ? "TOTAL" : r.item === "Credit settlement" ? "Purane credit / advance" : r.item, r.kind === "other" ? "-" : num(r.billed), num(r.cash), num(r.upi), num(Number(r.cash) + Number(r.upi)), num(r.issued), num(r.settled), num(r.credit)],
+  })),
+  doc.y + 14, { rowH: 16, font: 8.6 }
 );
 doc.y = Math.min(doc.y, MAX_Y - 20);
 

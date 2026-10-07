@@ -23,10 +23,7 @@ export function Credits() {
   const customers = useCustomersStore((s) => s.customers);
   const markReminded = useCustomersStore((s) => s.markReminded);
   const orders = useOrdersStore((s) => s.orders);
-  const markOrderBilled = useOrdersStore((s) => s.markBilled);
   const bills = useBillsStore((s) => s.bills);
-  const createOpenBill = useBillsStore((s) => s.createOpenBill);
-  const settlePayment = useBillsStore((s) => s.settlePayment);
   const currency = useSettingsStore((s) => s.currencySymbol);
   const storeName = useSettingsStore((s) => s.storeName);
   const [sendingId, setSendingId] = useState<string | null>(null);
@@ -45,41 +42,11 @@ export function Credits() {
     customerPendingOrders(orders, bills, customerId).reduce((sum, o) => sum + orderTotal(o), 0) +
     customerOpenBills(bills, customerId).reduce((sum, b) => sum + b.amountDue, 0);
 
-  // Settle needs a real credit balance to pay off — a customer whose total
-  // here is entirely unbilled pending orders (or stuck-open bills) has
-  // creditBalance 0, so bill every pending order and settle every stuck-open
-  // bill onto their credit first (same as the 24h auto-credit sweep does),
-  // then open Settle for the resulting real balance. Otherwise tapping
-  // Settle on a pending-only total silently did nothing.
+  // Opening Settle only shows the total — billed credit plus anything served
+  // but not yet billed. Nothing is changed until a payment is actually
+  // recorded (see SettleCreditModal / billPendingToCredit), so opening it
+  // and backing out leaves the customer's account exactly as it was.
   function handleSettleClick(c: Customer) {
-    const pending = customerPendingOrders(orders, bills, c.id);
-    for (const order of pending) {
-      const total = orderTotal(order);
-      if (total <= 0) continue;
-      const bill = createOpenBill({
-        tableId: null,
-        tableName: c.name,
-        orderId: order.id,
-        gameId: null,
-        gameName: null,
-        customerId: c.id,
-        tableChargeMinutes: 0,
-        tableCharge: 0,
-        canteenCharge: total,
-        canteenItems: order.items.map((i) => ({
-          name: i.name,
-          price: i.price,
-          qty: i.qty,
-          personName: i.personName ?? null,
-        })),
-        discount: 0,
-      });
-      markOrderBilled(order.id);
-      settlePayment(bill.id, { amountCash: 0, amountUpi: 0 });
-    }
-    for (const bill of customerOpenBills(bills, c.id)) {
-      settlePayment(bill.id, { amountCash: 0, amountUpi: 0 });
-    }
     const fresh = useCustomersStore.getState().customers.find((x) => x.id === c.id) ?? c;
     setSettleCustomer(fresh);
   }

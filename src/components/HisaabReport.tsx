@@ -187,6 +187,8 @@ export function HisaabReport({ initialDate, onClose }: { initialDate: string; on
   const dateLabel = formatDateKey(date, { day: "numeric", month: "long", year: "numeric" });
 
   const d = day.day;
+  const tableSub = day.dailyRows.find((r) => r.item === "Table ka total");
+  const canteenSub = day.dailyRows.find((r) => r.item === "Canteen ka total");
   const dayView = (
     <div className="space-y-6">
       <Section title="1) Us din kitna paisa aaya — Galla (Galla Summary jaisa)">
@@ -293,16 +295,24 @@ export function HisaabReport({ initialDate, onClose }: { initialDate: string; on
           ]}
         />
         <p className="text-xs font-semibold pt-2">Table aur Canteen ke hisse mein</p>
+        <Tiles
+          items={[
+            { label: "Table ka kul bill", value: money(tableSub?.billed ?? 0) },
+            { label: "Canteen ka kul bill", value: money(canteenSub?.billed ?? 0) },
+            { label: "US DIN KA KUL BILL", value: money(d.billed), strong: true },
+          ]}
+        />
         <Table
-          cols={["", "Cash", "Account", "Cash + Account", "Credit diya", "Isme se chuka", "Credit baaki"]}
+          cols={["", "Kul bill", "Cash", "Account", "Cash + Account", "Credit diya", "Isme se chuka", "Credit baaki"]}
           rows={day.dailyRows.map((r) => ({
-            bold: r.item === "Total",
+            bold: r.kind === "subtotal" || r.kind === "total",
             cells: [
-              r.item === "Total"
+              r.kind === "total"
                 ? "TOTAL"
                 : r.item === "Credit settlement"
                   ? "Purane credit / advance (kisi din se match nahi)"
                   : r.item,
+              r.kind === "other" ? "-" : dash(r.billed),
               dash(r.cash),
               dash(r.upi),
               dash(r.cash + r.upi),
@@ -313,9 +323,9 @@ export function HisaabReport({ initialDate, onClose }: { initialDate: string; on
           }))}
         />
         <Note>
-          Food = Kitchen, Drinks = Fridge. Credit diya − chuka = baaki. Jo bill pehle credit mein gaya aur baad mein settle hua (chahe usi
-          din) wo "Credit diya" mein bhi ginta hai aur "Isme se chuka" mein bhi. Total wahi hai jo upar "= Us din ke bills ka hisaab" aur
-          "{dateLabel} ka credit" mein hai.
+          Kul bill = us din jo bill bana (Cash + Account + Credit baaki + jo maaf hua). Food = Kitchen, Drinks = Fridge. Credit diya − chuka =
+          baaki. Jo bill pehle credit mein gaya aur baad mein settle hua (chahe usi din) wo "Credit diya" mein bhi ginta hai aur "Isme se chuka"
+          mein bhi. Total wahi hai jo upar "= Us din ke bills ka hisaab" aur "{dateLabel} ka credit" mein hai.
         </Note>
       </Section>
 

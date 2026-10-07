@@ -19,6 +19,7 @@ import {
   orderTotal,
   personBillView,
 } from "../lib/billing";
+import { billPendingToCredit } from "../lib/creditHelpers";
 import { cleanName, customerLabel, findCustomerByName, normalizeName } from "../lib/customerName";
 import { isCreditSettlement } from "../lib/billLabel";
 import type { Customer, Bill, CanteenOrder } from "../types";
@@ -243,6 +244,10 @@ interface LedgerEntry {
   balanceAfter: number;
   bill: Bill | null; // set for anything tappable through to the full receipt
   order: CanteenOrder | null; // set only for a still-pending (unbilled) order
+  // Set when a bill was made long after its order — shown on the date line
+  // ("ordered 27 Sept") so a backlog that got billed in one go can't read as
+  // a fresh charge dated today.
+  orderedNote: string | null;
 }
 
 // What this line is actually for. A table session (has a real tableId)
@@ -298,6 +303,7 @@ function buildLedger(
         balanceAfter: balance,
         bill: null,
         order: ev.order,
+        orderedNote: null,
       };
     }
     const b = ev.bill;
@@ -314,15 +320,17 @@ function buildLedger(
         balanceAfter: balance,
         bill: b,
         order: null,
+        orderedNote: null,
       };
     }
     const view = personBillView(b, nameKey);
     if (view.onCredit > 0) balance += view.onCredit;
-    let particulars = b.tableId ? (b.tableName ?? "Table") : describeItems(b.canteenItems);
+    const particulars = b.tableId ? (b.tableName ?? "Table") : describeItems(b.canteenItems);
     const orderedAt = b.orderId ? orderById.get(b.orderId)?.createdAt : null;
-    if (orderedAt != null && b.createdAt - orderedAt > LATE_BILL_GAP_MS) {
-      particulars += ` (ordered ${formatDateKey(toDateInputValue(orderedAt), { day: "numeric", month: "short" })})`;
-    }
+    const orderedNote =
+      orderedAt != null && b.createdAt - orderedAt > LATE_BILL_GAP_MS
+        ? `ordered ${formatDateKey(toDateInputValue(orderedAt), { day: "numeric", month: "short" })}`
+        : null;
     return {
       id: b.id,
       date: b.createdAt,
@@ -333,6 +341,7 @@ function buildLedger(
       balanceAfter: balance,
       bill: b,
       order: null,
+      orderedNote,
     };
   });
 
@@ -346,7 +355,6 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
   const bills = useBillsStore((s) => s.bills);
   const reassignCustomer = useBillsStore((s) => s.reassignCustomer);
   const createOpenBill = useBillsStore((s) => s.createOpenBill);
-  const settlePayment = useBillsStore((s) => s.settlePayment);
   const orders = useOrdersStore((s) => s.orders);
   const markOrderBilled = useOrdersStore((s) => s.markBilled);
   const currency = useSettingsStore((s) => s.currencySymbol);
@@ -446,42 +454,10 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
     setCheckoutBill(bill);
   }
 
-  // Settle needs a real credit balance to pay off — a customer whose total
-  // owed is entirely unbilled pending orders (or stuck-open bills) has
-  // creditBalance 0, so bill every pending order and settle every stuck-open
-  // bill onto their credit first (same as Credits' own handleSettleClick and
-  // the 24h auto-credit sweep), then open Settle for the resulting real
-  // balance. Otherwise "Settle payment" would either stay hidden or pay off
-  // only part of what's owed, leaving the rest looking stuck as still-pending
-  // even right after a full settlement.
+  // Opening Settle only shows the total (billed credit + anything served but
+  // not yet billed) — nothing is changed until a payment is actually recorded
+  // (see SettleCreditModal / billPendingToCredit).
   function handleSettleClick() {
-    for (const order of pendingOrders) {
-      const total = orderTotal(order);
-      if (total <= 0) continue;
-      const bill = createOpenBill({
-        tableId: null,
-        tableName: customer.name,
-        orderId: order.id,
-        gameId: null,
-        gameName: null,
-        customerId: customer.id,
-        tableChargeMinutes: 0,
-        tableCharge: 0,
-        canteenCharge: total,
-        canteenItems: order.items.map((i) => ({
-          name: i.name,
-          price: i.price,
-          qty: i.qty,
-          personName: i.personName ?? null,
-        })),
-        discount: 0,
-      });
-      markOrderBilled(order.id);
-      settlePayment(bill.id, { amountCash: 0, amountUpi: 0 });
-    }
-    for (const bill of openBills) {
-      settlePayment(bill.id, { amountCash: 0, amountUpi: 0 });
-    }
     setShowSettle(true);
   }
 
@@ -582,13 +558,18 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
                     }
                   >
                     <div className="min-w-0">
-                      <p className="text-sm truncate">
+                      <p className="text-sm break-words">
                         {entry.particulars}
                         {entry.bill?.status === "cancelled" && (
                           <span className="text-[var(--color-text-faint)] font-normal"> · Cancelled</span>
                         )}
                       </p>
-                      <p className="text-xs text-[var(--color-text-faint)]">{formatDateTime(entry.date)}</p>
+                      <p className="text-xs text-[var(--color-text-faint)]">
+                        {formatDateTime(entry.date)}
+                        {entry.orderedNote && (
+                          <span className="text-[var(--color-warning)] font-medium"> · {entry.orderedNote}</span>
+                        )}
+                      </p>
                     </div>
                     <div className="text-right shrink-0">
                       {entry.debit > 0 ? (
@@ -702,14 +683,25 @@ export function SettleCreditModal({ customer, onClose }: { customer: Customer; o
   const currency = useSettingsStore((s) => s.currencySymbol);
   const recordCreditSettlement = useBillsStore((s) => s.recordCreditSettlement);
   const bills = useBillsStore((s) => s.bills);
-  const customerDue = creditBalanceFor(bills, customer.id, normalizeName(customer.name));
+  // Total owed = billed credit + anything served but not yet billed. The
+  // unbilled part only becomes credit bills when a payment is recorded below.
+  // Both are frozen at the moment the settlement is recorded (see
+  // settled.remaining) — the live figures drop as soon as it's saved.
+  const orders = useOrdersStore((s) => s.orders);
+  const customerDue =
+    creditBalanceFor(bills, customer.id, normalizeName(customer.name)) +
+    customerPendingOrders(orders, bills, customer.id).reduce((sum, o) => sum + orderTotal(o), 0) +
+    customerOpenBills(bills, customer.id).reduce((sum, b) => sum + b.amountDue, 0);
 
   const [discountInput, setDiscountInput] = useState("0");
   const [cashInput, setCashInput] = useState(customerDue.toFixed(2));
   const [accountInput, setAccountInput] = useState("0");
-  const [settled, setSettled] = useState<{ amountCash: number; amountUpi: number; discount: number } | null>(
-    null
-  );
+  const [settled, setSettled] = useState<{
+    amountCash: number;
+    amountUpi: number;
+    discount: number;
+    remaining: number;
+  } | null>(null);
 
   const discount = Math.min(Math.max(0, Number(discountInput) || 0), customerDue);
   const payableMax = Math.max(0, customerDue - discount);
@@ -721,6 +713,9 @@ export function SettleCreditModal({ customer, onClose }: { customer: Customer; o
 
   function handleSettle() {
     if (!canSettle) return;
+    // A payment is being recorded for real now — only now does the backlog of
+    // served-but-unbilled orders turn into credit bills for it to pay off.
+    billPendingToCredit({ id: customer.id, name: customer.name });
     recordCreditSettlement({
       customerId: customer.id,
       customerName: customer.name,
@@ -728,7 +723,7 @@ export function SettleCreditModal({ customer, onClose }: { customer: Customer; o
       amountUpi: account,
       discount,
     });
-    setSettled({ amountCash: cash, amountUpi: account, discount });
+    setSettled({ amountCash: cash, amountUpi: account, discount, remaining });
   }
 
   if (settled) {
@@ -759,8 +754,8 @@ export function SettleCreditModal({ customer, onClose }: { customer: Customer; o
               </p>
             )}
             <p className="text-sm text-[var(--color-text-dim)] mt-2">
-              {remaining > 0
-                ? `${formatMoney(remaining, currency)} still due`
+              {settled.remaining > 0
+                ? `${formatMoney(settled.remaining, currency)} still due`
                 : "Credit fully cleared"}
             </p>
           </div>

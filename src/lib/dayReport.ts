@@ -47,7 +47,18 @@ export interface DayReport {
   // The day split by table / canteen category, ending with a "Total" row:
   // cash and account, credit given that day, how much of it has since been
   // paid off, and what's still owed.
-  dailyRows: { item: string; cash: number; upi: number; issued: number; settled: number; credit: number }[];
+  // "billed" = everything billed on that row: cash + account + still owed +
+  // written off. "subtotal" rows add up the tables, then the canteen.
+  dailyRows: {
+    item: string;
+    kind: "table" | "canteen" | "other" | "subtotal" | "total";
+    billed: number;
+    cash: number;
+    upi: number;
+    issued: number;
+    settled: number;
+    credit: number;
+  }[];
   canteen: DayReportCategory[];
   // Canteen sale on order lines whose menu item has since been deleted.
   orphanSale: number;
@@ -106,6 +117,7 @@ export function buildDayReport(input: {
     movedInCash: 0,
     movedInUpi: 0,
     items: [],
+    billed: 0,
   };
 
   const customerById = new Map(customers.map((c) => [c.id, c]));
@@ -120,25 +132,52 @@ export function buildDayReport(input: {
       disc: b.discount,
     }));
 
-  const dailyRows = day.items.map((x) => ({
+  type Row = DayReport["dailyRows"][number];
+  const itemRows: Row[] = day.items.map((x) => ({
     item: x.item,
+    kind: x.kind,
+    billed: x.billed,
     cash: x.cash,
     upi: x.upi,
     issued: x.issued,
     settled: round(x.issued - x.pending),
     credit: x.pending,
   }));
-  if (dailyRows.length > 0) {
-    const sumOf = (k: "cash" | "upi" | "issued" | "settled" | "credit") => round(dailyRows.reduce((t, r) => t + r[k], 0));
-    dailyRows.push({
-      item: "Total",
-      cash: sumOf("cash"),
-      upi: sumOf("upi"),
-      issued: sumOf("issued"),
-      settled: sumOf("settled"),
-      credit: sumOf("credit"),
-    });
-  }
+  const subtotal = (name: string, rows: Row[]): Row => ({
+    item: name,
+    kind: "subtotal",
+    billed: round(rows.reduce((t, r) => t + r.billed, 0)),
+    cash: round(rows.reduce((t, r) => t + r.cash, 0)),
+    upi: round(rows.reduce((t, r) => t + r.upi, 0)),
+    issued: round(rows.reduce((t, r) => t + r.issued, 0)),
+    settled: round(rows.reduce((t, r) => t + r.settled, 0)),
+    credit: round(rows.reduce((t, r) => t + r.credit, 0)),
+  });
+  const tableRows = itemRows.filter((r) => r.kind === "table");
+  const canteenRows = itemRows.filter((r) => r.kind === "canteen");
+  const otherRows = itemRows.filter((r) => r.kind === "other");
+  // The Total row is the day's own figures (the same ones the tiles above show),
+  // not a re-addition of the rounded rows, so the two can never differ by a paisa.
+  const dailyRows: Row[] =
+    itemRows.length === 0
+      ? []
+      : [
+          ...tableRows,
+          ...(tableRows.length ? [subtotal("Table ka total", tableRows)] : []),
+          ...canteenRows,
+          ...(canteenRows.length ? [subtotal("Canteen ka total", canteenRows)] : []),
+          ...otherRows,
+          {
+            item: "Total",
+            kind: "total",
+            billed: day.billed,
+            cash: day.cash,
+            upi: day.upi,
+            issued: day.issued,
+            settled: day.settled,
+            credit: day.pending,
+          },
+        ];
 
   // Canteen: what was ordered that day, category by category, exactly as the
   // Monthly Report's category sheets count it.
@@ -265,14 +304,15 @@ export function dayReportSheets(r: DayReport): SheetSpec[] {
 
   sheets.push({
     name: "Table aur Canteen",
-    widths: [44, 12, 12, 16, 13, 15, 14],
+    widths: [44, 12, 12, 12, 16, 13, 15, 14],
     rows: r.dailyRows.map((row) => ({
       Item:
-        row.item === "Total"
+        row.kind === "total"
           ? "TOTAL"
           : row.item === "Credit settlement"
             ? "Purane credit / advance (kisi din se match nahi)"
             : row.item,
+      "Kul bill": row.kind === "other" ? "" : row.billed,
       Cash: row.cash,
       Account: row.upi,
       "Cash + Account": round(row.cash + row.upi),

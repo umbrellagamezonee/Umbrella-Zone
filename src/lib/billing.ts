@@ -300,7 +300,10 @@ interface DailyTotals {
   movedInUpi: number;
   // One entry per table / canteen category that had billing or money that
   // day, in the same order the Daily collection rows print them.
-  items: { item: string; cash: number; upi: number; issued: number; pending: number }[];
+  items: { item: string; kind: "table" | "canteen" | "other"; cash: number; upi: number; issued: number; pending: number; billed: number }[];
+  // Everything billed that day (table + canteen), i.e. the sum of that day's
+  // bill totals: cash + account + still owed + written off.
+  billed: number;
 }
 
 // Day-by-day cash/account/credit breakdown, one block per date — what the
@@ -411,6 +414,10 @@ function buildDailyCollection(
     // Same split of `issued`, by who took the credit — so a day's credit can
     // be listed person by person (given / since paid / still owed).
     issuedByCustomer: Map<string, number>;
+    // Part of this row's credit that was written off (a discount given when
+    // someone settled) — so cash + account + still-owed + forgiven is exactly
+    // what was billed on this row.
+    forgiven: number;
   };
   const newBucket = (): Bucket => ({
     total: 0,
@@ -420,6 +427,7 @@ function buildDailyCollection(
     issued: 0,
     creditByCustomer: new Map(),
     issuedByCustomer: new Map(),
+    forgiven: 0,
   });
   const addTo = (b: Bucket, cash: number, upi: number, credit: number, customerName?: string) => {
     b.cash += cash;
@@ -508,6 +516,7 @@ function buildDailyCollection(
         part.bucket.cash += takeCash * partFrac;
         part.bucket.upi += takeUpi * partFrac;
         part.bucket.total += (takeCash + takeUpi) * partFrac;
+        part.bucket.forgiven += Math.max(0, take - takeCash - takeUpi) * partFrac;
       }
       adv.bucket.cash -= takeCash;
       adv.bucket.upi -= takeUpi;
@@ -559,6 +568,7 @@ function buildDailyCollection(
           part.bucket.cash += takeCash * partFrac;
           part.bucket.upi += takeUpi * partFrac;
           part.bucket.total += (takeCash + takeUpi) * partFrac;
+          part.bucket.forgiven += Math.max(0, take - takeCash - takeUpi) * partFrac;
         }
         chunk.remaining -= take;
         left -= take;
@@ -647,12 +657,17 @@ function buildDailyCollection(
     const customerName =
       customers.find((c) => c.id === bill.customerId)?.name ?? settlementPersonName(bill, undefined);
     const chunkParts: ChunkPart[] = [];
+    // A bill whose due was written off by hand (what was owed zeroed without
+    // anyone paying it) — billed, but neither paid nor still owed. Counted as
+    // forgiven so a row's billed total still equals its bills' totals.
+    const writtenOff = Math.max(0, bill.total - bill.amountCash - bill.amountUpi - bill.amountDue);
 
     if (bill.tableId && bill.tableName && bill.tableCharge > 0) {
       const tBucket = bucketFor(dailyTables, dateKey, bill.tableName);
       const frac = bill.tableCharge / rawSum;
       const credit = bill.amountDue * frac;
       addTo(tBucket, bill.amountCash * frac, bill.amountUpi * frac, credit, customerName);
+      tBucket.forgiven += writtenOff * frac;
       if (credit > 0.005) chunkParts.push({ bucket: tBucket, amount: credit, customerName });
     }
 
@@ -668,6 +683,7 @@ function buildDailyCollection(
         const cBucket = bucketFor(dailyCategories, dateKey, categoryLabelFor(item.name));
         const credit = canteenCredit * itemFrac;
         addTo(cBucket, canteenCash * itemFrac, canteenUpi * itemFrac, credit, customerName);
+        cBucket.forgiven += writtenOff * canteenFrac * itemFrac;
         if (credit > 0.005) chunkParts.push({ bucket: cBucket, amount: credit, customerName });
       }
     }
@@ -705,8 +721,15 @@ function buildDailyCollection(
     const dayTotal = newBucket();
     const people = new Map<string, { issued: number; pending: number }>();
     const items: DailyTotals["items"] = [];
-    const addItem = (name: string, b: Bucket) => {
-      if (b.issued > 0.005 || !isEmpty(b)) items.push({ item: name, cash: b.cash, upi: b.upi, issued: b.issued, pending: b.credit });
+    let dayBilled = 0;
+    const addItem = (name: string, kind: "table" | "canteen" | "other", b: Bucket) => {
+      // The "Credit settlement" bucket only holds money that couldn't be
+      // matched to any billing — it isn't something that was billed.
+      const billed = kind === "other" ? 0 : b.cash + b.upi + b.credit + b.forgiven;
+      dayBilled += billed;
+      if (b.issued > 0.005 || !isEmpty(b)) {
+        items.push({ item: name, kind, cash: b.cash, upi: b.upi, issued: b.issued, pending: b.credit, billed });
+      }
     };
     const countPeople = (b: Bucket) => {
       for (const [name, amt] of b.issuedByCustomer) {
@@ -733,7 +756,7 @@ function buildDailyCollection(
       if (b) {
         dayTotal.issued += b.issued;
         countPeople(b);
-        addItem(t.name, b);
+        addItem(t.name, "table", b);
       }
       if (isEmpty(b)) continue;
       rows.push({
@@ -756,7 +779,7 @@ function buildDailyCollection(
       if (b) {
         dayTotal.issued += b.issued;
         countPeople(b);
-        addItem(label2, b);
+        addItem(label2, label2 === "Credit settlement" ? "other" : "canteen", b);
       }
       if (isEmpty(b)) continue;
       rows.push({
@@ -788,6 +811,7 @@ function buildDailyCollection(
       movedInCash: flows.get(dateKey)?.inCash ?? 0,
       movedInUpi: flows.get(dateKey)?.inUpi ?? 0,
       items,
+      billed: dayBilled,
     });
     rows.push({
       Date: label,
@@ -822,6 +846,7 @@ function buildDailyCollection(
       movedInCash: f.inCash,
       movedInUpi: f.inUpi,
       items: [],
+      billed: 0,
     });
   }
   days.sort((a, b) => a.dateKey.localeCompare(b.dateKey));
@@ -867,7 +892,9 @@ export interface CreditHisaabDay {
   movedInUpi: number;
   // The day split by table / canteen category: cash, account, credit given
   // and still owed — adds up to the day's cash / upi / issued / pending.
-  items: { item: string; cash: number; upi: number; issued: number; pending: number }[];
+  items: { item: string; kind: "table" | "canteen" | "other"; cash: number; upi: number; issued: number; pending: number; billed: number }[];
+  // Sum of that day's bill totals (table + canteen) — see DailyTotals.billed.
+  billed: number;
 }
 
 export interface CreditHisaab {
@@ -932,11 +959,14 @@ export function creditHisaab(
     movedInUpi: round(d.movedInUpi),
     items: d.items.map((x) => ({
       item: x.item,
+      kind: x.kind,
       cash: round(x.cash),
       upi: round(x.upi),
       issued: round(x.issued),
       pending: round(x.pending),
+      billed: round(x.billed),
     })),
+    billed: round(d.billed),
   }));
   const sum = (f: (d: CreditHisaabDay) => number) => round(out.reduce((s, d) => s + f(d), 0));
   return {
