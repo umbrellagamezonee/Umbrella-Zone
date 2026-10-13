@@ -405,6 +405,29 @@ export function HisaabReport({ initialDate, onClose }: { initialDate: string; on
     </div>
   );
 
+  // The same day-wise figures added up month by month (credit given in that
+  // month, how much of it has been paid, what's still owed).
+  const creditMonths = (() => {
+    if (!credit) return [];
+    const byMonth = new Map<
+      string,
+      { cash: number; upi: number; issued: number; settled: number; pending: number; gallaCash: number; gallaUpi: number }
+    >();
+    for (const d of credit.days) {
+      const k = d.dateKey.slice(0, 7);
+      const m = byMonth.get(k) ?? { cash: 0, upi: 0, issued: 0, settled: 0, pending: 0, gallaCash: 0, gallaUpi: 0 };
+      m.cash += d.cash;
+      m.upi += d.upi;
+      m.issued += d.issued;
+      m.settled += d.settled;
+      m.pending += d.pending;
+      m.gallaCash += d.gallaCash;
+      m.gallaUpi += d.gallaUpi;
+      byMonth.set(k, m);
+    }
+    return [...byMonth.entries()].sort((a, b) => b[0].localeCompare(a[0]));
+  })();
+
   const creditView =
     credit && pending ? (
       <div className="space-y-6">
@@ -416,6 +439,36 @@ export function HisaabReport({ initialDate, onClose }: { initialDate: string; on
               { label: "CREDIT BAAKI (abhi pending)", value: money(credit.total.pending), tone: "bad", strong: true },
             ]}
           />
+          {creditMonths.length > 1 && (
+            <>
+              <p className="text-xs font-semibold pt-1">Mahine ke hisaab se</p>
+              <Table
+                cols={[
+                  "Mahina",
+                  "Credit diya",
+                  "Credit settle hua",
+                  "Credit baaki",
+                  "Cash (bills ka)",
+                  "Account (bills ka)",
+                  "Galla Cash",
+                  "Galla Account",
+                ]}
+                rows={creditMonths.map(([k, m]) => ({
+                  cells: [
+                    formatDateKey(`${k}-01`, { month: "long", year: "numeric" }),
+                    dash(m.issued),
+                    dash(m.settled),
+                    dash(m.pending),
+                    dash(m.cash),
+                    dash(m.upi),
+                    dash(m.gallaCash),
+                    dash(m.gallaUpi),
+                  ],
+                }))}
+              />
+              <p className="text-xs font-semibold pt-1">Din ke hisaab se</p>
+            </>
+          )}
           <Table
             cols={[
               "Din",

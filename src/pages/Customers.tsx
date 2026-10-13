@@ -10,7 +10,13 @@ import { useCustomersStore } from "../store/useCustomersStore";
 import { useBillsStore } from "../store/useBillsStore";
 import { useOrdersStore } from "../store/useOrdersStore";
 import { useSettingsStore } from "../store/useSettingsStore";
-import { formatMoney, formatDateTime, formatDateKey, toDateInputValue } from "../lib/format";
+import {
+  formatMoney,
+  formatDateTime,
+  formatDateKey,
+  toDateInputValue,
+  dateInputValueToIstMidnight,
+} from "../lib/format";
 import {
   billCollectedFor,
   creditBalanceFor,
@@ -273,6 +279,26 @@ function describeItems(items: { name: string; qty: number }[]): string {
 // exactly like a wrong-person mistake when it's really just late billing.
 const LATE_BILL_GAP_MS = 6 * 60 * 60 * 1000;
 
+// The period picked above the ledger: "all", one month ("YYYY-MM"), or a
+// custom from/to date. Returns null for "everything".
+function ledgerPeriodRange(
+  period: string,
+  from: string,
+  to: string
+): { startMs: number; endMs: number } | null {
+  if (period === "all") return null;
+  if (period === "custom") {
+    if (!from && !to) return null;
+    return {
+      startMs: from ? dateInputValueToIstMidnight(from) : -Infinity,
+      endMs: to ? dateInputValueToIstMidnight(to) + 86_400_000 : Infinity,
+    };
+  }
+  const [y, m] = period.split("-").map(Number);
+  const next = m === 12 ? `${y + 1}-01-01` : `${y}-${String(m + 1).padStart(2, "0")}-01`;
+  return { startMs: dateInputValueToIstMidnight(`${period}-01`), endMs: dateInputValueToIstMidnight(next) };
+}
+
 function buildLedger(
   customerBills: Bill[],
   pendingOrders: CanteenOrder[],
@@ -365,6 +391,10 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
   const [checkoutBill, setCheckoutBill] = useState<Bill | null>(null);
   const [showSettle, setShowSettle] = useState(false);
   const [mergeTarget, setMergeTarget] = useState<Customer | null>(null);
+  // Which part of the ledger is shown: everything, one month, or from/to dates.
+  const [period, setPeriod] = useState("all");
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
   // Read live off the store — settling a payment from right here should
   // update the balance on screen immediately, not just after closing and
   // reopening this modal.
@@ -483,6 +513,22 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
   // stood right after that entry).
   const ledgerEntries = buildLedger(customerBills, pendingOrders, nameKey, orders);
 
+  // Month-wise (or date-to-date) view of the same ledger. Every row keeps the
+  // running balance it had in the full history, so a month's figures add up:
+  // balance at the start + credit taken - paid = balance at the end.
+  const monthKeys = [...new Set(ledgerEntries.map((e) => toDateInputValue(e.date).slice(0, 7)))].sort().reverse();
+  const periodRange = ledgerPeriodRange(period, fromDate, toDate);
+  const visibleEntries = periodRange
+    ? ledgerEntries.filter((e) => e.date >= periodRange.startMs && e.date < periodRange.endMs)
+    : ledgerEntries;
+  // ledgerEntries is newest-first, so the first one before the start is the
+  // balance as it stood when the period began.
+  const periodOpening = periodRange ? (ledgerEntries.find((e) => e.date < periodRange.startMs)?.balanceAfter ?? 0) : 0;
+  const periodAdded = visibleEntries.reduce((s, e) => s + e.debit, 0);
+  const periodPaid = visibleEntries.reduce((s, e) => s + e.credit, 0);
+  const periodClosing = visibleEntries.length > 0 ? visibleEntries[0].balanceAfter : periodOpening;
+  const monthLabel = (key: string) => formatDateKey(`${key}-01`, { month: "long", year: "numeric" });
+
   return (
     <Modal title={customerLabel(customer, allCustomers)} onClose={onClose}>
       <div className="space-y-4">
@@ -528,9 +574,79 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
           <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-2">
             LEDGER
           </p>
+          {ledgerEntries.length > 0 && (
+            <div className="mb-3 space-y-2">
+              <select
+                value={period}
+                onChange={(e) => setPeriod(e.target.value)}
+                className="w-full rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] px-3 py-2 text-sm outline-none"
+              >
+                <option value="all">Poora hisaab (sab din)</option>
+                {monthKeys.map((k) => (
+                  <option key={k} value={k}>
+                    {monthLabel(k)}
+                  </option>
+                ))}
+                <option value="custom">Date se date tak…</option>
+              </select>
+              {period === "custom" && (
+                <div className="grid grid-cols-2 gap-2">
+                  <label className="text-[11px] text-[var(--color-text-dim)]">
+                    Kab se
+                    <input
+                      type="date"
+                      value={fromDate}
+                      onChange={(e) => setFromDate(e.target.value)}
+                      className="mt-1 w-full rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] px-2 py-2 text-sm outline-none"
+                    />
+                  </label>
+                  <label className="text-[11px] text-[var(--color-text-dim)]">
+                    Kab tak
+                    <input
+                      type="date"
+                      value={toDate}
+                      min={fromDate || undefined}
+                      onChange={(e) => setToDate(e.target.value)}
+                      className="mt-1 w-full rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] px-2 py-2 text-sm outline-none"
+                    />
+                  </label>
+                </div>
+              )}
+              {periodRange && (
+                <Card>
+                  <div className="space-y-1.5 text-sm">
+                    <div className="flex justify-between">
+                      <span className="text-[var(--color-text-dim)]">Shuru mein baaki</span>
+                      <span className="font-medium">{formatMoney(periodOpening, currency)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-[var(--color-text-dim)]">+ Is period mein credit liya</span>
+                      <span className="font-medium text-[var(--color-warning)]">
+                        {formatMoney(periodAdded, currency)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-[var(--color-text-dim)]">− Is period mein chukaya</span>
+                      <span className="font-medium text-[var(--color-success)]">
+                        {formatMoney(periodPaid, currency)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between border-t border-[var(--color-border)] pt-1.5 font-semibold">
+                      <span>End mein baaki</span>
+                      <span>{formatMoney(periodClosing, currency)}</span>
+                    </div>
+                  </div>
+                </Card>
+              )}
+            </div>
+          )}
           {ledgerEntries.length === 0 ? (
             <p className="text-sm text-[var(--color-text-faint)] text-center py-6">
               No sessions yet.
+            </p>
+          ) : visibleEntries.length === 0 ? (
+            <p className="text-sm text-[var(--color-text-faint)] text-center py-6">
+              Is period mein koi entry nahi.
             </p>
           ) : (
             <div className="rounded-xl border border-[var(--color-border)] overflow-hidden">
@@ -545,7 +661,7 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
                   BALANCE
                 </span>
               </div>
-              {ledgerEntries.map((entry) => {
+              {visibleEntries.map((entry) => {
                 const dimmed = entry.bill?.status === "cancelled";
                 return (
                   <div
