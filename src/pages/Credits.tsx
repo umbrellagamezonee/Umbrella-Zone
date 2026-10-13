@@ -5,13 +5,14 @@ import { useCustomersStore } from "../store/useCustomersStore";
 import { useOrdersStore } from "../store/useOrdersStore";
 import { useBillsStore } from "../store/useBillsStore";
 import { useSettingsStore } from "../store/useSettingsStore";
-import { formatMoney, timeAgo } from "../lib/format";
+import { formatMoney, timeAgo, toDateInputValue } from "../lib/format";
 import { creditBalanceFor, customerOpenBills, customerPendingOrders, orderTotal } from "../lib/billing";
 import { sendCreditReminder } from "../lib/reminderApi";
 import { customerLabel, normalizeName } from "../lib/customerName";
 import { CustomerDetailModal, SettleCreditModal } from "./Customers";
+import { HisaabReport } from "../components/HisaabReport";
 import type { Customer } from "../types";
-import { BellRing, Wallet, Search } from "lucide-react";
+import { BellRing, Wallet, Search, CalendarDays } from "lucide-react";
 
 // Everyone who owes money and the tools to chase it down — kept separate
 // from the plain Customers directory so day-to-day lookups aren't buried
@@ -31,6 +32,7 @@ export function Credits() {
   const [settleCustomer, setSettleCustomer] = useState<Customer | null>(null);
   const [detailCustomer, setDetailCustomer] = useState<Customer | null>(null);
   const [search, setSearch] = useState("");
+  const [showMonthly, setShowMonthly] = useState(false);
 
   // "Not billed yet" here covers two things that are both real money owed
   // but not yet in creditBalance: served-but-unbilled canteen orders, and
@@ -98,6 +100,13 @@ export function Credits() {
           {formatMoney(totalDue, currency)} total
         </p>
       </div>
+
+      <button
+        onClick={() => setShowMonthly(true)}
+        className="w-full flex items-center justify-center gap-2 rounded-xl bg-[var(--color-primary)]/15 text-[var(--color-primary)] text-sm font-medium py-2.5"
+      >
+        <CalendarDays size={15} /> Mahine-wise credit (har customer ka)
+      </button>
 
       {dueCustomers.length > 0 && (
         <div className="relative">
@@ -200,6 +209,13 @@ export function Credits() {
 
       {settleCustomer && (
         <SettleCreditModal customer={settleCustomer} onClose={() => setSettleCustomer(null)} />
+      )}
+      {showMonthly && (
+        <HisaabReport
+          initialDate={toDateInputValue(Date.now())}
+          initialTab="customer"
+          onClose={() => setShowMonthly(false)}
+        />
       )}
       {detailCustomer && (
         <CustomerDetailModal customer={detailCustomer} onClose={() => setDetailCustomer(null)} />

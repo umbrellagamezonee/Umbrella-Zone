@@ -10,6 +10,7 @@ import { useCustomersStore } from "../store/useCustomersStore";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { creditHisaab, creditHisaabSheetRows, creditPendingReport, creditPendingSheetRows } from "../lib/billing";
 import { buildDayReport, dayReportSheets, type SheetSpec } from "../lib/dayReport";
+import { creditMonthKeys, monthlyCreditByCustomer } from "../lib/ledger";
 import { dateInputValueToIstMidnight, formatDateKey, formatDateTime, formatMoney, formatTime, toDateInputValue } from "../lib/format";
 
 // The same report the PDF is made from, inside the app: pick a day and see
@@ -106,7 +107,15 @@ function Note({ children }: { children: ReactNode }) {
   return <p className="text-[11px] text-[var(--color-text-faint)]">{children}</p>;
 }
 
-export function HisaabReport({ initialDate, onClose }: { initialDate: string; onClose: () => void }) {
+export function HisaabReport({
+  initialDate,
+  initialTab = "day",
+  onClose,
+}: {
+  initialDate: string;
+  initialTab?: "day" | "credit" | "customer";
+  onClose: () => void;
+}) {
   const bills = useBillsStore((s) => s.bills);
   const orders = useOrdersStore((s) => s.orders);
   const expenses = useExpensesStore((s) => s.expenses);
@@ -118,7 +127,9 @@ export function HisaabReport({ initialDate, onClose }: { initialDate: string; on
   const storeName = useSettingsStore((s) => s.storeName);
   const money = (n: number) => formatMoney(n, currency);
 
-  const [tab, setTab] = useState<"day" | "credit">("day");
+  const [tab, setTab] = useState<"day" | "credit" | "customer">(initialTab);
+  const [custMonth, setCustMonth] = useState("");
+  const [custSearch, setCustSearch] = useState("");
   const [date, setDate] = useState(initialDate);
   const [openedAt] = useState(() => Date.now());
   const [working, setWorking] = useState(false);
@@ -149,6 +160,17 @@ export function HisaabReport({ initialDate, onClose }: { initialDate: string; on
     [tab, bills, customers, orders]
   );
 
+  // Customer-wise credit for one month — the same ledger each customer's own
+  // profile shows, so a month's figures here match theirs exactly.
+  const monthKeys = useMemo(() => (tab === "customer" ? creditMonthKeys(bills, orders) : []), [tab, bills, orders]);
+  const custMonthKey = custMonth || monthKeys[0] || "";
+  const custRows = useMemo(
+    () => (tab === "customer" && custMonthKey ? monthlyCreditByCustomer(bills, orders, customers, custMonthKey) : []),
+    [tab, bills, orders, customers, custMonthKey]
+  );
+  const custShown = custRows.filter((r) => r.name.toLowerCase().includes(custSearch.trim().toLowerCase()));
+  const custMonthLabel = custMonthKey ? formatDateKey(`${custMonthKey}-01`, { month: "long", year: "numeric" }) : "";
+
   // Loaded on demand, like the other Excel exports — the library is only
   // needed the moment someone taps the button.
   async function downloadExcel() {
@@ -164,6 +186,24 @@ export function HisaabReport({ initialDate, onClose }: { initialDate: string; on
       if (tab === "day") {
         dayReportSheets(day).forEach(add);
         XLSX.writeFile(wb, `Din-Hisaab-${date}.xlsx`);
+      } else if (tab === "customer") {
+        const rows = custShown.map((r) => ({
+          Naam: r.name,
+          "Shuru mein baaki": r.opening,
+          "Credit liya (is mahine)": r.added,
+          "Chukaya (is mahine)": r.paid,
+          "End mein baaki": r.closing,
+        }));
+        const sum = (k: string) => Math.round(rows.reduce((t, x) => t + ((x as Record<string, number | string>)[k] as number), 0) * 100) / 100;
+        rows.push({
+          Naam: "TOTAL",
+          "Shuru mein baaki": sum("Shuru mein baaki"),
+          "Credit liya (is mahine)": sum("Credit liya (is mahine)"),
+          "Chukaya (is mahine)": sum("Chukaya (is mahine)"),
+          "End mein baaki": sum("End mein baaki"),
+        });
+        add({ name: `Customer-wise ${custMonthLabel}`, rows, widths: [32, 18, 22, 20, 16] });
+        XLSX.writeFile(wb, `Customer-Credit-${custMonthKey}.xlsx`);
       } else if (credit && pending) {
         add({ name: "Credit hisaab", rows: creditHisaabSheetRows(credit), widths: [44, 16, 16, 13, 17, 13, 18, 18] });
         add({ name: "Credit baaki - kiska", rows: creditPendingSheetRows(pending), widths: [56, 26, 20, 14] });
@@ -428,6 +468,72 @@ export function HisaabReport({ initialDate, onClose }: { initialDate: string; on
     return [...byMonth.entries()].sort((a, b) => b[0].localeCompare(a[0]));
   })();
 
+  const customerView = (
+    <div className="space-y-4">
+      <Section title="Customer-wise credit — mahine ke hisaab se">
+        <Note>
+          Har customer ne is mahine kitna credit liya, kitna chukaya, aur mahine ke end par kitna baaki hai. Ye wahi hisaab hai jo us customer ke
+          apne ledger mein dikhta hai. Naam search karke kisi ka bhi mahine ka total dekh sakte ho (jaise salary se katne wale logon ka).
+        </Note>
+        <div className="grid grid-cols-2 gap-2 print:hidden">
+          <select
+            value={custMonthKey}
+            onChange={(e) => setCustMonth(e.target.value)}
+            className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm"
+          >
+            {monthKeys.map((k) => (
+              <option key={k} value={k}>
+                {formatDateKey(`${k}-01`, { month: "long", year: "numeric" })}
+              </option>
+            ))}
+          </select>
+          <input
+            value={custSearch}
+            onChange={(e) => setCustSearch(e.target.value)}
+            placeholder="Naam search karo…"
+            className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm"
+          />
+        </div>
+        <Tiles
+          items={[
+            { label: "Credit liya", value: money(custShown.reduce((t, r) => t + r.added, 0)), tone: "warn" },
+            { label: "Chukaya", value: money(custShown.reduce((t, r) => t + r.paid, 0)), tone: "good" },
+            {
+              label: "End mein baaki",
+              value: money(custShown.reduce((t, r) => t + r.closing, 0)),
+              tone: "bad",
+              strong: true,
+            },
+          ]}
+        />
+        {custShown.length === 0 ? (
+          <Note>Is mahine mein koi entry nahi{custSearch ? " (is naam ki)" : ""}.</Note>
+        ) : (
+          <Table
+            cols={["Naam", "Shuru mein baaki", "Credit liya", "Chukaya", "End mein baaki"]}
+            rows={[
+              ...custShown.map((r) => ({ cells: [r.name, dash(r.opening), dash(r.added), dash(r.paid), dash(r.closing)] })),
+              {
+                bold: true,
+                cells: [
+                  `TOTAL (${custShown.length} log)`,
+                  fmt(custShown.reduce((t, r) => t + r.opening, 0)),
+                  fmt(custShown.reduce((t, r) => t + r.added, 0)),
+                  fmt(custShown.reduce((t, r) => t + r.paid, 0)),
+                  fmt(custShown.reduce((t, r) => t + r.closing, 0)),
+                ],
+              },
+            ]}
+          />
+        )}
+        <Note>
+          "Credit liya" mein wo khana-peena bhi hai jo serve hua par abhi bill nahi bana (order ke din ke hisaab se). "Chukaya" mein cash, account aur
+          maaf kiya hua sab hai.
+        </Note>
+      </Section>
+    </div>
+  );
+
   const creditView =
     credit && pending ? (
       <div className="space-y-6">
@@ -618,11 +724,12 @@ export function HisaabReport({ initialDate, onClose }: { initialDate: string; on
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-2 print:hidden">
+        <div className="grid grid-cols-3 gap-2 print:hidden">
           {(
             [
               { id: "day", label: "Ek din ka hisaab" },
               { id: "credit", label: "Credit baaki (sab din)" },
+              { id: "customer", label: "Customer-wise mahina" },
             ] as const
           ).map((t) => (
             <button
@@ -669,14 +776,18 @@ export function HisaabReport({ initialDate, onClose }: { initialDate: string; on
 
         <div className="text-center">
           <p className="text-lg font-bold">
-            {tab === "day" ? `${dateLabel} — Din ka hisaab` : "Credit baaki — sab din"}
+            {tab === "day"
+              ? `${dateLabel} — Din ka hisaab`
+              : tab === "customer"
+                ? `Customer-wise credit — ${custMonthLabel}`
+                : "Credit baaki — sab din"}
           </p>
           <p className="text-[11px] text-[var(--color-text-faint)]">
             {storeName} · {formatDateTime(openedAt)} tak ka data
           </p>
         </div>
 
-        {tab === "day" ? dayView : creditView}
+        {tab === "day" ? dayView : tab === "customer" ? customerView : creditView}
       </div>
     </div>,
     document.body
