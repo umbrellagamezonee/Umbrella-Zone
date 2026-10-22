@@ -304,6 +304,9 @@ interface DailyTotals {
   // Everything billed that day (table + canteen), i.e. the sum of that day's
   // bill totals: cash + account + still owed + written off.
   billed: number;
+  // Cash / account RECEIVED that day by the table or category it was paid
+  // for (see addReceived) — adds up to the galla's cash / account that day.
+  received: { item: string; kind: "table" | "canteen" | "other"; cash: number; upi: number }[];
 }
 
 // Day-by-day cash/account/credit breakdown, one block per date — what the
@@ -429,12 +432,34 @@ function buildDailyCollection(
     issuedByCustomer: new Map(),
     forgiven: 0,
   });
+  // Where each rupee of cash/account was actually RECEIVED: by the date it
+  // came in, and the table / canteen category it was paid for. A payment that
+  // clears an older charge lands on the day it was paid (so every day's total
+  // equals what the galla took that day) but on the table / category the
+  // charge was for. This is the "paisa aaya" view; the buckets above are the
+  // "bills ka hisaab" view where that same payment is counted on the charge's
+  // own day.
+  type Received = { kind: "table" | "canteen" | "other"; cash: number; upi: number };
+  const received = new Map<string, Map<string, Received>>();
+  const addReceived = (dateKey: string, name: string, kind: Received["kind"], cash: number, upi: number) => {
+    if (Math.abs(cash) < 1e-9 && Math.abs(upi) < 1e-9) return;
+    if (!received.has(dateKey)) received.set(dateKey, new Map());
+    const day = received.get(dateKey)!;
+    const cur = day.get(name) ?? { kind, cash: 0, upi: 0 };
+    cur.cash += cash;
+    cur.upi += upi;
+    day.set(name, cur);
+  };
+  const bucketInfo = new Map<Bucket, { dateKey: string; name: string; kind: Received["kind"] }>();
   const addTo = (b: Bucket, cash: number, upi: number, credit: number, customerName?: string) => {
     b.cash += cash;
     b.upi += upi;
     b.credit += credit;
     b.issued += credit;
     b.total += cash + upi;
+    // cash/account passed here was paid right on this bucket's own day
+    const info = bucketInfo.get(b);
+    if (info) addReceived(info.dateKey, info.name, info.kind, cash, upi);
     if (credit > 0.005 && customerName) {
       b.creditByCustomer.set(customerName, (b.creditByCustomer.get(customerName) ?? 0) + credit);
       b.issuedByCustomer.set(customerName, (b.issuedByCustomer.get(customerName) ?? 0) + credit);
@@ -445,7 +470,15 @@ function buildDailyCollection(
   const bucketFor = (map: Map<string, Map<string, Bucket>>, dateKey: string, key: string) => {
     if (!map.has(dateKey)) map.set(dateKey, new Map());
     const dayMap = map.get(dateKey)!;
-    if (!dayMap.has(key)) dayMap.set(key, newBucket());
+    if (!dayMap.has(key)) {
+      const b = newBucket();
+      dayMap.set(key, b);
+      bucketInfo.set(b, {
+        dateKey,
+        name: key,
+        kind: map === dailyTables ? "table" : key === "Credit settlement" ? "other" : "canteen",
+      });
+    }
     return dayMap.get(key)!;
   };
 
@@ -517,7 +550,10 @@ function buildDailyCollection(
         part.bucket.upi += takeUpi * partFrac;
         part.bucket.total += (takeCash + takeUpi) * partFrac;
         part.bucket.forgiven += Math.max(0, take - takeCash - takeUpi) * partFrac;
+        const info = bucketInfo.get(part.bucket);
+        if (info) addReceived(adv.dateKey, info.name, info.kind, takeCash * partFrac, takeUpi * partFrac);
       }
+      addReceived(adv.dateKey, "Credit settlement", "other", -takeCash, -takeUpi);
       adv.bucket.cash -= takeCash;
       adv.bucket.upi -= takeUpi;
       adv.bucket.total -= takeCash + takeUpi;
@@ -569,6 +605,8 @@ function buildDailyCollection(
           part.bucket.upi += takeUpi * partFrac;
           part.bucket.total += (takeCash + takeUpi) * partFrac;
           part.bucket.forgiven += Math.max(0, take - takeCash - takeUpi) * partFrac;
+          const info = bucketInfo.get(part.bucket);
+          if (info) addReceived(dateKey, info.name, info.kind, takeCash * partFrac, takeUpi * partFrac);
         }
         chunk.remaining -= take;
         left -= take;
@@ -713,6 +751,24 @@ function buildDailyCollection(
       .join(", ");
   const isEmpty = (b: Bucket | undefined): b is undefined =>
     !b || (Math.abs(b.total) < 0.005 && Math.abs(b.credit) < 0.005);
+  const orderedReceived = (dateKey: string): DailyTotals["received"] => {
+    const day = received.get(dateKey);
+    if (!day) return [];
+    const out: DailyTotals["received"] = [];
+    const used = new Set<string>();
+    const take = (name: string) => {
+      const r = day.get(name);
+      if (r && !used.has(name)) {
+        used.add(name);
+        out.push({ item: name, kind: r.kind, cash: r.cash, upi: r.upi });
+      }
+    };
+    for (const t of uniqueTables) take(t.name);
+    for (const [name, r] of [...day.entries()].sort((a, b) => a[0].localeCompare(b[0]))) if (r.kind === "table") take(name);
+    for (const c of categoryOrder) take(c);
+    for (const name of day.keys()) take(name);
+    return out;
+  };
   const rows: DailyCollectionRow[] = [];
   const days: DailyTotals[] = [];
   const listedTables = new Set(uniqueTables.map((t) => t.name));
@@ -812,6 +868,7 @@ function buildDailyCollection(
       movedInUpi: flows.get(dateKey)?.inUpi ?? 0,
       items,
       billed: dayBilled,
+      received: orderedReceived(dateKey),
     });
     rows.push({
       Date: label,
@@ -847,6 +904,7 @@ function buildDailyCollection(
       movedInUpi: f.inUpi,
       items: [],
       billed: 0,
+      received: orderedReceived(dateKey),
     });
   }
   days.sort((a, b) => a.dateKey.localeCompare(b.dateKey));
@@ -895,6 +953,8 @@ export interface CreditHisaabDay {
   items: { item: string; kind: "table" | "canteen" | "other"; cash: number; upi: number; issued: number; pending: number; billed: number }[];
   // Sum of that day's bill totals (table + canteen) — see DailyTotals.billed.
   billed: number;
+  // Cash / account that came in that day, by table / canteen category.
+  received: { item: string; kind: "table" | "canteen" | "other"; cash: number; upi: number }[];
 }
 
 export interface CreditHisaab {
@@ -967,6 +1027,7 @@ export function creditHisaab(
       billed: round(x.billed),
     })),
     billed: round(d.billed),
+    received: d.received.map((x) => ({ item: x.item, kind: x.kind, cash: round(x.cash), upi: round(x.upi) })),
   }));
   const sum = (f: (d: CreditHisaabDay) => number) => round(out.reduce((s, d) => s + f(d), 0));
   return {

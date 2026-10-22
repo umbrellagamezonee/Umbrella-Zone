@@ -227,6 +227,7 @@ export function HisaabReport({
   const dateLabel = formatDateKey(date, { day: "numeric", month: "long", year: "numeric" });
 
   const d = day.day;
+  const showFark = day.canteen.some((c) => Math.abs(c.fark) > 0.5);
   const tableSub = day.dailyRows.find((r) => r.item === "Table ka total");
   const canteenSub = day.dailyRows.find((r) => r.item === "Canteen ka total");
   const dayView = (
@@ -308,7 +309,30 @@ export function HisaabReport({
         )}
       </Section>
 
-      <Section title="3) Us din ke bills ka hisaab — galla se kaise milta hai">
+      <Section title="3) Us din kitna paisa aaya — table / canteen ke hisse mein">
+        <Note>
+          Jo Cash / Account us din gulle mein aaya, wo kis table ya canteen ke hisse ka tha. Purane credit ka paisa us table / canteen ki row mein
+          ginta hai jiska wo credit tha. TOTAL wahi hai jo upar Galla mein hai.
+        </Note>
+        <Table
+          cols={["", "Cash aaya", "Account aaya", "Cash + Account"]}
+          rows={day.receivedRows.map((r) => ({
+            bold: r.kind === "total",
+            cells: [
+              r.kind === "total"
+                ? "TOTAL (= Galla)"
+                : r.item === "Credit settlement"
+                  ? "Purane credit / advance (kisi se match nahi)"
+                  : r.item,
+              dash(r.cash),
+              dash(r.upi),
+              dash(r.cash + r.upi),
+            ],
+          }))}
+        />
+      </Section>
+
+      <Section title="4) Us din ke bills ka hisaab — galla se kaise milta hai">
         <Note>
           Jo paisa baad mein credit chukane mein aaya wo us din ke hisaab mein gina jaata hai jis din ka wo credit tha — isliye us din ke bills ka
           Cash/Account galla se alag hota hai. Ye milaan hai:
@@ -369,12 +393,38 @@ export function HisaabReport({
         </Note>
       </Section>
 
-      <Section title="4) Canteen — category ke hisaab se" breakBefore>
+      <Section title="5) Canteen — category ke hisaab se" breakBefore>
+        <Note>
+          'Bika (Rs)' = us din jo orders gaye (jaise Monthly Report mein). Section 4 ka 'Kul bill' us din ke BILLS hain — order ek din ho sakta hai
+          aur bill doosre din, isliye dono ko is tarah milao:
+        </Note>
         <Table
-          cols={["Category", "Kitna bika", "Bika (Rs)", "Abhi bill nahi hua", "Bill mein Cash", "Account", "Credit baaki"]}
+          cols={[
+            "Category",
+            "Kitna bika",
+            "Bika (Rs)",
+            "− Abhi bill nahi hua",
+            "− Baad mein bill hua",
+            "+ Purane orders ka bill aaj bana",
+            ...(showFark ? ["+ Baaki fark"] : []),
+            "= Kul bill (Section 4)",
+            "Cash aaya",
+            "Account aaya",
+          ]}
           rows={[
             ...day.canteen.map((c) => ({
-              cells: [c.name, c.soldQty, fmt(c.sale), dash(c.notBilled), dash(c.cash), dash(c.upi), dash(c.credit)],
+              cells: [
+                c.name,
+                c.soldQty,
+                fmt(c.sale),
+                dash(c.notBilled),
+                dash(c.billedLater),
+                dash(c.oldOrdersBilled),
+                ...(showFark ? [dash(c.fark)] : []),
+                fmt(c.kulBill),
+                dash(c.recvCash),
+                dash(c.recvUpi),
+              ],
             })),
             {
               bold: true,
@@ -383,17 +433,20 @@ export function HisaabReport({
                 day.canteen.reduce((s, c) => s + c.soldQty, 0),
                 fmt(day.canteen.reduce((s, c) => s + c.sale, 0)),
                 fmt(day.canteen.reduce((s, c) => s + c.notBilled, 0)),
-                fmt(day.canteen.reduce((s, c) => s + c.cash, 0)),
-                fmt(day.canteen.reduce((s, c) => s + c.upi, 0)),
-                fmt(day.canteen.reduce((s, c) => s + c.credit, 0)),
+                fmt(day.canteen.reduce((s, c) => s + c.billedLater, 0)),
+                fmt(day.canteen.reduce((s, c) => s + c.oldOrdersBilled, 0)),
+                ...(showFark ? [fmt(day.canteen.reduce((s, c) => s + c.fark, 0))] : []),
+                fmt(day.canteen.reduce((s, c) => s + c.kulBill, 0)),
+                fmt(day.canteen.reduce((s, c) => s + c.recvCash, 0)),
+                fmt(day.canteen.reduce((s, c) => s + c.recvUpi, 0)),
               ],
             },
           ]}
         />
         <Note>
-          'Kitna bika' us din ke orders se hai (jaise Monthly Report mein). 'Bill mein' Cash / Account / Credit us din ke bills se hai.
-          'Abhi bill nahi hua' = us din ke orders jinka bill abhi tak nahi bana. Order ek din ho sakta hai aur bill doosre din (jaise 24
-          ghante baad apne aap credit mein jaana), isliye 'Bika' aur 'Bill mein' ka total hamesha barabar nahi hota.
+          'Abhi bill nahi hua' = us din ke orders jinka bill abhi tak nahi bana. 'Baad mein bill hua' = us din ke orders jinka bill doosre din bana.
+          'Purane orders ka bill aaj bana' = pehle ke orders jinka bill us din bana (ek saath bill hone par). {showFark ? "'Baaki fark' = jin bills mein items order se alag the (checkout par badle). " : ""}
+          'Cash / Account aaya' = us din is category ke liye jo paisa aaya (purane credit ka bhi).
           {day.orphanSale > 0 ? ` Menu se hata diye gaye items ka ${money(day.orphanSale)} bika, jo kisi category mein nahi aata.` : ""}
         </Note>
       </Section>
@@ -406,9 +459,9 @@ export function HisaabReport({
               items={[
                 { label: "Kitna bika", value: String(c.soldQty) },
                 { label: "Bika (Rs)", value: money(c.sale), tone: "good" },
-                { label: "Bill mein Cash", value: money(c.cash) },
-                { label: "Account", value: money(c.upi) },
-                { label: "Credit baaki", value: money(c.credit), tone: "warn" },
+                { label: "Abhi bill nahi hua", value: money(c.notBilled), tone: "warn" },
+                { label: "Cash aaya", value: money(c.recvCash) },
+                { label: "Account aaya", value: money(c.recvUpi) },
               ]}
             />
             <Table

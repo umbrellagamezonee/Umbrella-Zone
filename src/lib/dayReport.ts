@@ -32,6 +32,21 @@ export interface DayReportCategory {
   credit: number;
   // Orders placed that day that have no bill yet.
   notBilled: number;
+  // Orders placed that day whose bill was made on a LATER day.
+  billedLater: number;
+  // Bills made that day for OLDER orders (a backlog billed in one go) or with
+  // no order behind them — in that day's bills but not in that day's orders.
+  oldOrdersBilled: number;
+  // What the bills table says was billed for this category that day. Equals
+  // sale - notBilled - billedLater + oldOrdersBilled (plus a tiny residual).
+  kulBill: number;
+  // What's left over once the lines above are counted: a bill whose items
+  // were changed from what was ordered (edited at checkout, split another way).
+  // Usually 0.
+  fark: number;
+  // Cash / account RECEIVED that day for this category (any day's bill).
+  recvCash: number;
+  recvUpi: number;
   items: DayReportItem[];
 }
 
@@ -59,6 +74,10 @@ export interface DayReport {
     settled: number;
     credit: number;
   }[];
+  // Cash and account RECEIVED that day by the table / category it was paid
+  // for, ending with a "Total" that equals the galla — what staff count in the
+  // drawer.
+  receivedRows: { item: string; kind: "table" | "canteen" | "other" | "total"; cash: number; upi: number }[];
   canteen: DayReportCategory[];
   // Canteen sale on order lines whose menu item has since been deleted.
   orphanSale: number;
@@ -118,6 +137,7 @@ export function buildDayReport(input: {
     movedInUpi: 0,
     items: [],
     billed: 0,
+    received: [],
   };
 
   const customerById = new Map(customers.map((c) => [c.id, c]));
@@ -179,6 +199,15 @@ export function buildDayReport(input: {
           },
         ];
 
+  const receivedRows: DayReport["receivedRows"] =
+    day.received.length === 0
+      ? []
+      : [
+          ...day.received.map((r) => ({ item: r.item, kind: r.kind, cash: r.cash, upi: r.upi })),
+          // the galla's own figures, so this total can never differ by a paisa
+          { item: "Total", kind: "total" as const, cash: round(galla.freshCash + galla.settledCash), upi: round(galla.freshUpi + galla.settledUpi) },
+        ];
+
   // Canteen: what was ordered that day, category by category, exactly as the
   // Monthly Report's category sheets count it.
   const dayOrders = orders.filter((o) => o.createdAt >= dayStart && o.createdAt < dayEnd);
@@ -186,6 +215,27 @@ export function buildDayReport(input: {
   const cats = categoryStockProfit(dayOrders, dayExpenses, menuItems, menuCategories);
   const itemById = new Map(menuItems.map((i) => [i.id, i]));
   const categoryNameById = new Map(menuCategories.map((c) => [c.id, c.name]));
+  const billByOrderId = new Map<string, Bill>();
+  for (const b of live) if (b.orderId) billByOrderId.set(b.orderId, b);
+  // Bills made this day for orders placed on another day (or with no order
+  // behind them), by canteen category — read off the bill's own items by name.
+  const categoryByItemName = new Map<string, string>();
+  for (const i of menuItems) {
+    const cat = categoryNameById.get(i.categoryId);
+    if (cat) categoryByItemName.set(i.name.trim().toLowerCase(), cat);
+  }
+  const orderCreatedById = new Map(orders.map((o) => [o.id, o.createdAt]));
+  const oldBilledByCategory = new Map<string, number>();
+  for (const b of live) {
+    if (toDateInputValue(b.createdAt) !== date || isCreditSettlement(b)) continue;
+    if (b.status !== "paid" && !b.shares) continue;
+    const orderedAt = b.orderId ? orderCreatedById.get(b.orderId) : undefined;
+    if (orderedAt != null && toDateInputValue(orderedAt) === date) continue;
+    for (const item of b.canteenItems) {
+      const cat = categoryByItemName.get(item.name.trim().toLowerCase());
+      if (cat) oldBilledByCategory.set(cat, (oldBilledByCategory.get(cat) ?? 0) + item.price * item.qty);
+    }
+  }
 
   const canteen: DayReportCategory[] = cats.map((c) => {
     const items: DayReportItem[] = c.itemRows
@@ -201,13 +251,22 @@ export function buildDayReport(input: {
     const rowLabel = REPORT_CATEGORIES.find((rc) => rc.categoryName === c.categoryName)?.sheet.replace(" collection", "");
     const pay = dailyRows.find((r) => r.item === rowLabel);
     let notBilled = 0;
+    let billedLater = 0;
     for (const o of dayOrders) {
-      if (o.status === "billed") continue;
+      // "Billed" means a bill actually exists for the order — not the order's
+      // own status flag, which can still say "served" after its bill was made
+      // (the same test the Credits page uses for what's still unbilled).
+      const bill = billByOrderId.get(o.id);
+      const laterBilled = !!bill && toDateInputValue(bill.createdAt) !== date;
       for (const l of o.items) {
         const it = itemById.get(l.menuItemId);
-        if (it && categoryNameById.get(it.categoryId) === c.categoryName) notBilled += l.qty * l.price;
+        if (!it || categoryNameById.get(it.categoryId) !== c.categoryName) continue;
+        if (!bill) notBilled += l.qty * l.price;
+        else if (laterBilled) billedLater += l.qty * l.price;
       }
     }
+    const oldOrdersBilled = oldBilledByCategory.get(c.categoryName) ?? 0;
+    const recv = day.received.find((r) => r.item === rowLabel);
     return {
       name: c.categoryName,
       sale: round(c.sale),
@@ -217,6 +276,12 @@ export function buildDayReport(input: {
       upi: pay ? Number(pay.upi) : 0,
       credit: pay ? Number(pay.credit) : 0,
       notBilled: round(notBilled),
+      billedLater: round(billedLater),
+      oldOrdersBilled: round(oldOrdersBilled),
+      kulBill: pay ? pay.billed : 0,
+      fark: round((pay ? pay.billed : 0) - (round(c.sale) - notBilled - billedLater + oldOrdersBilled)),
+      recvCash: recv ? recv.cash : 0,
+      recvUpi: recv ? recv.upi : 0,
       items,
     };
   });
@@ -234,6 +299,7 @@ export function buildDayReport(input: {
       .map((e) => ({ category: e.category, note: e.note, amount: e.amount })),
     settlements,
     dailyRows,
+    receivedRows,
     canteen,
     orphanSale: round(orphanSale),
     ordersCount: dayOrders.length,
@@ -303,6 +369,22 @@ export function dayReportSheets(r: DayReport): SheetSpec[] {
   });
 
   sheets.push({
+    name: "Paisa aaya (table-wise)",
+    widths: [44, 14, 14, 16],
+    rows: r.receivedRows.map((row) => ({
+      Item:
+        row.kind === "total"
+          ? "TOTAL (= galla)"
+          : row.item === "Credit settlement"
+            ? "Purane credit / advance (kisi se match nahi)"
+            : row.item,
+      "Cash aaya": row.cash,
+      "Account aaya": row.upi,
+      "Cash + Account": round(row.cash + row.upi),
+    })),
+  });
+
+  sheets.push({
     name: "Table aur Canteen",
     widths: [44, 12, 12, 12, 16, 13, 15, 14],
     rows: r.dailyRows.map((row) => ({
@@ -358,21 +440,18 @@ export function dayReportSheets(r: DayReport): SheetSpec[] {
     Category: c.name,
     "Kitna bika (qty)": c.soldQty,
     "Bika (Rs)": c.sale,
-    "Abhi bill nahi hua": c.notBilled,
-    "Bill mein Cash": c.cash,
-    "Bill mein Account": c.upi,
-    "Bill mein Credit baaki": c.credit,
+    "- Abhi bill nahi hua": c.notBilled,
+    "- Baad mein bill hua": c.billedLater,
+    "+ Purane orders ka bill aaj bana": c.oldOrdersBilled,
+    "+ Baaki fark (bill ke items order se alag)": c.fark,
+    "= Kul bill (bills ke hisaab se)": c.kulBill,
+    "Cash aaya": c.recvCash,
+    "Account aaya": c.recvUpi,
   }));
-  cat.push({
-    Category: "TOTAL",
-    "Kitna bika (qty)": sum(cat, "Kitna bika (qty)"),
-    "Bika (Rs)": sum(cat, "Bika (Rs)"),
-    "Abhi bill nahi hua": sum(cat, "Abhi bill nahi hua"),
-    "Bill mein Cash": sum(cat, "Bill mein Cash"),
-    "Bill mein Account": sum(cat, "Bill mein Account"),
-    "Bill mein Credit baaki": sum(cat, "Bill mein Credit baaki"),
-  });
-  sheets.push({ name: "Canteen ek nazar", widths: [16, 16, 12, 18, 14, 16, 22], rows: cat });
+  const catTotal: Record<string, string | number> = { Category: "TOTAL" };
+  for (const k of Object.keys(cat[0] ?? {})) if (k !== "Category") catTotal[k] = sum(cat, k);
+  if (cat.length) cat.push(catTotal as (typeof cat)[number]);
+  sheets.push({ name: "Canteen ek nazar", widths: [16, 16, 12, 20, 20, 30, 36, 28, 12, 14], rows: cat });
 
   for (const c of r.canteen) {
     const rows: Record<string, string | number>[] = c.items.map((it) => ({

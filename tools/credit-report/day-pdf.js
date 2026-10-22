@@ -116,7 +116,21 @@ y = tiles(y + 2, [
 ], { gap: 10, vsize: 16 });
 doc.font("Helvetica").fontSize(8.6).fillColor("#333").text("Credit diya - chuka = baaki. Jo credit baad mein chuka (cash / account / maaf) wo usi din ke credit mein ginta hai jis din ka wo credit tha. Kisne kitna liya aur kisne purana credit chukaya - aage ke pages par.", L, y + 5, { width: W });
 
-// ================= PAGE 2: bills ka hisaab + table/canteen =================
+// ================= PAGE 2: paisa aaya, table / canteen ke hisse mein =================
+doc.addPage();
+title(`${dayTitle} - Us din kitna paisa aaya (table / canteen ke hisse mein)`, "Jo Cash / Account gulle mein aaya, wo kis table ya canteen ke hisse ka tha");
+y = table(
+  [{ h: "", w: 430, align: "left" }, { h: "Cash aaya", w: 110 }, { h: "Account aaya", w: 110 }, { h: "Cash + Account", w: 120 }],
+  d.receivedRows.map((r) => ({
+    bold: r.kind === "total",
+    cells: [r.kind === "total" ? "TOTAL (= Galla)" : r.item === "Credit settlement" ? "Purane credit / advance (kisi se match nahi)" : r.item, num(r.cash), num(r.upi), num(r.cash + r.upi)],
+  })),
+  72, { rowH: 19, font: 9.5 }
+);
+doc.y = y + 6;
+para(["Purane credit ka paisa us table / canteen ki row mein ginta hai jiska wo credit tha. TOTAL wahi hai jo pehle page ke Galla mein hai."]);
+
+// ================= PAGE 3: bills ka hisaab + table/canteen =================
 doc.addPage();
 title(`${dayTitle} - Us din ke bills ka hisaab`, "Galla se kaise milta hai, aur Table / Canteen ke hisse mein");
 y = table(
@@ -176,17 +190,26 @@ if (d.settlements.length === 0) {
 // ================= Canteen =================
 doc.addPage();
 title(`${dayTitle} - Canteen, category ke hisaab se`, "Kitchen, Cigarettes, Fridge, Chocolate - har category ka alag page aage hai");
-const catRows = d.canteen.map((c) => ({ cells: [c.name, c.soldQty, fmt(c.sale), num(c.notBilled), num(c.cash), num(c.upi), num(c.credit)] }));
-const sumC = (f) => d.canteen.reduce((s, c) => s + c[f], 0);
-catRows.push({ bold: true, cells: ["TOTAL", sumC("soldQty"), fmt(sumC("sale")), fmt(sumC("notBilled")), fmt(sumC("cash")), fmt(sumC("upi")), fmt(sumC("credit"))] });
+const showFark = d.canteen.some((c) => Math.abs(c.fark) > 0.5);
+const catRows = d.canteen.map((c) => ({
+  cells: [c.name, c.soldQty, fmt(c.sale), num(c.notBilled), num(c.billedLater), num(c.oldOrdersBilled), ...(showFark ? [num(c.fark)] : []), fmt(c.kulBill), num(c.recvCash), num(c.recvUpi)],
+}));
+const sumC = (f) => d.canteen.reduce((t, c) => t + c[f], 0);
+catRows.push({
+  bold: true,
+  cells: ["TOTAL", sumC("soldQty"), fmt(sumC("sale")), fmt(sumC("notBilled")), fmt(sumC("billedLater")), fmt(sumC("oldOrdersBilled")), ...(showFark ? [fmt(sumC("fark"))] : []), fmt(sumC("kulBill")), fmt(sumC("recvCash")), fmt(sumC("recvUpi"))],
+});
+const cw = showFark ? [92, 60, 70, 82, 82, 98, 62, 82, 70, 72] : [100, 64, 76, 92, 92, 108, 90, 74, 74];
+const ch = ["Category", "Kitna bika", "Bika (Rs)", "- Abhi bill nahi hua", "- Baad mein bill hua", "+ Purane orders ka bill aaj bana", ...(showFark ? ["+ Baaki fark"] : []), "= Kul bill (bills ka)", "Cash aaya", "Account aaya"];
 y = table(
-  [{ h: "Category", w: 150, align: "left" }, { h: "Kitna bika (qty)", w: 110 }, { h: "Bika (Rs)", w: 110 }, { h: "Abhi bill nahi hua", w: 120 }, { h: "Bill mein: Cash", w: 100 }, { h: "Account", w: 90 }, { h: "Credit baaki", w: 90 }],
-  catRows, 70, { rowH: 22, font: 10 }
+  ch.map((h, i) => ({ h, w: cw[i] ?? 70, align: i === 0 ? "left" : "right" })),
+  catRows, 70, { rowH: 22, font: 8.6 }
 );
 doc.y = y + 6;
 para([
-  "'Kitna bika' us din ke orders se hai (menu ke hisaab se, jaise Monthly Report mein). 'Bill mein' Cash / Account / Credit us din ke bills se hai (baad mein chuka credit bhi us din mein gina gaya).",
-  "'Abhi bill nahi hua' = us din ke orders jinka bill abhi tak nahi bana. Order ek din ho sakta hai aur bill doosre din (jaise 24 ghante baad apne aap credit mein jaana), isliye 'Bika' aur 'Bill mein' ka total hamesha barabar nahi hota.",
+  "'Bika (Rs)' us din ke orders se hai (jaise Monthly Report mein). 'Kul bill' us din ke BILLS hain (Table / Canteen ke hisaab wale page ke Canteen rows). Order ek din ho sakta hai aur bill doosre din, isliye dono ko is tarah milao: Bika - abhi bill nahi hua - baad mein bill hua + purane orders ka bill aaj bana = Kul bill.",
+  ...(showFark ? ["'Baaki fark' = jin bills mein items order se alag the (checkout par badle)."] : []),
+  "'Cash / Account aaya' = us din is category ke liye jo paisa aaya (purane credit ka bhi).",
   ...(d.orphanSale > 0 ? [`Menu se hata diye gaye items ka ${money(d.orphanSale)} bika, jo kisi category mein nahi aata.`] : []),
 ]);
 
@@ -196,9 +219,9 @@ for (const c of d.canteen) {
   let yy = tiles(70, [
     { label: "Kitna bika (qty)", value: String(c.soldQty) },
     { label: "Bika (Rs)", value: money(c.sale), color: "#1b6e2d" },
-    { label: "Bill mein Cash", value: money(c.cash) },
-    { label: "Account", value: money(c.upi) },
-    { label: "Credit baaki", value: money(c.credit), color: "#9a3b00" },
+    { label: "Abhi bill nahi hua", value: money(c.notBilled), color: "#9a3b00" },
+    { label: "Cash aaya", value: money(c.recvCash) },
+    { label: "Account aaya", value: money(c.recvUpi) },
   ], { gap: 10, h: 44, vsize: 14 });
   const rows = c.items.map((it) => ({
     color: it.qty === 0 ? "#777" : undefined,
