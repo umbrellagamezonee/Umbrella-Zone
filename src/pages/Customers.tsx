@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { AppShell } from "../components/layout/AppShell";
 import { Card } from "../components/ui/Card";
 import { Modal } from "../components/ui/Modal";
@@ -692,8 +692,13 @@ export function SettleCreditModal({ customer, onClose }: { customer: Customer; o
   const remaining = Math.max(0, customerDue - amountPaid - discount);
   const canSettle = amountPaid > 0 || discount > 0;
 
+  // A second tap in the same instant (before the success screen replaces this
+  // one) must not record the payment twice.
+  const recorded = useRef(false);
+
   function handleSettle() {
-    if (!canSettle) return;
+    if (!canSettle || recorded.current) return;
+    recorded.current = true;
     // A payment is being recorded for real now — only now does the backlog of
     // served-but-unbilled orders turn into credit bills for it to pay off.
     billPendingToCredit({ id: customer.id, name: customer.name });
