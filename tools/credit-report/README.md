@@ -10,3 +10,8 @@ app ke "Credit hisaab" / "Credit baaki - kiska" sheets se kabhi alag nahi honge.
 
 `day.cmd 2026-10-01` (ya double-click karke date likho) — us din ka Cash/Account/Credit, kisne credit liya aur kisne purana
 credit chukaya, aur Kitchen / Cigarettes / Fridge / Chocolate ka har item alag page par. Result `out\Din-Hisaab-<date>.pdf` aur `.xlsx`.
+
+## Shop ka health check (sirf padhta hai)
+
+`npx tsx audit.ts` (is folder mein, pehle `node fetch.js`) — asli data mein dikkatein dhoondhta hai: orders ka status bill se match nahi, double bill/settlement,
+atke hue open bills, duplicate customers, negative stock, aur bhi.

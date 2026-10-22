@@ -52,6 +52,19 @@ export function Canteen() {
   const isToday = selectedDate === toDateInputValue(Date.now());
 
   function handleCheckout(order: CanteenOrder) {
+    // The order may already have a bill — a double tap, or a "served" flag that
+    // never got updated after its bill was made. Open that bill instead of
+    // making a second one for the same food. (Read fresh from the store, not
+    // from this render's copy, so a second tap sees the first one's bill.)
+    const existing = useBillsStore
+      .getState()
+      .bills.find((b) => b.orderId === order.id && b.status !== "cancelled");
+    if (existing) {
+      markBilled(order.id);
+      if (existing.status === "open") setCheckoutBill(existing);
+      else setDetailBill(existing);
+      return;
+    }
     const total = order.items.reduce((sum, i) => sum + i.price * i.qty, 0);
     const orderCustomer = customers.find((c) => c.id === order.customerId);
     const label =

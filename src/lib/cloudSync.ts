@@ -1,4 +1,13 @@
 import { supabase } from "./supabaseClient";
+import { createDrainer, createSyncQueue, type QueueOp } from "./syncQueue";
+
+// Every write to the cloud goes through this durable queue (see syncQueue.ts):
+// it is remembered on disk until the server confirms it, retried on reconnect /
+// every 30 seconds / after each sync, and laid back over the cloud's data when a
+// sync arrives — so a write that didn't make it can no longer be silently undone
+// by the next fetch. (A write still in flight when the tab closes is retried on
+// the next open.)
+const syncQueue = createSyncQueue(typeof localStorage !== "undefined" ? localStorage : null);
 
 // Set right before a Backup & Restore reload (see markRestoreInProgress in
 // Settings.tsx's BackupModal) — tells every store's initial fetch below that
@@ -104,7 +113,9 @@ export function setupSync<TRow extends { id: string }, TItem>(
       return;
     }
     if (data && data.length > 0) {
-      applyInitial(data.map(fromRow));
+      // writes not yet confirmed saved must survive this snapshot (see syncQueue)
+      applyInitial(syncQueue.overlayRows(table, data as (TRow & { id: string })[]).map(fromRow));
+      flushSyncQueue();
       return;
     }
     const local = getLocal();
@@ -121,7 +132,9 @@ export function setupSync<TRow extends { id: string }, TItem>(
           const oldId = (payload.old as { id?: string } | null)?.id;
           if (oldId) applyDelete(oldId);
         } else {
-          applyUpsert(fromRow(payload.new as TRow));
+          const incoming = payload.new as TRow;
+          const row = syncQueue.overlayRow(table, incoming.id, incoming);
+          if (row) applyUpsert(fromRow(row));
         }
       }
     )
@@ -168,24 +181,6 @@ function missingColumn(message: string | undefined): string | null {
 // it. Callers that need to be sure a write landed (e.g. a customer merge —
 // see useCustomersStore/useBillsStore) use the return value to know when
 // to keep retrying instead of treating a fired request as done.
-function insertWithRetry(table: string, row: Record<string, unknown>, action: string): Promise<boolean> {
-  return Promise.resolve(supabase!.from(table).insert(row))
-    .then(({ error }) => {
-      if (!error) return true;
-      const col = missingColumn(error.message);
-      if (col && col in row) {
-        const { [col]: _drop, ...rest } = row;
-        return insertWithRetry(table, rest, action);
-      }
-      logError(action, table, error);
-      return false;
-    })
-    .catch((error: unknown) => {
-      logError(action, table, error);
-      return false;
-    });
-}
-
 function upsertWithRetry(table: string, row: Record<string, unknown>): Promise<boolean> {
   return Promise.resolve(supabase!.from(table).upsert(row))
     .then(({ error }) => {
@@ -253,14 +248,43 @@ function bulkUpsertWithRetry(table: string, rows: Record<string, unknown>[]) {
     });
 }
 
+// Raw requests, one per kind of queued write. They resolve true only when the
+// server confirmed.
+function sendQueued(op: QueueOp): Promise<boolean> {
+  if (op.kind === "upsert") return upsertWithRetry(op.table, op.row ?? {});
+  if (op.kind === "update") return rawUpdate(op.table, String(op.id), op.patch ?? {});
+  return rawDelete(op.table, String(op.id));
+}
+
+const drainer = createDrainer(syncQueue, sendQueued);
+
+// Retry every write still waiting for confirmation.
+export function flushSyncQueue() {
+  if (supabase) drainer.flush();
+}
+
+if (typeof window !== "undefined" && supabase) {
+  window.addEventListener("online", flushSyncQueue);
+  setInterval(flushSyncQueue, 30_000);
+  // writes left over from a previous session (closed mid-send, or offline)
+  setTimeout(flushSyncQueue, 3000);
+}
+
+// Insert and upsert are the same thing here: the row is keyed by its own id,
+// and an upsert can safely be re-sent after an earlier attempt that may or may
+// not have landed (an insert re-sent after landing would fail as a duplicate).
 export function pushInsert<TRow extends object>(table: string, row: TRow): Promise<boolean> {
-  if (!supabase) return Promise.resolve(true);
-  return insertWithRetry(table, row as Record<string, unknown>, "insert");
+  return pushUpsert(table, row);
 }
 
 export function pushUpsert<TRow extends object>(table: string, row: TRow): Promise<boolean> {
   if (!supabase) return Promise.resolve(true);
-  return upsertWithRetry(table, row as Record<string, unknown>);
+  const id = (row as { id?: string | number }).id;
+  if (id == null) return upsertWithRetry(table, row as Record<string, unknown>);
+  const op = syncQueue.add(table, id, "upsert", { row: row as Record<string, unknown> });
+  if (!op) return Promise.resolve(true);
+  drainer.resetFailures(op.key);
+  return drainer.drain(op.key);
 }
 
 // For a running counter (credit balance, stock quantity) that can get
@@ -320,7 +344,14 @@ export function pushIncrement<TRow extends object>(
 // needs to know to keep retrying rather than treat it as done.
 export function pushUpdate(table: string, id: string, patch: Record<string, unknown>): Promise<boolean> {
   if (!supabase) return Promise.resolve(true);
-  return Promise.resolve(supabase.from(table).update(patch).eq("id", id))
+  const op = syncQueue.add(table, id, "update", { patch });
+  if (!op) return Promise.resolve(true);
+  drainer.resetFailures(op.key);
+  return drainer.drain(op.key);
+}
+
+function rawUpdate(table: string, id: string, patch: Record<string, unknown>): Promise<boolean> {
+  return Promise.resolve(supabase!.from(table).update(patch).eq("id", id))
     .then(({ error }) => {
       if (error) {
         logError("update", table, error);
@@ -336,7 +367,14 @@ export function pushUpdate(table: string, id: string, patch: Record<string, unkn
 
 export function pushDelete(table: string, id: string): Promise<boolean> {
   if (!supabase) return Promise.resolve(true);
-  return Promise.resolve(supabase.from(table).delete().eq("id", id))
+  const op = syncQueue.add(table, id, "delete");
+  if (!op) return Promise.resolve(true);
+  drainer.resetFailures(op.key);
+  return drainer.drain(op.key);
+}
+
+function rawDelete(table: string, id: string): Promise<boolean> {
+  return Promise.resolve(supabase!.from(table).delete().eq("id", id))
     .then(({ error }) => {
       if (error) {
         logError("delete", table, error);

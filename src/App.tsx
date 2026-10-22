@@ -6,10 +6,12 @@ import { Credits } from "./pages/Credits";
 import { Reports } from "./pages/Reports";
 import { Settings } from "./pages/Settings";
 import { useCreditReminderWatcher } from "./hooks/useCreditReminderWatcher";
+import { useOrderStatusReconcile } from "./hooks/useOrderStatusReconcile";
 import { ThemeApplier } from "./components/ThemeApplier";
 
 export default function App() {
   useCreditReminderWatcher();
+  useOrderStatusReconcile();
 
   return (
     <>
