@@ -2,11 +2,15 @@ import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 import { VitePWA } from 'vite-plugin-pwa'
 
+// The Windows desktop version (desktop/) loads the app from its own installed
+// files and has no use for the browser install / offline-cache machinery.
+const desktop = process.env.CUEBILL_DESKTOP === "1"
+
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [
     react(),
-    VitePWA({
+    !desktop && VitePWA({
       registerType: 'autoUpdate',
       includeAssets: ['icons/favicon-32.png', 'icons/apple-touch-icon.png'],
       manifest: {

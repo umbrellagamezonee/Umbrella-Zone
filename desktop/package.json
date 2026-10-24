@@ -1,0 +1,54 @@
+{
+  "name": "cuebill-desktop",
+  "productName": "CueBill",
+  "version": "1.0.0",
+  "private": true,
+  "description": "CueBill - offline Windows version (no server, data stays on the PC)",
+  "author": "CueBill",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node test-storage.js",
+    "build:web": "node build-web.js",
+    "pack": "node build-web.js && node prepare-pack.js && electron-builder --win nsis --x64"
+  },
+  "devDependencies": {
+    "electron": "45.0.0",
+    "electron-builder": "26.18.0"
+  },
+  "build": {
+    "appId": "com.cuebill.desktop",
+    "productName": "CueBill",
+    "copyright": "CueBill",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "storage.js",
+      "icon.png",
+      "package.json",
+      "app-dist/**"
+    ],
+    "extraResources": [
+      { "from": "pack-data/initial-data", "to": "initial-data" },
+      { "from": "pack-data/old-data", "to": "old-data" }
+    ],
+    "win": {
+      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "icon": "icon.ico"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "runAfterFinish": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "CueBill",
+      "deleteAppDataOnUninstall": false,
+      "artifactName": "CueBill-Setup-${version}.exe"
+    }
+  }
+}

@@ -13,6 +13,50 @@
     <title>CueBill</title>
   </head>
   <body>
+    <script>
+      // Windows desktop version only: it hands us a bridge (window.__cuebillStorage,
+      // see desktop/preload.js) and every saved setting / bill is kept as files on
+      // this PC instead of in the browser. This must run before the app starts,
+      // which is why it sits here rather than in the bundle. In a normal browser
+      // there is no bridge and nothing below happens.
+      (function () {
+        var bridge = window.__cuebillStorage;
+        if (!bridge) return;
+        var map = Object.create(null);
+        var loaded = bridge.load();
+        for (var k in loaded) map[k] = loaded[k];
+        var dirty = Object.create(null);
+        var timer = null;
+        function flush(sync) {
+          if (timer) { clearTimeout(timer); timer = null; }
+          var keys = Object.keys(dirty);
+          if (keys.length === 0) return;
+          var batch = {};
+          for (var i = 0; i < keys.length; i++) batch[keys[i]] = keys[i] in map ? map[keys[i]] : null;
+          dirty = Object.create(null);
+          bridge.save(batch, !!sync);
+        }
+        function touch(key) {
+          dirty[key] = true;
+          if (!timer) timer = setTimeout(function () { timer = null; flush(false); }, 400);
+        }
+        var storage = {
+          get length() { return Object.keys(map).length; },
+          key: function (i) { var ks = Object.keys(map); return i >= 0 && i < ks.length ? ks[i] : null; },
+          getItem: function (key) { key = String(key); return key in map ? map[key] : null; },
+          setItem: function (key, value) { key = String(key); map[key] = String(value); touch(key); },
+          removeItem: function (key) { key = String(key); if (key in map) { delete map[key]; touch(key); } },
+          clear: function () { for (var key in map) { delete map[key]; dirty[key] = true; } flush(false); }
+        };
+        Object.defineProperty(window, "localStorage", { configurable: true, enumerable: true, get: function () { return storage; } });
+        // closing, reloading (Restore does that) or hiding the window must never lose the last change
+        window.addEventListener("beforeunload", function () { flush(true); });
+        window.addEventListener("pagehide", function () { flush(true); });
+        document.addEventListener("visibilitychange", function () { if (document.hidden) flush(false); });
+        // "PDF / Print" buttons: the desktop version saves a PDF file straight away
+        window.print = function () { bridge.printPdf(); };
+      })();
+    </script>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

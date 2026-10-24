@@ -1,4 +1,6 @@
 const REMINDER_API_BASE = "http://localhost:4000";
+// The offline desktop version has no reminder backend to talk to.
+const OFFLINE = import.meta.env.VITE_DESKTOP === "1";
 
 export interface ReminderPayload {
   customerId: string;
@@ -15,6 +17,7 @@ export interface ReminderPayload {
 // Silently no-ops if the backend isn't up — the in-app "Payment due" list still
 // works either way, only the real SMS/WhatsApp send depends on this backend.
 export async function sendCreditReminder(payload: ReminderPayload): Promise<boolean> {
+  if (OFFLINE) return false;
   try {
     const res = await fetch(`${REMINDER_API_BASE}/api/remind`, {
       method: "POST",
@@ -37,6 +40,7 @@ export function syncCreditLedger(payload: {
   phone: string;
   amountDue: number;
 }) {
+  if (OFFLINE) return;
   fetch(`${REMINDER_API_BASE}/api/sync`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -45,6 +49,7 @@ export function syncCreditLedger(payload: {
 }
 
 export async function reminderBackendStatus(): Promise<{ up: boolean; configured: boolean }> {
+  if (OFFLINE) return { up: false, configured: false };
   try {
     const res = await fetch(`${REMINDER_API_BASE}/api/health`);
     if (!res.ok) return { up: false, configured: false };

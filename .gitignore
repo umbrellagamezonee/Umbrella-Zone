@@ -32,3 +32,12 @@ server/data
 tools/credit-report/data
 tools/credit-report/out
 tools/credit-report/node_modules
+
+# Offline Windows version: installs, caches, build output and the shop data packed into the installer
+desktop/node_modules
+desktop/.cache
+desktop/app-dist
+desktop/pack-data
+desktop/release
+desktop/icon.png
+offline-pack/
