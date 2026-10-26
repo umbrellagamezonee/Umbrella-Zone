@@ -28,6 +28,17 @@ async function toBillStep(c, label) {
   await waitFor(c, "document.body.innerText.includes('PAYMENT KAISE HUA')", "payment choices for " + label);
   await sleep(300);
 }
+async function payFromCustomers(c, who) {
+  await go(c, "/customers", PIN);
+  await waitFor(c, `document.body.innerText.includes(${JSON.stringify(who)})`, who + " in today's list");
+  await sleep(400);
+  await clickText(c, who, { exact: false, tag: "p" });
+  await waitFor(c, "document.body.innerText.includes('Payment: Cash / Account / Credit')", "payment button on " + who);
+  await sleep(300);
+  await clickText(c, "Payment: Cash / Account / Credit", { exact: false, tag: "button" });
+  await waitFor(c, "document.body.innerText.includes('PAYMENT KAISE HUA')", "payment choices for " + who);
+  await sleep(300);
+}
 async function openBill(c, who) {
   await go(c, "/", PIN);
   await waitFor(c, `document.body.innerText.includes(${JSON.stringify(who)})`, who + " on Home");
@@ -100,7 +111,16 @@ let PIN = "0000";
   check("...and no payment choices yet - just one Bill button", !/PAYMENT KAISE HUA/.test(t) && !/Credit \(baaki\)/.test(t) && !/Sab Cash/.test(t));
   await shot(c, "1-checkout");
 
-  await toBillStep(c, "Test Regular");
+  check("the first screen has no payment choices - Bill sends the entry to Customers", !/PAYMENT KAISE HUA/.test(t) && !/Sab Cash/.test(t));
+  await clickText(c, "Bill", { exact: true, tag: "button" });
+  await waitFor(c, "document.body.innerText.includes('Customers khate mein chali gayi')", "entry sent to Customers");
+  t = await text(c);
+  check("Bill: the entry went to Test Regular's Customers page (Cash / Account / Credit are chosen there)", /Test Regular ke Customers khate mein chali gayi/.test(t) && /Shuru .* Khatam .* Time 1 ghanta/.test(t), t.slice(0, 500));
+  await clickText(c, "Done", { exact: true, tag: "button" });
+  await sleep(400);
+  const stillOpen = await c.eval(`${stateOf("cuebill-bills")}.bills.find((b) => b.id === ${JSON.stringify(B1.id)}).status`);
+  check("until a choice is made the bill is not paid and not credit", stillOpen === "open");
+  await payFromCustomers(c, "Test Regular");
   t = await text(c);
   check("Customer Bill screen: start, end, time of the session", /Shuru .* Khatam .* Time 1 ghanta/.test(t), t.slice(0, 600));
   check("Customer Bill screen: three ways to pay - Cash, Account, Credit", /PAYMENT KAISE HUA/.test(t) && (await c.eval(`["Cash","Account","Credit"].every((n) => [...document.querySelectorAll("button")].some((b) => b.textContent.trim() === n))`)));
@@ -147,8 +167,7 @@ let PIN = "0000";
 
   // ---------- 2. one-time customer: no credit ----------
   console.log("\n== 2. One-time customer cannot take credit ==");
-  await openBill(c, "Test OneTime");
-  await toBillStep(c, "Test OneTime");
+  await payFromCustomers(c, "Test OneTime");
   btn = await confirmButton(c);
   check("nothing is chosen yet: confirm waits until Cash, Account or Credit is picked", !!btn && btn.disabled, JSON.stringify(btn));
   await clickText(c, "Credit", { exact: true, tag: "button" });
@@ -175,16 +194,20 @@ let PIN = "0000";
   await waitFor(c, "document.body.innerText.includes('Cold coffee x1')", "walk-in order on the Canteen page");
   await sleep(500);
   await clickText(c, "Cold coffee x1", { tag: "p" });
-  await toBillStep(c, "the canteen bill");
+  await waitFor(c, billButton, "session screen for the canteen bill");
+  await clickText(c, "Bill", { exact: true, tag: "button" });
+  await waitFor(c, "document.body.innerText.includes('kis customer ke khate mein')", "asks whose page");
+  await H.typeInto(c, 'input[placeholder="Customer ka naam"]', "Test Regular");
+  await sleep(300);
+  await clickText(c, "Customers mein bhejo", { exact: true, tag: "button" });
+  await waitFor(c, "document.body.innerText.includes('Customers khate mein chali gayi')", "walk-in entry sent");
+  await clickText(c, "Done", { exact: true, tag: "button" });
+  await sleep(400);
+  await payFromCustomers(c, "Test Regular");
   await clickText(c, "Credit", { exact: true, tag: "button" });
   await sleep(400);
-  t = await text(c);
   btn = await confirmButton(c);
-  check("walk-in: asks which regular customer, confirm is blocked", /kis regular customer par/.test(t) && !!btn && btn.disabled, JSON.stringify(btn));
-  await H.typeInto(c, 'input[placeholder="Regular customer ka naam"]', "Test Regular");
-  await sleep(500);
-  btn = await confirmButton(c);
-  check("naming a regular customer unlocks confirm", !!btn && !btn.disabled && /80 credit mein/.test(btn.text), JSON.stringify(btn));
+  check("walk-in bill given to Test Regular: Credit is allowed (regular) and says 80", !!btn && !btn.disabled && /80 credit mein/.test(btn.text), JSON.stringify(btn));
   await clickText(c, btn.text, { exact: true, tag: "button" });
   await sleep(800);
   const b3 = await billOf(c, B3.id);

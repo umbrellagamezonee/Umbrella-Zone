@@ -244,6 +244,8 @@ interface BillsState {
   settlePayment: (id: string, input: SettleInput) => Bill | undefined;
   settleShare: (billId: string, shareId: string, input: SettleShareInput) => { bill: Bill; share: BillShare } | undefined;
   cancelBill: (id: string) => void;
+  // Puts a bill that is not settled yet onto a customer's account (their Customers page).
+  setBillCustomer: (id: string, customerId: string) => void;
   // Moves every bill referencing customer `fromId` (or their old name in a
   // match/share snapshot) onto `toId`/`toName` — used when two duplicate
   // customer profiles are merged into one. Resolves with which bills were
@@ -464,6 +466,11 @@ export const useBillsStore = create<BillsState>()(
         }));
         if (result) markBillPending(billId);
         return result;
+      },
+
+      setBillCustomer: (id, customerId) => {
+        set((state) => ({ bills: state.bills.map((b) => (b.id === id ? { ...b, customerId } : b)) }));
+        markBillPending(id);
       },
 
       cancelBill: (id) => {

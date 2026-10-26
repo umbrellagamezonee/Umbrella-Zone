@@ -936,6 +936,19 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
                     <span className="text-sm font-semibold text-right shrink-0">
                       {formatMoney(entry.balanceAfter, currency)}
                     </span>
+                    {entry.bill && entry.bill.status === "open" && !entry.bill.shares && (
+                      <div className="col-span-3 mt-1">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setCheckoutBill(entry.bill!);
+                          }}
+                          className="w-full flex items-center justify-center gap-1.5 rounded-lg bg-[var(--color-primary)] text-white text-xs font-semibold py-2"
+                        >
+                          <Wallet size={12} /> Payment: Cash / Account / Credit
+                        </button>
+                      </div>
+                    )}
                     {entry.order && (
                       <div className="col-span-3 mt-1">
                         <button
@@ -990,7 +1003,7 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
       </div>
 
       {detailBill && <BillDetailModal bill={detailBill} onClose={() => setDetailBill(null)} />}
-      {checkoutBill && <CheckoutModal bill={checkoutBill} onDone={() => setCheckoutBill(null)} />}
+      {checkoutBill && <CheckoutModal bill={checkoutBill} mode="pay" onDone={() => setCheckoutBill(null)} />}
       {showSettle && <SettleCreditModal customer={customer} onClose={() => setShowSettle(false)} />}
       {mergeTarget && (
         <Modal title="Merge customers" onClose={() => setMergeTarget(null)}>

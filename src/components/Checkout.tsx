@@ -15,7 +15,7 @@ import { Check, ArrowLeft, Repeat, Receipt, Gamepad2, UtensilsCrossed, Star, Pri
 // Two steps before payment is recorded:
 //   1. the session at a glance - when it started, when it ended, how long, the bill - and one button: Bill
 //   2. the Customer Bill (Gaming and Canteen apart) with the three ways to pay it: Cash, Account, Credit
-type CheckoutStep = "select" | "bill" | "success";
+type CheckoutStep = "select" | "bill" | "sent" | "pay" | "success";
 
 interface CheckoutProps {
   bill: Bill;
@@ -31,9 +31,12 @@ interface CheckoutProps {
   // Offered once payment is confirmed — leaves this bill exactly as settled
   // and starts a fresh session right away for the same players, same game.
   onRestart?: () => void;
+  // "pay" opens straight on the Cash / Account / Credit choice — that is how it is opened from a
+  // customer's page. Otherwise Bill sends the entry to that customer's page instead.
+  mode?: "send" | "pay";
 }
 
-export function CheckoutModal({ bill, onDone, onCancel, onSettled, onRestart }: CheckoutProps) {
+export function CheckoutModal({ bill, onDone, onCancel, onSettled, onRestart, mode }: CheckoutProps) {
   return (
     <Modal title={bill.tableName ?? "Checkout"} onClose={onCancel ?? onDone}>
       <Checkout
@@ -42,6 +45,7 @@ export function CheckoutModal({ bill, onDone, onCancel, onSettled, onRestart }: 
         onCancel={onCancel}
         onSettled={onSettled}
         onRestart={onRestart}
+        mode={mode}
       />
     </Modal>
   );
@@ -57,13 +61,14 @@ function settleOne(total: number, cashInput: string, upiInput: string): PartPaym
   return { total, cash, upi, due: round2(total - cash - upi) };
 }
 
-export function Checkout({ bill, onDone, onCancel, onSettled, onRestart }: CheckoutProps) {
+export function Checkout({ bill, onDone, onCancel, onSettled, onRestart, mode = "send" }: CheckoutProps) {
   const currency = useSettingsStore((s) => s.currencySymbol);
   const settlePayment = useBillsStore((s) => s.settlePayment);
   const bills = useBillsStore((s) => s.bills);
   const customers = useCustomersStore((s) => s.customers);
   const findOrCreateCustomer = useCustomersStore((s) => s.findOrCreateCustomer);
   const setRegular = useCustomersStore((s) => s.setRegular);
+  const setBillCustomer = useBillsStore((s) => s.setBillCustomer);
   const m = (n: number) => formatMoney(n, currency);
 
   const billCustomer = customers.find((c) => c.id === bill.customerId) ?? null;
@@ -73,7 +78,9 @@ export function Checkout({ bill, onDone, onCancel, onSettled, onRestart }: Check
   const hasGaming = totals.gaming > 0.005;
   const hasCanteen = totals.canteen > 0.005;
 
-  const [step, setStep] = useState<CheckoutStep>("select");
+  const [step, setStep] = useState<CheckoutStep>(mode === "pay" ? "pay" : "select");
+  const [sendName, setSendName] = useState("");
+  const [sentTo, setSentTo] = useState("");
   // All start at zero rather than pre-filled — nothing is assumed paid until
   // the cashier picks Cash, Account or Credit (or types an amount).
   const [gCash, setGCash] = useState("0");
@@ -125,8 +132,26 @@ export function Checkout({ bill, onDone, onCancel, onSettled, onRestart }: Check
     };
   }
 
+  // Bill: the entry goes to the customer's page (Customers), where Cash / Account / Credit is chosen.
+  function sendToCustomers(chosenName?: string) {
+    let target = isRegistered ? billCustomer : null;
+    if (!target) {
+      const name = (chosenName ?? sendName).trim();
+      if (!name) {
+        setError("Customer ka naam daalo - entry unke khate mein jayegi.");
+        return;
+      }
+      target = findOrCreateCustomer({ name, phone: "" });
+    }
+    setError("");
+    if (target.id !== bill.customerId) setBillCustomer(bill.id, target.id);
+    onSettled?.();
+    setSentTo(target.name);
+    setStep("sent");
+  }
+
   function handleConfirm() {
-    if (step !== "bill") return;
+    if (step !== "pay") return;
     if (!touched) {
       setError("Pehle Cash, Account ya Credit chuno.");
       return;
@@ -217,8 +242,8 @@ export function Checkout({ bill, onDone, onCancel, onSettled, onRestart }: Check
     );
   }
 
-  // ---------------- step 2: the Customer Bill, and how it was paid ----------------
-  if (step === "bill") {
+  // ---------------- Cash / Account / Credit (opened from the customer's page) ----------------
+  if (step === "pay") {
     const panel = (
       label: string,
       Icon: typeof Gamepad2,
@@ -285,7 +310,7 @@ export function Checkout({ bill, onDone, onCancel, onSettled, onRestart }: Check
     return (
       <div className="space-y-4">
         <button
-          onClick={() => setStep("select")}
+          onClick={() => (mode === "pay" ? onDone() : setStep("select"))}
           className="flex items-center gap-1.5 text-sm text-[var(--color-text-dim)]"
         >
           <ArrowLeft size={14} /> Wapas
@@ -392,6 +417,51 @@ export function Checkout({ bill, onDone, onCancel, onSettled, onRestart }: Check
     );
   }
 
+  // ---------------- a walk-in bill: whose page does it go to? ----------------
+  if (step === "bill") {
+    return (
+      <div className="space-y-4">
+        <button onClick={() => setStep("select")} className="flex items-center gap-1.5 text-sm text-[var(--color-text-dim)]">
+          <ArrowLeft size={14} /> Wapas
+        </button>
+        <BillSlipBody bill={bill} />
+        <p className="text-sm font-semibold">Ye bill kis customer ke khate mein jaye?</p>
+        <CustomerNameInput value={sendName} onChange={setSendName} placeholder="Customer ka naam" />
+        {error && <p className="text-xs text-[var(--color-danger)]">{error}</p>}
+        <button
+          onClick={() => sendToCustomers()}
+          className="w-full rounded-xl bg-[var(--color-primary)] text-white font-semibold py-3"
+        >
+          Customers mein bhejo
+        </button>
+      </div>
+    );
+  }
+
+  // ---------------- the entry is now on the customer's page ----------------
+  if (step === "sent") {
+    return (
+      <div className="space-y-4">
+        <BillSlipBody bill={bill} />
+        <button
+          onClick={() => setShowSlip(true)}
+          className="w-full flex items-center justify-center gap-2 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] font-semibold py-2.5 text-sm"
+        >
+          <Printer size={15} /> PDF / Print
+        </button>
+        <div className="rounded-xl bg-[var(--color-success)]/10 p-3 text-sm text-center">
+          <b>{sentTo}</b> ke Customers khate mein chali gayi.
+          <br />
+          Wahan Cash / Account / Credit chuno.
+        </div>
+        <button onClick={onDone} className="w-full rounded-xl bg-[var(--color-primary)] text-white font-semibold py-3">
+          Done
+        </button>
+        {showSlip && <CustomerBillModal bill={bill} onClose={() => setShowSlip(false)} />}
+      </div>
+    );
+  }
+
   // ---------------- step 1: the session at a glance ----------------
   const minutes = Math.round(bill.tableChargeMinutes);
   const startedAt = bill.createdAt - bill.tableChargeMinutes * 60000;
@@ -468,7 +538,7 @@ export function Checkout({ bill, onDone, onCancel, onSettled, onRestart }: Check
       </Card>
 
       <button
-        onClick={() => setStep("bill")}
+        onClick={() => (isRegistered ? sendToCustomers() : setStep("bill"))}
         className="w-full flex items-center justify-center gap-2 rounded-xl bg-[var(--color-primary)] text-white font-semibold py-3.5 text-base"
       >
         <Receipt size={18} /> Bill
