@@ -176,12 +176,11 @@ export function settleParts(
 export function billParts(bill: Bill): BillParts {
   if (bill.parts) return bill.parts;
   const raw = bill.tableCharge + bill.canteenCharge;
-  const totals = businessTotals(bill);
   const gf = raw > 0 ? bill.tableCharge / raw : 0;
   const cf = raw > 0 ? bill.canteenCharge / raw : 0;
   return {
-    gaming: { total: totals.gaming, cash: bill.amountCash * gf, upi: bill.amountUpi * gf, due: bill.amountDue * gf },
-    canteen: { total: totals.canteen, cash: bill.amountCash * cf, upi: bill.amountUpi * cf, due: bill.amountDue * cf },
+    gaming: { total: bill.total * gf, cash: bill.amountCash * gf, upi: bill.amountUpi * gf, due: bill.amountDue * gf },
+    canteen: { total: bill.total * cf, cash: bill.amountCash * cf, upi: bill.amountUpi * cf, due: bill.amountDue * cf },
   };
 }
 

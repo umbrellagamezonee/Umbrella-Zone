@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { Fragment, useMemo, useRef, useState } from "react";
 import { AppShell } from "../components/layout/AppShell";
 import { Card } from "../components/ui/Card";
 import { Modal } from "../components/ui/Modal";
@@ -15,6 +15,7 @@ import {
   formatDateTime,
   formatDateKey,
   toDateInputValue,
+  dateInputValueToIstMidnight,
 } from "../lib/format";
 import {
   billCollectedFor,
@@ -26,6 +27,8 @@ import {
 } from "../lib/billing";
 import { billPendingToCredit } from "../lib/creditHelpers";
 import { buildLedger, customerCreditByBusiness, ledgerPeriodRange } from "../lib/ledger";
+import { customerActivity, personParts } from "../lib/customerDaily";
+import { isCreditSettlement } from "../lib/billLabel";
 import { cleanName, customerLabel, findCustomerByName, normalizeName } from "../lib/customerName";
 import type { Customer, Bill } from "../types";
 import { Search, Footprints, Check, ChevronRight, Wallet, Users, Trash2, Star } from "lucide-react";
@@ -49,6 +52,9 @@ export function Customers() {
   const orders = useOrdersStore((s) => s.orders);
   const currency = useSettingsStore((s) => s.currencySymbol);
   const [search, setSearch] = useState("");
+  // Today first. "7 din" is its own view; any other day is looked at one day at a time.
+  const [view, setView] = useState<"today" | "7days" | "day" | "all">("today");
+  const [pickedDay, setPickedDay] = useState(() => toDateInputValue(Date.now()));
   const [showAdd, setShowAdd] = useState(false);
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
@@ -125,8 +131,223 @@ export function Customers() {
     setShowAdd(false);
   }
 
+  // ---- daily view: who did what today / in the last 7 days / on any one day ----
+  const DAY_MS = 86_400_000;
+  const todayKey = toDateInputValue(Date.now());
+  const dayStart = (key: string) => dateInputValueToIstMidnight(key);
+  const range =
+    view === "7days"
+      ? { startMs: dayStart(todayKey) - 6 * DAY_MS, endMs: dayStart(todayKey) + DAY_MS }
+      : view === "day"
+        ? { startMs: dayStart(pickedDay), endMs: dayStart(pickedDay) + DAY_MS }
+        : { startMs: dayStart(todayKey), endMs: dayStart(todayKey) + DAY_MS };
+  const activity = useMemo(
+    () => (view === "all" ? null : customerActivity(customers, bills, orders, range.startMs, range.endMs)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [view, customers, bills, orders, range.startMs, range.endMs]
+  );
+  const activityRows = (activity?.rows ?? []).filter((r) => r.name.toLowerCase().includes(search.toLowerCase()) || r.phone.includes(search));
+  const t = activity?.total;
+  const shiftPickedDay = (delta: number) => setPickedDay(toDateInputValue(dayStart(pickedDay) + delta * DAY_MS + 12 * 3_600_000));
+  const periodTitle =
+    view === "today"
+      ? "Aaj — " + formatDateKey(todayKey, { day: "numeric", month: "long" })
+      : view === "7days"
+        ? "Pichhle 7 din — " + formatDateKey(toDateInputValue(range.startMs), { day: "numeric", month: "short" }) + " se " + formatDateKey(todayKey, { day: "numeric", month: "short" })
+        : formatDateKey(pickedDay, { day: "numeric", month: "long", year: "numeric" });
+
+  const activityView = activity && t ? (
+    <div className="space-y-3">
+      {view === "day" && (
+        <div className="flex items-center justify-center gap-2">
+          <button
+            onClick={() => shiftPickedDay(-1)}
+            className="h-9 w-9 flex items-center justify-center rounded-xl bg-[var(--color-surface-2)] text-lg"
+            aria-label="Pichla din"
+          >
+            ‹
+          </button>
+          <input
+            type="date"
+            value={pickedDay}
+            max={todayKey}
+            onChange={(e) => e.target.value && setPickedDay(e.target.value)}
+            className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm"
+          />
+          <button
+            onClick={() => shiftPickedDay(1)}
+            disabled={pickedDay >= todayKey}
+            className="h-9 w-9 flex items-center justify-center rounded-xl bg-[var(--color-surface-2)] text-lg disabled:opacity-40"
+            aria-label="Agla din"
+          >
+            ›
+          </button>
+        </div>
+      )}
+      <p className="text-sm font-semibold">{periodTitle}</p>
+      <div className="grid grid-cols-2 gap-2">
+        <Card>
+          <p className="text-[11px] text-[var(--color-text-dim)]">GAMING KA BILL</p>
+          <p className="text-base font-bold mt-0.5">{formatMoney(t.gamingBill, currency)}</p>
+        </Card>
+        <Card>
+          <p className="text-[11px] text-[var(--color-text-dim)]">CANTEEN KA BILL</p>
+          <p className="text-base font-bold mt-0.5">{formatMoney(t.canteenBill, currency)}</p>
+        </Card>
+        <Card>
+          <p className="text-[11px] text-[var(--color-text-dim)]">CASH DIYA</p>
+          <p className="text-base font-bold text-[var(--color-success)] mt-0.5">{formatMoney(t.cash, currency)}</p>
+        </Card>
+        <Card>
+          <p className="text-[11px] text-[var(--color-text-dim)]">ACCOUNT DIYA</p>
+          <p className="text-base font-bold text-[var(--color-success)] mt-0.5">{formatMoney(t.upi, currency)}</p>
+        </Card>
+        <Card>
+          <p className="text-[11px] text-[var(--color-text-dim)]">CREDIT LIYA</p>
+          <p className="text-base font-bold text-[var(--color-warning)] mt-0.5">{formatMoney(t.creditGaming + t.creditCanteen, currency)}</p>
+          {t.creditGaming + t.creditCanteen > 0.005 && (
+            <p className="text-[10px] text-[var(--color-text-faint)]">{businessText(t.creditGaming, t.creditCanteen, currency)}</p>
+          )}
+        </Card>
+        <Card>
+          <p className="text-[11px] text-[var(--color-text-dim)]">PURANA CREDIT CHUKAYA</p>
+          <p className="text-base font-bold text-[var(--color-success)] mt-0.5">{formatMoney(t.paidBackCash + t.paidBackUpi, currency)}</p>
+          {t.paidBackCash + t.paidBackUpi > 0.005 && (
+            <p className="text-[10px] text-[var(--color-text-faint)]">
+              Cash {formatMoney(t.paidBackCash, currency)} · Account {formatMoney(t.paidBackUpi, currency)}
+              {t.forgiven > 0.005 ? " · maaf " + formatMoney(t.forgiven, currency) : ""}
+            </p>
+          )}
+        </Card>
+      </div>
+
+      {view === "7days" && activity.days.size > 0 && (
+        <div className="overflow-x-auto rounded-xl border border-[var(--color-border)]">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="bg-[var(--color-surface-2)] text-[var(--color-text-dim)]">
+                {["Din", "Gaming", "Canteen", "Cash", "Account", "Credit liya", "Chukaya"].map((h, i) => (
+                  <th key={h} className={"px-2 py-1.5 font-semibold " + (i === 0 ? "text-left" : "text-right")}>
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {[...activity.days.entries()]
+                .sort((a, b) => b[0].localeCompare(a[0]))
+                .map(([key, d]) => (
+                  <tr key={key} className="border-t border-[var(--color-border)]">
+                    <td className="px-2 py-1.5 text-left whitespace-nowrap">{formatDateKey(key, { day: "numeric", month: "short" })}</td>
+                    <td className="px-2 py-1.5 text-right">{formatMoney(d.gamingBill, currency)}</td>
+                    <td className="px-2 py-1.5 text-right">{formatMoney(d.canteenBill, currency)}</td>
+                    <td className="px-2 py-1.5 text-right">{formatMoney(d.cash, currency)}</td>
+                    <td className="px-2 py-1.5 text-right">{formatMoney(d.upi, currency)}</td>
+                    <td className="px-2 py-1.5 text-right">{formatMoney(d.creditGaming + d.creditCanteen, currency)}</td>
+                    <td className="px-2 py-1.5 text-right">{formatMoney(d.paidBackCash + d.paidBackUpi, currency)}</td>
+                  </tr>
+                ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)]">
+        {activityRows.length} CUSTOMER{activityRows.length === 1 ? "" : "S"}
+      </p>
+      {activityRows.length === 0 ? (
+        <p className="text-center text-sm text-[var(--color-text-faint)] py-10">
+          {view === "today" ? "Aaj abhi kisi customer ka bill ya payment nahi hua." : "Is period mein kisi customer ka bill ya payment nahi hua."}
+        </p>
+      ) : (
+        <div className="space-y-2">
+          {activityRows.map((r) => {
+            const c = customers.find((x) => x.id === r.customerId)!;
+            const credit = r.creditGaming + r.creditCanteen;
+            const owed = r.owedGaming + r.owedCanteen;
+            return (
+              <Card key={r.customerId} onClick={() => setDetailCustomer(c)}>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium flex items-center gap-1.5">
+                      {customerLabel(c, customers)}
+                      {regularIds.has(c.id) && (
+                        <span className="inline-flex items-center gap-0.5 rounded-full bg-[var(--color-primary)]/15 text-[var(--color-primary)] px-1.5 py-0.5 text-[10px] font-semibold">
+                          <Star size={9} /> Regular
+                        </span>
+                      )}
+                    </p>
+                    {r.bills > 0 && (
+                      <p className="text-xs text-[var(--color-text-dim)]">
+                        {r.bills} bill · {businessText(r.gamingBill, r.canteenBill, currency) || "—"}
+                      </p>
+                    )}
+                    {(r.cash > 0.005 || r.upi > 0.005) && (
+                      <p className="text-xs text-[var(--color-success)]">
+                        Diya: {r.cash > 0.005 ? "Cash " + formatMoney(r.cash, currency) : ""}
+                        {r.cash > 0.005 && r.upi > 0.005 ? " · " : ""}
+                        {r.upi > 0.005 ? "Account " + formatMoney(r.upi, currency) : ""}
+                      </p>
+                    )}
+                    {credit > 0.005 && (
+                      <p className="text-xs text-[var(--color-warning)]">
+                        Credit liya {formatMoney(credit, currency)} ({businessText(r.creditGaming, r.creditCanteen, currency)})
+                      </p>
+                    )}
+                    {r.paidBackCash + r.paidBackUpi + r.forgiven > 0.005 && (
+                      <p className="text-xs text-[var(--color-success)]">
+                        Purana credit chukaya {formatMoney(r.paidBackCash + r.paidBackUpi, currency)}
+                        {r.forgiven > 0.005 ? " (+ maaf " + formatMoney(r.forgiven, currency) + ")" : ""}
+                        {r.clearedGaming + r.clearedCanteen > 0.005 ? " — " + businessText(r.clearedGaming, r.clearedCanteen, currency) : ""}
+                      </p>
+                    )}
+                  </div>
+                  <div className="text-right shrink-0">
+                    {owed > 0.005 ? (
+                      <>
+                        <p className="text-xs text-[var(--color-text-dim)]">Abhi baaki</p>
+                        <p className="text-sm font-semibold text-[var(--color-warning)]">{formatMoney(owed, currency)}</p>
+                        <p className="text-[10px] text-[var(--color-text-faint)]">{businessText(r.owedGaming, r.owedCanteen, currency)}</p>
+                      </>
+                    ) : (
+                      <Check size={16} className="text-[var(--color-text-faint)]" />
+                    )}
+                  </div>
+                </div>
+              </Card>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  ) : null;
+
   return (
     <AppShell title="Customers">
+      <div className="grid grid-cols-4 gap-1.5">
+        {(
+          [
+            ["today", "Aaj"],
+            ["7days", "7 din"],
+            ["day", "Ek din"],
+            ["all", "Sab customers"],
+          ] as const
+        ).map(([id, label]) => (
+          <button
+            key={id}
+            onClick={() => setView(id)}
+            className={
+              "rounded-xl border px-2 py-2 text-xs font-semibold " +
+              (view === id
+                ? "border-[var(--color-primary)] bg-[var(--color-primary)]/15 text-[var(--color-primary)]"
+                : "border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text-dim)]")
+            }
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
       <div className="relative">
         <Search
           size={16}
@@ -147,6 +368,9 @@ export function Customers() {
         Add customer
       </button>
 
+      {view !== "all" && activityView}
+
+      {view === "all" && (
       <div className="space-y-2">
         {filtered.map((c) => (
           <Card
@@ -203,6 +427,7 @@ export function Customers() {
           </Card>
         ))}
       </div>
+      )}
 
       {detailCustomer && (
         <CustomerDetailModal customer={detailCustomer} onClose={() => setDetailCustomer(null)} />
@@ -297,7 +522,7 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
   const [showSettle, setShowSettle] = useState(false);
   const [mergeTarget, setMergeTarget] = useState<Customer | null>(null);
   // Which part of the ledger is shown: everything, one month, or from/to dates.
-  const [period, setPeriod] = useState("all");
+  const [period, setPeriod] = useState("today");
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
   // Read live off the store — settling a payment from right here should
@@ -444,6 +669,17 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
   const periodPaidCanteen = visibleEntries.reduce((s, e) => s + e.creditCanteen, 0);
   const periodClosingGaming = visibleEntries.length > 0 ? visibleEntries[0].gamingAfter : periodOpeningGaming;
   const periodClosingCanteen = visibleEntries.length > 0 ? visibleEntries[0].canteenAfter : periodOpeningCanteen;
+  // The ledger is read day by day: each day gets its own heading with that day's credit taken, paid, and what
+  // was left at the end of it. (Entries are newest first, so the first one seen for a day is its last.)
+  const dayInfo = new Map<string, { debitG: number; debitC: number; paid: number; closing: number; closingG: number; closingC: number }>();
+  for (const e of visibleEntries) {
+    const k = toDateInputValue(e.date);
+    let d = dayInfo.get(k);
+    if (!d) dayInfo.set(k, (d = { debitG: 0, debitC: 0, paid: 0, closing: e.balanceAfter, closingG: e.gamingAfter, closingC: e.canteenAfter }));
+    d.debitG += e.debitGaming;
+    d.debitC += e.debitCanteen;
+    d.paid += e.credit;
+  }
   const monthLabel = (key: string) => formatDateKey(`${key}-01`, { month: "long", year: "numeric" });
 
   return (
@@ -528,6 +764,9 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
                 onChange={(e) => setPeriod(e.target.value)}
                 className="w-full rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] px-3 py-2 text-sm outline-none"
               >
+                <option value="today">Aaj</option>
+                <option value="7days">Pichhle 7 din</option>
+                <option value="day">Ek din chuno…</option>
                 <option value="all">Poora hisaab (sab din)</option>
                 {monthKeys.map((k) => (
                   <option key={k} value={k}>
@@ -536,6 +775,15 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
                 ))}
                 <option value="custom">Date se date tak…</option>
               </select>
+              {period === "day" && (
+                <input
+                  type="date"
+                  value={fromDate || toDateInputValue(Date.now())}
+                  max={toDateInputValue(Date.now())}
+                  onChange={(e) => e.target.value && setFromDate(e.target.value)}
+                  className="w-full rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] px-3 py-2 text-sm outline-none"
+                />
+              )}
               {period === "custom" && (
                 <div className="grid grid-cols-2 gap-2">
                   <label className="text-[11px] text-[var(--color-text-dim)]">
@@ -612,11 +860,26 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
                   BALANCE
                 </span>
               </div>
-              {visibleEntries.map((entry) => {
+              {visibleEntries.map((entry, idx) => {
                 const dimmed = entry.bill?.status === "cancelled";
+                const dayKey = toDateInputValue(entry.date);
+                const newDay = idx === 0 || toDateInputValue(visibleEntries[idx - 1].date) !== dayKey;
+                const info = dayInfo.get(dayKey)!;
+                const amounts = entry.bill && !isCreditSettlement(entry.bill) ? personParts(entry.bill, nameKey) : null;
                 return (
+                  <Fragment key={entry.id}>
+                  {newDay && (
+                    <div className="px-3 py-2 bg-[var(--color-surface-2)] border-t border-[var(--color-border)]">
+                      <p className="text-xs font-semibold">{formatDateKey(dayKey, { weekday: "short", day: "numeric", month: "long" })}</p>
+                      <p className="text-[11px] text-[var(--color-text-dim)]">
+                        {info.debitG + info.debitC > 0.005 ? "Credit liya " + businessText(info.debitG, info.debitC, currency) + " · " : ""}
+                        {info.paid > 0.005 ? "Chukaya " + formatMoney(info.paid, currency) + " · " : ""}
+                        Din ke end mein baaki {formatMoney(info.closing, currency)}
+                        {info.closingG + info.closingC > 0.005 ? " (" + businessText(info.closingG, info.closingC, currency) + ")" : ""}
+                      </p>
+                    </div>
+                  )}
                   <div
-                    key={entry.id}
                     onClick={entry.bill ? () => setDetailBill(entry.bill!) : undefined}
                     className={
                       "grid grid-cols-[1fr_72px_80px] gap-2 px-3 py-2.5 border-t border-[var(--color-border)] items-center " +
@@ -637,6 +900,13 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
                           <span className="text-[var(--color-warning)] font-medium"> · {entry.orderedNote}</span>
                         )}
                       </p>
+                      {amounts && (
+                        <p className="text-[11px] text-[var(--color-text-dim)] mt-0.5">
+                          Bill: {businessText(amounts.billedG, amounts.billedC, currency) || "—"}
+                          {amounts.cashG + amounts.cashC > 0.005 ? " · Cash " + formatMoney(amounts.cashG + amounts.cashC, currency) : ""}
+                          {amounts.upiG + amounts.upiC > 0.005 ? " · Account " + formatMoney(amounts.upiG + amounts.upiC, currency) : ""}
+                        </p>
+                      )}
                       {(entry.debit > 0 || entry.credit > 0) && (
                         <p className="text-[11px] text-[var(--color-text-faint)] mt-0.5">
                           <span className={entry.debit > 0 ? "text-[var(--color-warning)]" : "text-[var(--color-success)]"}>
@@ -680,6 +950,7 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
                       </div>
                     )}
                   </div>
+                  </Fragment>
                 );
               })}
             </div>

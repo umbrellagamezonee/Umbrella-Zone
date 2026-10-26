@@ -203,11 +203,52 @@ let PIN = "0000";
   const card2 = await c.eval(`(() => { const p = [...document.querySelectorAll("p")].find((x) => x.textContent.trim() === "Test Regular"); return p ? p.closest("[class*=border]").innerText : null; })()`);
   check("Credits page after settling: Test Regular owes 70, all Canteen", !!card2 && /70/.test(card2) && /Gaming\s*₹0/.test(card2) && /Canteen\s*₹70/.test(card2), String(card2));
 
+  // ---- Customers, day by day: today first, 7 days apart, any other day one at a time ----
   await go(c, "/customers", PIN);
+  await waitFor(c, "document.body.innerText.includes('GAMING KA BILL')", "Customers opens on today");
+  await sleep(500);
+  t = await text(c);
+  check("Customers opens on Aaj with today's date", /Aaj\s*—\s*October 26/.test(t) || /Aaj\s*—\s*Oct(ober)? 26/.test(t), t.slice(0, 300));
+  const flat = t.replace(/₹/g, "").replace(/\s+/g, " ");
+  check("today: Gaming bill 160, Canteen bill 210, Cash 200, Account 40, Credit liya 130, purana credit chukaya 60",
+    /GAMING KA BILL 160/.test(flat) && /CANTEEN KA BILL 210/.test(flat) && /CASH DIYA 200/.test(flat) && /ACCOUNT DIYA 40/.test(flat) && /CREDIT LIYA 130/.test(flat) && /PURANA CREDIT CHUKAYA 60/.test(flat), flat.slice(0, 500));
+  const rowReg = await c.eval(`(() => { const p = [...document.querySelectorAll("p")].find((x) => x.textContent.trim().startsWith("Test Regular")); return p ? p.closest("[class*=rounded]").innerText.replace(/\\s+/g, " ") : null; })()`);
+  check("today's list: Test Regular - 2 bills, Gaming 100 / Canteen 170, Cash 100, Account 40, credit 130, paid back 60, baaki 70",
+    !!rowReg && /2 bill/.test(rowReg) && /Gaming ₹100/.test(rowReg) && /Canteen ₹170/.test(rowReg) && /Cash ₹100/.test(rowReg) && /Account ₹40/.test(rowReg) && /Credit liya ₹130/.test(rowReg) && /chukaya ₹60/.test(rowReg) && /Abhi baaki\s*₹70/.test(rowReg), String(rowReg));
+  check("today's list: only people who came today (not the whole directory)", /2 CUSTOMERS/.test(t), t.match(/\d+ CUSTOMERS?/)?.[0] ?? "");
+  await shot(c, "4b-customers-today");
+
+  await clickText(c, "7 din", { exact: true, tag: "button" });
+  await sleep(700);
+  t = await text(c);
+  const flat7 = t.replace(/₹/g, "").replace(/\s+/g, " ");
+  check("7 din is a separate view: its own heading and a day-by-day table", /Pichhle 7 din/.test(t) && /Din Gaming Canteen Cash Account Credit liya Chukaya/.test(flat7), flat7.slice(0, 400));
+  check("7 din: today's row of the table is 160 / 210 / 200 / 40 / 130 / 60", /Oct 26 160 210 200 40 130 60/.test(flat7), flat7.slice(0, 700));
+  await shot(c, "4c-customers-7days");
+
+  await clickText(c, "Ek din", { exact: true, tag: "button" });
+  await sleep(500);
+  for (let i = 0; i < 5; i++) {
+    await c.eval(`document.querySelector('button[aria-label="Pichla din"]').click()`);
+    await sleep(150);
+  }
+  await sleep(700);
+  t = await text(c);
+  check("Ek din: stepping back 5 days shows 21 October with the customers of that day", /October 21, 2026/.test(t) && /\d+ CUSTOMERS/.test(t) && !/0 CUSTOMERS/.test(t), t.slice(0, 400));
+  await shot(c, "4d-customers-oneday");
+
+  await clickText(c, "Sab customers", { exact: true, tag: "button" });
+  await sleep(500);
+  t = await text(c);
+  check("Sab customers: the whole directory is still there", /Test OneTime/.test(t) && /Test Regular/.test(t) && /Add customer/.test(t));
+  await clickText(c, "Aaj", { exact: true, tag: "button" });
+  await sleep(300);
+
   await clickText(c, "Test Regular", { exact: false, tag: "p" });
   await sleep(700);
   t = await text(c);
   check("customer profile: marked Regular, Gaming and Canteen baaki", /Regular customer \(credit milega\)/.test(t) && /Gaming ka baaki/.test(t) && /Canteen ka baaki/.test(t));
+  check("profile ledger opens on Aaj, day by day, with each bill's amounts", /Din ke end mein baaki/.test(t) && /Bill: Gaming ₹100 · Canteen ₹90 · Cash ₹100 · Account ₹40/.test(t), t.slice(0, 1200));
   check("ledger lines say Canteen ₹50 and Canteen ₹80, and the payment cleared Canteen ₹60", /Canteen ₹50/.test(t) && /Canteen ₹80/.test(t) && /Chukaya: Canteen ₹60/.test(t) && /Baaki: Canteen ₹70/.test(t), t.slice(0, 900));
   await shot(c, "5-ledger");
 

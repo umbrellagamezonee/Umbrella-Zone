@@ -116,6 +116,16 @@ export function ledgerPeriodRange(
   to: string
 ): { startMs: number; endMs: number } | null {
   if (period === "all") return null;
+  const DAY = 86_400_000;
+  if (period === "today" || period === "7days") {
+    const t = dateInputValueToIstMidnight(toDateInputValue(Date.now()));
+    return { startMs: period === "today" ? t : t - 6 * DAY, endMs: t + DAY };
+  }
+  if (period === "day") {
+    // one chosen day (its date is in "from")
+    const s = dateInputValueToIstMidnight(from || toDateInputValue(Date.now()));
+    return { startMs: s, endMs: s + DAY };
+  }
   if (period === "custom") {
     if (!from && !to) return null;
     return {

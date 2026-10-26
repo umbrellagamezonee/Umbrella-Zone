@@ -13,6 +13,7 @@ import path from "path";
 import { creditBalanceFor, creditHisaab, gallaByDate, settleParts, businessTotals } from "../../src/lib/billing";
 import { businessOfDay } from "../../src/lib/dayReport";
 import { customerCreditByBusiness, creditByBusinessForAll } from "../../src/lib/ledger";
+import { customerActivity } from "../../src/lib/customerDaily";
 
 let failed = 0;
 const say = (ok: boolean, name: string, extra = "") => {
@@ -339,6 +340,75 @@ for (const b of sorted) {
   say(badAll === 0, "C3. the Credits page's all-customers figure = the one-customer figure, for every customer", `${badAll} differ`);
   console.log(`   ${owing} customers have something owed; by my count Gaming ${r2(sumG)} + Canteen ${r2(sumC)} = ${r2(sumG + sumC)} (app total ${r2(sumApp)})`);
   say(bad2 === 0, "C2. every customer: still owed on Gaming and on Canteen - my figure = the app's", `${bad2} customers differ: ${first2.join("; ")}`);
+}
+
+// ============================================================ E. customers, day by day
+{
+  // Worked out again from the raw bills: for each day, over every real customer, what they were billed (Gaming /
+  // Canteen), paid at once (Cash / Account), took on credit, and paid back.
+  const real = new Map<string, any>();
+  const realByName = new Map<string, any>();
+  for (const c of customers) if (!c.isWalkIn) { real.set(c.id, c); if (!realByName.has(norm(c.name))) realByName.set(norm(c.name), c); }
+  type T = { n: number; gB: number; cB: number; cash: number; upi: number; gCr: number; cCr: number; pbCash: number; pbUpi: number; forgiven: number };
+  const zero = (): T => ({ n: 0, gB: 0, cB: 0, cash: 0, upi: 0, gCr: 0, cCr: 0, pbCash: 0, pbUpi: 0, forgiven: 0 });
+  const mineDays = new Map<string, T>();
+  const dayT = (d: string) => { let t = mineDays.get(d); if (!t) mineDays.set(d, (t = zero())); return t; };
+  const billed = new Set(live.filter((b) => b.orderId).map((b) => b.orderId));
+  for (const b of live) {
+    const d = dayOf(b.createdAt);
+    if (isSettle(b)) {
+      if (b.status === "paid" && b.customerId && real.has(b.customerId)) { const t = dayT(d); t.pbCash += b.amountCash; t.pbUpi += b.amountUpi; t.forgiven += b.discount; }
+      continue;
+    }
+    if (b.shares) {
+      for (const sh of b.shares) {
+        if (!realByName.has(norm(sh.payerName))) continue;
+        const t = dayT(d);
+        const gf = shareGamingFrac(b, sh.label);
+        t.gB += sh.amount * gf; t.cB += sh.amount * (1 - gf);
+        if (sh.status === "paid" && sh.paymentMethod === "cash") t.cash += sh.amount;
+        if (sh.status === "paid" && sh.paymentMethod === "upi") t.upi += sh.amount;
+        if (sh.status === "paid" && sh.paymentMethod === "credit") { t.gCr += sh.amount * gf; t.cCr += sh.amount * (1 - gf); }
+      }
+      // (a bill counts once per payer-share set; "bills" is counted per person below)
+      continue;
+    }
+    if (!b.customerId || !real.has(b.customerId)) continue;
+    const raw = b.tableCharge + b.canteenCharge;
+    const gf = raw > 0 ? b.tableCharge / raw : 0;
+    const t = dayT(d);
+    t.gB += b.total * gf; t.cB += b.total * (1 - gf);
+    if (b.status === "paid") { t.cash += b.amountCash; t.upi += b.amountUpi; }
+    t.gCr += b.amountDue * gf; t.cCr += b.amountDue * (1 - gf);
+  }
+  for (const o of orders) {
+    if (!o.customerId || !real.has(o.customerId) || o.status !== "served" || billed.has(o.id)) continue;
+    const amt = o.items.reduce((x: number, i: any) => x + i.price * i.qty, 0);
+    const t = dayT(dayOf(o.createdAt));
+    t.cB += amt; t.cCr += amt;
+  }
+  const keys = ["gB", "cB", "cash", "upi", "gCr", "cCr", "pbCash", "pbUpi", "forgiven"] as const;
+  const appKey: Record<string, string> = { gB: "gamingBill", cB: "canteenBill", cash: "cash", upi: "upi", gCr: "creditGaming", cCr: "creditCanteen", pbCash: "paidBackCash", pbUpi: "paidBackUpi", forgiven: "forgiven" };
+  let badDays = 0;
+  const firstE: string[] = [];
+  const allDays = [...new Set([...mineDays.keys()])].sort();
+  for (const d of allDays) {
+    const start = Date.parse(d + "T00:00:00Z") - IST;
+    const a = customerActivity(customers, bills, orders, start, start + 86_400_000).total as any;
+    const m = mineDays.get(d)!;
+    for (const k of keys) {
+      if (Math.abs(m[k] - a[appKey[k]]) > 0.05) { badDays++; if (firstE.length < 6) firstE.push(`${d} ${k}: mine ${r2(m[k])} app ${r2(a[appKey[k]])}`); }
+    }
+  }
+  say(badDays === 0, "E1. customers, every day: Gaming / Canteen billed, cash, account, credit taken, paid back, maaf - my figure = the app's", `${badDays} figures differ: ${firstE.join("; ")}`);
+  // the 7-day total is the days added up
+  const last = allDays[allDays.length - 1];
+  const end = Date.parse(last + "T00:00:00Z") - IST + 86_400_000;
+  const seven = customerActivity(customers, bills, orders, end - 7 * 86_400_000, end).total as any;
+  const sumSeven: Record<string, number> = {};
+  for (const d of allDays) if (d > dayOf(end - 8 * 86_400_000)) for (const k of keys) sumSeven[k] = (sumSeven[k] ?? 0) + mineDays.get(d)![k];
+  const bad7 = keys.filter((k) => Math.abs((sumSeven[k] ?? 0) - seven[appKey[k]]) > 0.05);
+  say(bad7.length === 0, "E2. customers, last 7 days: the app's total = my seven days added up", bad7.join(", "));
 }
 
 // ============================================================ D. the payment screen, 50,000 random bills
