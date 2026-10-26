@@ -3,6 +3,7 @@
 // connects to any server (every http/https request is refused below).
 const { app, BrowserWindow, Menu, protocol, session, shell, ipcMain, dialog } = require("electron");
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const { DataStore, dayStamp } = require("./storage");
 
@@ -125,6 +126,21 @@ function registerIpc() {
     }
     event.returnValue = true;
   });
+  ipcMain.on("backup-now", (event) => {
+    let file = "";
+    if (isOurPage(event)) {
+      try {
+        store.flushNow();
+        const t = new Date();
+        const stamp = `${dayStamp(t)}-${String(t.getHours()).padStart(2, "0")}${String(t.getMinutes()).padStart(2, "0")}${String(t.getSeconds()).padStart(2, "0")}`;
+        file = store.writeBackup(path.join(store.backupDir, `cuebill-backup-before-merge-${stamp}.json`));
+        log(`Jodne se pehle backup: ${file}`);
+      } catch (e) {
+        log(`Jodne se pehle backup nahi ban paya: ${e.message}`);
+      }
+    }
+    event.returnValue = file;
+  });
   ipcMain.on("print-pdf", (event) => {
     if (isOurPage(event)) savePdf(BrowserWindow.fromWebContents(event.sender)).catch((e) => log(`PDF nahi bani: ${e.message}`));
   });
@@ -154,7 +170,7 @@ async function savePdf(win) {
 async function saveBackupAs(win) {
   const r = await dialog.showSaveDialog(win, {
     title: "Backup kahan save karna hai? (pendrive chuno)",
-    defaultPath: path.join(app.getPath("documents"), `CueBill-Backup-${dayStamp()}.json`),
+    defaultPath: path.join(app.getPath("documents"), `CueBill-Backup-${os.hostname()}-${dayStamp()}.json`),
     filters: [{ name: "CueBill backup", extensions: ["json"] }],
   });
   if (r.canceled || !r.filePath) return;

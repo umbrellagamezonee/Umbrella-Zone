@@ -325,8 +325,62 @@ let PIN = "0000";
   // before: Gaming cash 160 | Canteen cash 100, account 40, credit 130.  Split adds: Gaming cash 50, credit 50 | Canteen cash 20, credit 20
   check("Reports: today now Gaming cash 210 / credit 50, Canteen cash 120 / account 40 / credit 150, total cash 330 / credit 200", /Gaming\s+210\s+-?\s*50/.test(box2.replace(/\s+-\s+/g, " - ")) && /Canteen\s+120\s+40\s+150/.test(box2) && /Kul\s+330\s+40\s+200/.test(box2), box2);
 
-  // ---------- 7. nothing lost after a hard kill ----------
-  console.log("\n== 7. After the app is killed ==");
+  // ---------- 7. the other laptop's data ----------
+  console.log("\n== 7. Joining another laptop's data ==");
+  // laptop B = the same old data, plus its own new customer, a customer with the same name as one here, bills and a kharcha
+  const packed = JSON.parse(fs.readFileSync(path.join(__dirname, "pack-data", "initial-data", "cuebill-data-backup.json"), "utf8"));
+  const bState = (k) => JSON.parse(packed[k]);
+  const bBills = bState("cuebill-bills");
+  const bCust = bState("cuebill-customers");
+  const bExp = bState("cuebill-expenses");
+  const guy = { id: uuid(), name: "Laptop B Guy", phone: "", email: "", isWalkIn: false, lastReminderAt: null, createdAt: Date.now(), isRegular: true };
+  const sameName = { id: uuid(), name: "test regular", phone: "", email: "", isWalkIn: false, lastReminderAt: null, createdAt: Date.now() };
+  const lb = (customerId, amount) => seedBill({ status: "paid", customerId, tableName: "Canteen order", canteenCharge: amount, total: amount, amountDue: amount, canteenItems: [{ name: "Chips", price: amount, qty: 1, personName: null }], paidAt: Date.now(),
+    parts: { gaming: { total: 0, cash: 0, upi: 0, due: 0 }, canteen: { total: amount, cash: 0, upi: 0, due: amount } } });
+  bBills.state.bills.unshift(lb(guy.id, 90), lb(sameName.id, 30));
+  bCust.state.customers.push(guy, sameName);
+  bExp.state.expenses.push({ id: uuid(), category: "Other", amount: 75, note: "laptop B", createdAt: Date.now() });
+  const laptopB = { ...packed, "cuebill-bills": JSON.stringify(bBills), "cuebill-customers": JSON.stringify(bCust), "cuebill-expenses": JSON.stringify(bExp) };
+  const laptopBFile = path.join(work, "laptop-B-backup.json");
+  fs.writeFileSync(laptopBFile, JSON.stringify(laptopB));
+  const billsBefore = await c.eval(`${stateOf("cuebill-bills")}.bills.length`);
+
+  await go(c, "/settings", PIN);
+  await clickText(c, "Backup & Restore", { exact: false, tag: "p" });
+  await sleep(500);
+  const pin2 = await c.eval(`${stateOf("cuebill-settings")}.adminPin`);
+  await H.typeInto(c, 'input[placeholder="Admin PIN"]', pin2);
+  await H.pressEnter(c);
+  await sleep(600);
+  t = await text(c);
+  check("Backup & Restore has the 'Dusre laptop ka data jodo' part", /Dusre laptop ka data jodo/.test(t));
+  const doc = await c.send("DOM.getDocument", {});
+  const inputs = await c.send("DOM.querySelectorAll", { nodeId: doc.root.nodeId, selector: "input[type=file]" });
+  await c.send("DOM.setFileInputFiles", { nodeId: inputs.nodeIds[1], files: [laptopBFile] });
+  await waitFor(c, "document.body.innerText.includes('Dusre laptop ka data jodna hai?')", "merge preview");
+  await sleep(300);
+  t = await text(c);
+  check("preview: 2 new bills, 1 new customer, 1 kharcha, and 1 same-name customer not duplicated", /naye bills\s*2/.test(t) && /naye customers\s*1/.test(t) && /kharche\s*1/.test(t) && /1 customer ka naam bilkul yahi hai/.test(t), t.slice(-700));
+  await shot(c, "9-merge-preview");
+  await clickText(c, "Jodo", { exact: true, tag: "button" });
+  await sleep(2500);
+  await unlock(c, PIN);
+  const after = await c.eval(`({ bills: ${stateOf("cuebill-bills")}.bills.length, hasGuy: ${stateOf("cuebill-customers")}.customers.some((x) => x.name === "Laptop B Guy"), dup: ${stateOf("cuebill-customers")}.customers.filter((x) => x.name.trim().toLowerCase() === "test regular").length })`);
+  check("after joining: 2 more bills, Laptop B Guy is here, still only one 'Test Regular'", after.bills === billsBefore + 2 && after.hasGuy && after.dup === 1, JSON.stringify({ billsBefore, after }));
+  check("this laptop's own backup was saved before joining", fs.readdirSync(path.join(H.DATA, "Backups")).some((f) => f.startsWith("cuebill-backup-before-merge-")));
+  await go(c, "/credits", PIN);
+  await H.typeInto(c, 'input[placeholder="Search name, phone"]', "Laptop B Guy");
+  await sleep(500);
+  const cardG = await c.eval(`(() => { const p = [...document.querySelectorAll("p")].find((x) => x.textContent.trim() === "Laptop B Guy"); return p ? p.closest("[class*=border]").innerText : null; })()`);
+  check("Credits page: Laptop B Guy owes 90, all Canteen", !!cardG && /90/.test(cardG) && /Canteen\s*₹90/.test(cardG), String(cardG));
+  await go(c, "/credits", PIN);
+  await H.typeInto(c, 'input[placeholder="Search name, phone"]', "Test Regular");
+  await sleep(500);
+  const cardT = await c.eval(`(() => { const p = [...document.querySelectorAll("p")].find((x) => x.textContent.trim() === "Test Regular"); return p ? p.closest("[class*=border]").innerText : null; })()`);
+  check("Credits page: Test Regular now owes 70 + 30 = 100", !!cardT && /100/.test(cardT) && /Canteen\s*₹100/.test(cardT), String(cardT));
+
+  // ---------- 8. nothing lost after a hard kill ----------
+  console.log("\n== 8. After the app is killed ==");
   await sleep(900);
   c.close();
   H.hardKill();

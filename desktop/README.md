@@ -36,4 +36,5 @@ Run from `tools/credit-report` against `offline-pack/cuebill-data-backup.json`:
 - `npx tsx regress.ts snapshot out.json` once (before changing any report code), then `npx tsx regress.ts compare out.json` after: every old-data number must be exactly the same (new fields may appear).
 - `npx tsx business-check.ts`: Gaming + Canteen add up to the galla on every old day, per bill, and the new-bill rules (discount, trimming, ledger split, regular customers) behave.
 - `npx tsx audit-math.ts`: the maths worked out again from the raw bills with its own code (not billing.ts) and compared with the app - day by day, per customer, plus 50,000 random bills through the payment screen's arithmetic. Run this after ANY change to billing/report code.
+- `npx tsx merge-check.ts`: bringing another laptop's backup in (Settings -> Backup & Restore -> "Dusre laptop ka data jodo", logic in src/lib/mergeBackup.ts): nothing lost, nothing counted twice, same result either way round.
 - `npx tsx archive.ts`: the whole old data as one PDF (goes into the installer).

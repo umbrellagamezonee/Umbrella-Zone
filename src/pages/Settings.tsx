@@ -13,6 +13,7 @@ import { useCustomersStore } from "../store/useCustomersStore";
 import { useExpensesStore } from "../store/useExpensesStore";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { markRestoreInProgress } from "../lib/cloudSync";
+import { mergeBackups, type MergeSummary } from "../lib/mergeBackup";
 import { formatMoney, formatDateTime, IST_TIME_ZONE } from "../lib/format";
 import {
   billMoneyByBusiness,
@@ -924,6 +925,43 @@ function BackupModal({ onClose }: { onClose: () => void }) {
   const [pending, setPending] = useState<Record<string, string> | null>(null);
   const [error, setError] = useState("");
   const [restoring, setRestoring] = useState(false);
+  // Bringing in another laptop's backup (offline desktop version only)
+  const [mergePlan, setMergePlan] = useState<{ merged: Record<string, string>; summary: MergeSummary } | null>(null);
+  const [mergeError, setMergeError] = useState("");
+  const [merging, setMerging] = useState(false);
+  const canMerge = import.meta.env.VITE_DESKTOP === "1";
+
+  function handleMergeFilePicked(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setMergeError("");
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const data = JSON.parse(reader.result as string) as Record<string, string>;
+        if (!Object.keys(data).some((k) => k.startsWith("cuebill"))) throw new Error("empty");
+        const mine: Record<string, string> = {};
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i);
+          if (key && key.startsWith("cuebill")) mine[key] = localStorage.getItem(key) ?? "";
+        }
+        setMergePlan(mergeBackups(mine, data));
+      } catch {
+        setMergeError("Ye file valid CueBill backup nahi lagti.");
+      }
+    };
+    reader.readAsText(file);
+  }
+
+  function handleMerge() {
+    if (!mergePlan || merging) return;
+    setMerging(true);
+    // a copy of this laptop's data is saved first, so the merge can always be undone
+    (window as unknown as { __cuebillStorage?: { backupNow?: () => string } }).__cuebillStorage?.backupNow?.();
+    for (const [key, value] of Object.entries(mergePlan.merged)) localStorage.setItem(key, value);
+    window.location.reload();
+  }
 
   function handleSavePin() {
     if (!pinInput.trim()) return;
@@ -1010,6 +1048,21 @@ function BackupModal({ onClose }: { onClose: () => void }) {
           {error && <p className="text-xs text-[var(--color-danger)] mt-2">{error}</p>}
         </div>
 
+        {canMerge && (
+          <div className="pt-4 border-t border-[var(--color-border)]">
+            <p className="text-sm font-medium mb-1">Dusre laptop ka data jodo</p>
+            <p className="text-sm text-[var(--color-text-dim)] mb-3">
+              Dusre laptop par CueBill kholo, wahan se "Backup" file pendrive par lo, aur yahan chuno. Uske naye bills,
+              customers aur kharche is laptop mein jud jayenge. <b>Kuch delete ya replace nahi hota</b> — sirf wo jodta hai jo yahan nahi hai.
+            </p>
+            <label className="w-full flex items-center justify-center rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] font-medium py-3 cursor-pointer">
+              Dusre laptop ki backup file chuno
+              <input type="file" accept="application/json" className="hidden" onChange={handleMergeFilePicked} />
+            </label>
+            {mergeError && <p className="text-xs text-[var(--color-danger)] mt-2">{mergeError}</p>}
+          </div>
+        )}
+
         <div className="pt-4 border-t border-[var(--color-border)]">
           <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-1.5">
             ADMIN PIN
@@ -1064,6 +1117,76 @@ function BackupModal({ onClose }: { onClose: () => void }) {
             >
               {restoring ? "Restoring…" : "Restore"}
             </button>
+          </div>
+        </Modal>
+      )}
+
+      {mergePlan && (
+        <Modal title="Dusre laptop ka data jodna hai?" onClose={() => setMergePlan(null)}>
+          <div className="space-y-3 text-sm">
+            {Object.keys(mergePlan.merged).length === 0 ? (
+              <p className="text-[var(--color-text-dim)]">
+                Is file mein kuch naya nahi hai — sab kuch is laptop mein pehle se hai. Kuch jodne ko nahi.
+              </p>
+            ) : (
+              <>
+                <p className="text-[var(--color-text-dim)]">Ye is laptop mein jud jayega:</p>
+                <ul className="space-y-1">
+                  {[
+                    [mergePlan.summary.billsAdded, "naye bills"],
+                    [mergePlan.summary.billsUpdated, "bills jo wahan aage badh chuke the (jaise open se paid)"],
+                    [mergePlan.summary.ordersAdded + mergePlan.summary.ordersUpdated, "canteen orders"],
+                    [mergePlan.summary.customersAdded, "naye customers"],
+                    [mergePlan.summary.expensesAdded, "kharche"],
+                    [mergePlan.summary.deletedBillsAdded, "delete kiye hue bills (trash mein)"],
+                    [mergePlan.summary.menuItemsAdded + mergePlan.summary.tablesAdded + mergePlan.summary.gamesAdded, "menu / table / game jo yahan nahi the"],
+                  ]
+                    .filter(([n]) => (n as number) > 0)
+                    .map(([n, label]) => (
+                      <li key={label as string} className="flex justify-between gap-3">
+                        <span>{label}</span>
+                        <b>{n}</b>
+                      </li>
+                    ))}
+                </ul>
+                {mergePlan.summary.customersMatchedByName > 0 && (
+                  <p className="text-xs text-[var(--color-text-faint)]">
+                    {mergePlan.summary.customersMatchedByName} customer ka naam bilkul yahi hai (sirf space / capital ka fark) — unko dobara nahi
+                    banaya, unke bills yahan ke customer par chadh jayenge.
+                  </p>
+                )}
+              </>
+            )}
+            {mergePlan.summary.conflicts.length > 0 && (
+              <div className="rounded-xl bg-[var(--color-warning)]/10 p-3 space-y-1">
+                <p className="text-xs font-semibold">Dhyan do:</p>
+                {mergePlan.summary.conflicts.map((c, i) => (
+                  <p key={i} className="text-xs">
+                    {c}
+                  </p>
+                ))}
+              </div>
+            )}
+            <p className="text-xs text-[var(--color-text-faint)]">
+              Jodne se pehle is laptop ki backup apne aap ban jayegi (C:\CueBill-Data\Backups mein).
+            </p>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                onClick={() => setMergePlan(null)}
+                className="rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] font-medium py-2.5"
+              >
+                {Object.keys(mergePlan.merged).length === 0 ? "Theek hai" : "Cancel"}
+              </button>
+              {Object.keys(mergePlan.merged).length > 0 && (
+                <button
+                  onClick={handleMerge}
+                  disabled={merging}
+                  className="rounded-xl bg-[var(--color-primary)] text-white font-semibold py-2.5 disabled:opacity-50"
+                >
+                  {merging ? "Jod raha hai…" : "Jodo"}
+                </button>
+              )}
+            </div>
           </div>
         </Modal>
       )}

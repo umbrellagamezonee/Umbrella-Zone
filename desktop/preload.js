@@ -12,4 +12,6 @@ contextBridge.exposeInMainWorld("__cuebillStorage", {
     else ipcRenderer.send("storage:save", batch);
   },
   printPdf: () => ipcRenderer.send("print-pdf"),
+  // a full copy of this laptop's data, saved in Backups, before something big (joining another laptop's data)
+  backupNow: () => ipcRenderer.sendSync("backup-now"),
 });
