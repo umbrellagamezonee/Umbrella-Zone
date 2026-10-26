@@ -7,7 +7,7 @@ import { useBillsStore } from "../store/useBillsStore";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { formatMoney, toDateInputValue } from "../lib/format";
 import { creditBalanceFor, customerOpenBills, customerPendingOrders, orderTotal } from "../lib/billing";
-import { customerCreditByBusiness } from "../lib/ledger";
+import { creditByBusinessForAll } from "../lib/ledger";
 import { customerLabel, normalizeName } from "../lib/customerName";
 import { CustomerDetailModal, SettleCreditModal } from "./Customers";
 import { HisaabReport } from "../components/HisaabReport";
@@ -49,8 +49,9 @@ export function Credits() {
     setSettleCustomer(fresh);
   }
 
-  const dueCustomers = useMemo(
-    () =>
+  const dueCustomers = useMemo(() => {
+    const splits = creditByBusinessForAll(customers, bills, orders);
+    return (
       customers
         .filter((c) => !c.isWalkIn)
         .map((c) => ({
@@ -59,11 +60,11 @@ export function Credits() {
           pendingTotal: pendingTotalFor(c.id),
         }))
         .filter(({ creditBalance, pendingTotal }) => creditBalance > 0 || pendingTotal > 0)
-        .map((row) => ({ ...row, split: customerCreditByBusiness(row.customer, bills, orders) }))
-        .sort((a, b) => (b.creditBalance + b.pendingTotal) - (a.creditBalance + a.pendingTotal)),
+        .map((row) => ({ ...row, split: splits.get(row.customer.id) ?? { gaming: 0, canteen: 0 } }))
+        .sort((a, b) => (b.creditBalance + b.pendingTotal) - (a.creditBalance + a.pendingTotal))
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [customers, bills, orders]
-  );
+  }, [customers, bills, orders]);
   const totalDue = dueCustomers.reduce((sum, { creditBalance, pendingTotal }) => sum + creditBalance + pendingTotal, 0);
   const totalGaming = dueCustomers.reduce((sum, { split }) => sum + split.gaming, 0);
   const totalCanteen = dueCustomers.reduce((sum, { split }) => sum + split.canteen, 0);

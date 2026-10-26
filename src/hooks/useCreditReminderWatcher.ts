@@ -16,6 +16,8 @@ export function useCreditReminderWatcher() {
   const markReminded = useCustomersStore((s) => s.markReminded);
 
   useEffect(() => {
+    // no reminder server in the offline desktop version, and nothing may run by itself
+    if (import.meta.env.VITE_DESKTOP === "1") return;
     function check() {
       const now = Date.now();
       const bills = useBillsStore.getState().bills;

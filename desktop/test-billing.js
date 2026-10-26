@@ -67,9 +67,15 @@ let PIN = "0000";
   const B2 = seedBill({ tableId: table.id, tableName: table.name, tableChargeMinutes: 30, tableCharge: 60, canteenCharge: 40, canteenItems: [items[1]], total: 100, amountDue: 100, customerId: oneTime.id });
   const O3 = { id: uuid(), tableId: null, customerId: null, guestName: "Walk-in guest", items: [{ id: uuid(), qty: 1, name: "Cold coffee", price: 80, menuItemId: parse("cuebill-menu").state.items[0].id }], note: "", status: "billed", createdAt: Date.now() };
   const B3 = seedBill({ orderId: O3.id, tableName: "Canteen order", canteenCharge: 80, canteenItems: [{ name: "Cold coffee", price: 80, qty: 1, personName: null }], total: 80, amountDue: 80 });
+  const share = (label, payerName, amount) => ({ id: uuid(), label, payerName, payerPhone: "", amount, paymentMethod: null, status: "pending", paidAt: null });
+  const B4 = seedBill({
+    tableId: table.id, tableName: table.name, tableChargeMinutes: 40, tableCharge: 100, canteenCharge: 40, canteenItems: [{ name: "Chips", price: 40, qty: 1, personName: null }], total: 140, amountDue: 140,
+    matchParticipants: ["Split A", "Split B"],
+    shares: [share("Table charge", "Split A", 50), share("Table charge", "Split B", 50), share("Food", "Split A", 20), share("Food", "Split B", 20)],
+  });
   const ordersDoc = parse("cuebill-orders");
   ordersDoc.state.orders.unshift(O3);
-  billsDoc.state.bills.unshift(B3, B2, B1);
+  billsDoc.state.bills.unshift(B4, B3, B2, B1);
   store.apply({ "cuebill-bills": JSON.stringify(billsDoc), "cuebill-customers": JSON.stringify(custDoc), "cuebill-orders": JSON.stringify(ordersDoc) });
   store.flushNow();
   console.log(`   test bills added: ${B1.total} (regular), ${B2.total} (one-time), ${B3.total} (walk-in canteen)`);
@@ -91,6 +97,11 @@ let PIN = "0000";
   check("Customer Bill slip: GAMING and CANTEEN sections and the total", /GAMING/.test(t) && /CANTEEN/.test(t) && /Kul bill/.test(t) && /190/.test(t) && /Maggi/.test(t));
   check("Customer Bill slip: gaming 100 and canteen 90 shown apart", /Gaming total\s*₹100/.test(t) && /Canteen total\s*₹90/.test(t), t.slice(-400));
   await shot(c, "2-customer-bill");
+  await clickText(c, "PDF / Print", { exact: false, tag: "button" });
+  await sleep(2500);
+  const slipPdf = H.newest(H.DL, ".pdf");
+  check("Customer Bill saves as a PDF file", !!slipPdf && fs.statSync(slipPdf).size > 2000, String(slipPdf));
+  if (slipPdf) fs.copyFileSync(slipPdf, path.join(H.SHOTS, "customer-bill.pdf"));
   await c.eval(`document.querySelector(".print-slip button[aria-label=Close]")?.click()`);
   await sleep(400);
 
@@ -172,12 +183,32 @@ let PIN = "0000";
   check("Credits page has no Remind button, only Settle", !/Remind/.test(t) && /Settle/.test(t));
   await shot(c, "4-credits");
 
+  // paying 60 against the 130 of canteen credit: the oldest credit (the 50) goes first, then 10 of the 80
+  await H.typeInto(c, 'input[placeholder="Search name, phone"]', "Test Regular");
+  await sleep(500);
+  await clickText(c, "Settle", { exact: true, tag: "button" });
+  await waitFor(c, "document.body.innerText.includes('Total due')", "Settle screen");
+  await sleep(300);
+  t = await text(c);
+  check("Settle screen: total due 130, split Gaming 0 / Canteen 130", /Total due\s*₹130/.test(t) && /Gaming ka\s*₹0/.test(t) && /Canteen ka\s*₹130/.test(t), t.slice(0, 500));
+  await setNumber(c, 1, 60); // 0 = discount, 1 = cash, 2 = account
+  await sleep(300);
+  await clickText(c, "Settle", { exact: true, tag: "button" });
+  await sleep(800);
+  t = await text(c);
+  check("Settle: says what it cleared (Canteen 60) and what is left (70)", /Isse chuka:\s*Canteen ₹60/.test(t) && /₹70 still due/.test(t), t.slice(0, 500));
+  await clickText(c, "Done", { exact: true, tag: "button" });
+  await sleep(500);
+  await go(c, "/credits", PIN);
+  const card2 = await c.eval(`(() => { const p = [...document.querySelectorAll("p")].find((x) => x.textContent.trim() === "Test Regular"); return p ? p.closest("[class*=border]").innerText : null; })()`);
+  check("Credits page after settling: Test Regular owes 70, all Canteen", !!card2 && /70/.test(card2) && /Gaming\s*₹0/.test(card2) && /Canteen\s*₹70/.test(card2), String(card2));
+
   await go(c, "/customers", PIN);
   await clickText(c, "Test Regular", { exact: false, tag: "p" });
   await sleep(700);
   t = await text(c);
   check("customer profile: marked Regular, Gaming and Canteen baaki", /Regular customer \(credit milega\)/.test(t) && /Gaming ka baaki/.test(t) && /Canteen ka baaki/.test(t));
-  check("ledger lines say Canteen ₹50 and Canteen ₹80", /Canteen ₹50/.test(t) && /Canteen ₹80/.test(t), t.slice(0, 900));
+  check("ledger lines say Canteen ₹50 and Canteen ₹80, and the payment cleared Canteen ₹60", /Canteen ₹50/.test(t) && /Canteen ₹80/.test(t) && /Chukaya: Canteen ₹60/.test(t) && /Baaki: Canteen ₹70/.test(t), t.slice(0, 900));
   await shot(c, "5-ledger");
 
   // ---------- 5. reports ----------
@@ -187,9 +218,9 @@ let PIN = "0000";
   const box = await c.eval(`(() => { const p = [...document.querySelectorAll("p")].find((x) => x.textContent.trim() === "AAJ"); return p ? p.parentElement.innerText : null; })()`);
   // gaming: cash 160 | canteen: cash 40, account 40, credit 130 | total: cash 200, account 40, credit 130
   const nums = (box || "").replace(/₹/g, "").split(/\s+/);
-  check("home: Gaming cash 160 and Canteen cash 40 / account 40 / credit 130 for today", /Gaming\s+160/.test((box || "").replace(/₹/g, "")) && /Canteen\s+40\s+40\s+130/.test((box || "").replace(/₹/g, "")), String(box));
-  check("home: total row Cash 200, Account 40, Credit 130", /Kul\s+200\s+40\s+130/.test((box || "").replace(/₹/g, "")), nums.join(" "));
-  check("home: Cash in drawer counts only cash (200), account shown separately", /₹200/.test(t) && /Account \(₹40 aaj\)/.test(t), t.slice(0, 300));
+  check("home: Gaming cash 160 and Canteen cash 100 (40 + 60 old credit) / account 40 / credit 130 for today", /Gaming\s+160/.test((box || "").replace(/₹/g, "")) && /Canteen\s+100\s+40\s+130/.test((box || "").replace(/₹/g, "")), String(box));
+  check("home: total row Cash 260, Account 40, Credit 130", /Kul\s+260\s+40\s+130/.test((box || "").replace(/₹/g, "")), nums.join(" "));
+  check("home: Cash in drawer counts only cash (260), account shown separately", /₹260/.test(t) && /Account \(₹40 aaj\)/.test(t), t.slice(0, 300));
   check("home: the old mixed 'TOTAL COLLECTED' box is gone", !/TOTAL COLLECTED/.test(t));
   await shot(c, "6-reports");
 
@@ -200,7 +231,7 @@ let PIN = "0000";
   check("day report: GAMING, CANTEEN and Kul galla sections", /1\) GAMING/.test(t) && /2\) CANTEEN/.test(t) && /3\) Kul galla/.test(t) && /4\).*ka credit/.test(t));
   const tiles = await c.eval(`document.querySelector(".hisaab-overlay").innerText`);
   check("day report: Gaming Cash 160, Canteen Account 40", /Cash aaya\s*₹160/.test(tiles) && /Account aaya\s*₹40/.test(tiles), tiles.slice(0, 700));
-  check("day report: total galla Cash 200, Account 40", /TOTAL galla\s*200\s*40\s*240/.test(tiles.replace(/₹/g, "")), tiles.replace(/₹/g, "").slice(600, 1500));
+  check("day report: total galla Cash 260, Account 40", /TOTAL galla\s*260\s*40\s*300/.test(tiles.replace(/₹/g, "")), tiles.replace(/₹/g, "").slice(600, 1500));
   await shot(c, "7-day-report");
   await clickText(c, "Excel", { exact: true, tag: "button" });
   await sleep(3000);
@@ -213,7 +244,7 @@ let PIN = "0000";
     check("day Excel sheets: Gaming, Canteen, Credit, Milaan", ["Din ka hisaab", "Gaming (table-wise)", "Canteen (category-wise)", "Credit (Gaming-Canteen)", "Milaan (accountant)"].every((n) => names.includes(n)), names.join(" | "));
     const rows = XLSX.utils.sheet_to_json(wb.Sheets["Din ka hisaab"]);
     const total = rows.find((r) => r.Cheez === "TOTAL galla");
-    check("day Excel: TOTAL galla Cash 200 / Account 40", !!total && total.Cash === 200 && total.Account === 40, JSON.stringify(total));
+    check("day Excel: TOTAL galla Cash 260 / Account 40", !!total && total.Cash === 260 && total.Account === 40, JSON.stringify(total));
     const g = XLSX.utils.sheet_to_json(wb.Sheets["Gaming (table-wise)"]);
     check("day Excel: Gaming TOTAL row cash 160, no credit", g[g.length - 1]["Cash aaya"] === 160 && g[g.length - 1]["Credit diya"] === 0, JSON.stringify(g[g.length - 1]));
   }
@@ -246,8 +277,56 @@ let PIN = "0000";
   check("credit tab still works: Kiska credit baaki hai", /Kiska credit baaki hai/.test(t) && /Test Regular/.test(t));
   await c.eval(`document.querySelector(".hisaab-overlay button[aria-label=Close]")?.click()`);
 
-  // ---------- 6. nothing lost after a hard kill ----------
-  console.log("\n== 6. After the app is killed ==");
+  // ---------- 6. split bill: two people, table + food each ----------
+  console.log("\n== 6. Split bill ==");
+  await go(c, "/", PIN);
+  await waitFor(c, "document.body.innerText.includes('Split A')", "split bill on Home");
+  await sleep(500);
+  await clickText(c, "Split A", { tag: "p" });
+  await waitFor(c, "document.body.innerText.includes('Split bill')", "split checkout open");
+  await sleep(400);
+  await clickText(c, "Customer Bill (customer ko dikhao)", { exact: false });
+  await sleep(500);
+  t = await text(c);
+  check("split bill: Customer Bill shows Gaming 100 and Canteen 40 and each payer's share", /Gaming total\s*₹100/.test(t) && /Canteen total\s*₹40/.test(t) && /Split A · Table charge/.test(t) && /Kul bill\s*₹140/.test(t), t.slice(-500));
+  await c.eval(`document.querySelector(".print-slip button[aria-label=Close]")?.click()`);
+  await sleep(300);
+  await clickText(c, "Cash", { exact: true, tag: "button" }); // Split A, table charge 50
+  await sleep(400);
+  await clickText(c, "Credit", { exact: true, tag: "button" }); // Split A, food 20 - A is not a regular
+  await sleep(400);
+  t = await text(c);
+  check("split bill: credit for a one-time payer is stopped with a message", /Split A\s+regular customer nahi hai/.test(t), t.slice(0, 600));
+  await clickText(c, "Theek hai", { exact: true, tag: "button" });
+  await sleep(300);
+  await clickText(c, "Cash", { exact: true, tag: "button" }); // Split A, food 20 in cash
+  await sleep(400);
+  await clickText(c, "Credit", { exact: true, tag: "button" }); // Split B, table 50 - not a regular yet
+  await sleep(400);
+  await clickText(c, "Regular banao + credit do", { exact: true, tag: "button" });
+  await sleep(500);
+  await clickText(c, "Credit", { exact: true, tag: "button" }); // Split B, food 20 - now a regular
+  await sleep(600);
+  t = await text(c);
+  check("split bill: all four shares settled", /All shares settled/.test(t), t.slice(0, 500));
+  const b4 = await billOf(c, B4.id);
+  const how = (b4.shares || []).map((x) => x.payerName + "/" + x.label + "/" + x.paymentMethod).join(", ");
+  check("split bill saved: A paid cash for table and food, B put both on credit", how === "Split A/Table charge/cash, Split B/Table charge/credit, Split A/Food/cash, Split B/Food/credit" && b4.status === "paid", how + " " + b4.status);
+  const regs = await c.eval(`(() => { const cs = ${stateOf("cuebill-customers")}.customers; const f = (n) => cs.find((x) => x.name === n); return { a: f("Split A") ? !!f("Split A").isRegular : null, b: f("Split B") ? !!f("Split B").isRegular : null }; })()`);
+  check("split bill: Split B became a regular, Split A did not", regs.b === true && regs.a !== true, JSON.stringify(regs));
+  await clickText(c, "Done", { exact: true, tag: "button" });
+  await go(c, "/credits", PIN);
+  await H.typeInto(c, 'input[placeholder="Search name, phone"]', "Split B");
+  await sleep(500);
+  const card3 = await c.eval(`(() => { const p = [...document.querySelectorAll("p")].find((x) => x.textContent.trim() === "Split B"); return p ? p.closest("[class*=border]").innerText : null; })()`);
+  check("Credits page: Split B owes 70 = Gaming 50 + Canteen 20", !!card3 && /Gaming\s*₹50/.test(card3) && /Canteen\s*₹20/.test(card3), String(card3));
+  await go(c, "/reports", PIN);
+  const box2 = (await c.eval(`(() => { const p = [...document.querySelectorAll("p")].find((x) => x.textContent.trim() === "AAJ"); return p ? p.parentElement.innerText : null; })()`) || "").replace(/₹/g, "");
+  // before: Gaming cash 160 | Canteen cash 100, account 40, credit 130.  Split adds: Gaming cash 50, credit 50 | Canteen cash 20, credit 20
+  check("Reports: today now Gaming cash 210 / credit 50, Canteen cash 120 / account 40 / credit 150, total cash 330 / credit 200", /Gaming\s+210\s+-?\s*50/.test(box2.replace(/\s+-\s+/g, " - ")) && /Canteen\s+120\s+40\s+150/.test(box2) && /Kul\s+330\s+40\s+200/.test(box2), box2);
+
+  // ---------- 7. nothing lost after a hard kill ----------
+  console.log("\n== 7. After the app is killed ==");
   await sleep(900);
   c.close();
   H.hardKill();

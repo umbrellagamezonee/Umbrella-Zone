@@ -7,10 +7,11 @@ import { useGamesStore } from "../store/useGamesStore";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { formatMoney } from "../lib/format";
 import { isRegularCustomer } from "../lib/billing";
+import { CustomerBillModal } from "./CustomerBill";
 import { normalizeName } from "../lib/customerName";
 import type { Bill, BillShare, PaymentMethod } from "../types";
 import { QRCodeSVG } from "qrcode.react";
-import { Check, ArrowLeft, Repeat, Gamepad2, UtensilsCrossed, Wallet } from "lucide-react";
+import { Check, ArrowLeft, Repeat, Gamepad2, UtensilsCrossed, Wallet, Receipt } from "lucide-react";
 
 // A small visual cue for what each share is for — falls back to a generic
 // wallet icon for any label that isn't "Table charge" or "Food" (e.g. the
@@ -46,6 +47,7 @@ export function SplitCheckout({ bill: initialBill, onDone }: { bill: Bill; onDon
   const [steps, setSteps] = useState<Record<string, RowStep>>({});
   // a payer who is not a regular customer asked for credit — needs a decision first
   const [blockedCredit, setBlockedCredit] = useState<BillShare | null>(null);
+  const [showSlip, setShowSlip] = useState(false);
 
   const shares = bill.shares ?? [];
   const allPaid = shares.length > 0 && shares.every((s) => s.status === "paid");
@@ -155,6 +157,14 @@ export function SplitCheckout({ bill: initialBill, onDone }: { bill: Bill; onDon
           <span className="text-sm text-[var(--color-text-dim)]">Total</span>
           <span className="text-lg font-bold">{formatMoney(bill.total, currency)}</span>
         </div>
+
+        <button
+          onClick={() => setShowSlip(true)}
+          className="w-full flex items-center justify-center gap-2 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] font-semibold py-2.5 text-sm"
+        >
+          <Receipt size={15} /> Customer Bill (customer ko dikhao)
+        </button>
+        {showSlip && <CustomerBillModal bill={bill} onClose={() => setShowSlip(false)} />}
 
         {groupedByPayer.map(({ payerName, shares: payerShares }) => {
           const payerTotal = payerShares.reduce((sum, s) => sum + s.amount, 0);

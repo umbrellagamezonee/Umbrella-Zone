@@ -26,6 +26,9 @@ export function reconcileOrderStatuses() {
 
 export function useOrderStatusReconcile() {
   useEffect(() => {
+    // The offline desktop version has no cloud sync that could undo a "billed" flag,
+    // and it must not change any data on its own.
+    if (import.meta.env.VITE_DESKTOP === "1") return;
     // wait for the first sync to land, then keep an eye on it
     const first = setTimeout(reconcileOrderStatuses, 12_000);
     const again = setInterval(reconcileOrderStatuses, 90_000);

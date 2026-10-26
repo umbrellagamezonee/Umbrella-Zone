@@ -9,6 +9,9 @@ import { customerOpenBills, customerPendingOrders, orderTotal } from "./billing"
 // someone tapped "Settle payment" — so merely opening that screen and closing
 // it again silently turned a customer's whole backlog into dated credit
 // bills. It now only runs once a payment is actually being recorded.
+// nothing paid: each business's whole bill goes on credit, exactly
+const noPayment = { gaming: { cash: 0, upi: 0 }, canteen: { cash: 0, upi: 0 } };
+
 export function billPendingToCredit(customer: { id: string; name: string }): void {
   const bills = useBillsStore.getState();
   const orders = useOrdersStore.getState();
@@ -36,9 +39,9 @@ export function billPendingToCredit(customer: { id: string; name: string }): voi
       discount: 0,
     });
     orders.markBilled(order.id);
-    bills.settlePayment(bill.id, { amountCash: 0, amountUpi: 0 });
+    bills.settlePayment(bill.id, { amountCash: 0, amountUpi: 0, parts: noPayment });
   }
   for (const bill of open) {
-    bills.settlePayment(bill.id, { amountCash: 0, amountUpi: 0 });
+    bills.settlePayment(bill.id, { amountCash: 0, amountUpi: 0, parts: noPayment });
   }
 }

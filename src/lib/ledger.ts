@@ -337,6 +337,60 @@ export function creditMonthKeys(bills: Bill[], orders: CanteenOrder[]): string[]
   return [...keys].sort().reverse();
 }
 
+// The same figures for every customer in one go: bills are sorted into each
+// customer's pile once, instead of every customer searching the whole history —
+// this is what the Credits page uses, and it must always give exactly what
+// customerCreditByBusiness gives for one person.
+export function creditByBusinessForAll(
+  customers: Customer[],
+  bills: Bill[],
+  orders: CanteenOrder[]
+): Map<string, { gaming: number; canteen: number }> {
+  const position = new Map<Bill, number>();
+  const byId = new Map<string, Bill[]>();
+  const byName = new Map<string, Bill[]>();
+  const push = (m: Map<string, Bill[]>, k: string, b: Bill) => {
+    const list = m.get(k);
+    if (list) list.push(b);
+    else m.set(k, [b]);
+  };
+  bills.forEach((b, i) => {
+    if (b.status === "cancelled") return;
+    position.set(b, i);
+    if (b.shares) {
+      if (b.status !== "paid") return;
+      const seen = new Set<string>();
+      for (const s of b.shares) {
+        const k = normalizeName(s.payerName);
+        if (!seen.has(k)) {
+          seen.add(k);
+          push(byName, k, b);
+        }
+      }
+    } else if (b.customerId) push(byId, b.customerId, b);
+  });
+  const billedOrderIds = new Set<string>();
+  for (const b of bills) if (b.orderId) billedOrderIds.add(b.orderId);
+  const servedByCustomer = new Map<string, CanteenOrder[]>();
+  for (const o of orders) {
+    if (o.customerId && o.status === "served" && !billedOrderIds.has(o.id)) {
+      const list = servedByCustomer.get(o.customerId);
+      if (list) list.push(o);
+      else servedByCustomer.set(o.customerId, [o]);
+    }
+  }
+  const out = new Map<string, { gaming: number; canteen: number }>();
+  for (const c of customers) {
+    if (c.isWalkIn) continue;
+    const nameKey = normalizeName(c.name);
+    const mine = [...(byId.get(c.id) ?? []), ...(byName.get(nameKey) ?? [])].sort((a, b) => position.get(a)! - position.get(b)!);
+    const pending = servedByCustomer.get(c.id) ?? [];
+    const newest = mine.length || pending.length ? buildLedger(mine, pending, nameKey, orders)[0] : undefined;
+    out.set(c.id, newest ? { gaming: r2(Math.max(0, newest.gamingAfter)), canteen: r2(Math.max(0, newest.canteenAfter)) } : { gaming: 0, canteen: 0 });
+  }
+  return out;
+}
+
 // What one customer still owes, split into gaming and canteen — the ledger's
 // closing figures (so it counts served-but-unbilled food and bills still open,
 // exactly like the total shown on the Credits page).
@@ -346,24 +400,18 @@ export function customerCreditByBusiness(
   orders: CanteenOrder[]
 ): { gaming: number; canteen: number } {
   const nameKey = normalizeName(customer.name);
-  const mine = bills.filter((b) =>
-    b.shares ? b.shares.some((s) => normalizeName(s.payerName) === nameKey) : b.customerId === customer.id
-  );
+  // Same bills the Credits page counts: a cancelled bill is not credit, and the
+  // credit share of a split bill only counts once that whole bill is closed (until
+  // then it is left out from the very start, so it cannot soak up a payment that
+  // really went to older debts). Everything else is what the profile ledger lists.
+  const mine = bills.filter((b) => {
+    if (b.status === "cancelled") return false;
+    if (b.shares) return b.status === "paid" && b.shares.some((s) => normalizeName(s.payerName) === nameKey);
+    return b.customerId === customer.id;
+  });
   const pending = customerPendingOrders(orders, bills, customer.id);
   if (mine.length === 0 && pending.length === 0) return { gaming: 0, canteen: 0 };
   const newest = buildLedger(mine, pending, nameKey, orders)[0];
   if (!newest) return { gaming: 0, canteen: 0 };
-  let gaming = newest.gamingAfter;
-  let canteen = newest.canteenAfter;
-  // The ledger lists the credit share of a split bill that is still open, but the
-  // Credits page only counts it once that bill closes — leave it out here too so
-  // the two parts always add up to the total shown next to them.
-  for (const b of mine) {
-    if (b.shares && b.status === "open") {
-      const part = creditByBusiness(b, nameKey);
-      gaming -= part.gaming;
-      canteen -= part.canteen;
-    }
-  }
-  return { gaming: r2(Math.max(0, gaming)), canteen: r2(Math.max(0, canteen)) };
+  return { gaming: r2(Math.max(0, newest.gamingAfter)), canteen: r2(Math.max(0, newest.canteenAfter)) };
 }

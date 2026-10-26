@@ -772,6 +772,9 @@ export function SettleCreditModal({ customer, onClose }: { customer: Customer; o
     customerPendingOrders(orders, bills, customer.id).reduce((sum, o) => sum + orderTotal(o), 0) +
     customerOpenBills(bills, customer.id).reduce((sum, b) => sum + b.amountDue, 0);
 
+  // what that total is made of: Gaming and Canteen
+  const dueSplit = customerCreditByBusiness(customer, bills, orders);
+
   const [discountInput, setDiscountInput] = useState("0");
   const [cashInput, setCashInput] = useState(customerDue.toFixed(2));
   const [accountInput, setAccountInput] = useState("0");
@@ -780,6 +783,9 @@ export function SettleCreditModal({ customer, onClose }: { customer: Customer; o
     amountUpi: number;
     discount: number;
     remaining: number;
+    // which part of their credit this payment cleared (oldest credit first)
+    clearedGaming: number;
+    clearedCanteen: number;
   } | null>(null);
 
   const discount = Math.min(Math.max(0, Number(discountInput) || 0), customerDue);
@@ -807,7 +813,16 @@ export function SettleCreditModal({ customer, onClose }: { customer: Customer; o
       amountUpi: account,
       discount,
     });
-    setSettled({ amountCash: cash, amountUpi: account, discount, remaining });
+    const after = customerCreditByBusiness(customer, useBillsStore.getState().bills, useOrdersStore.getState().orders);
+    const r2 = (n: number) => Math.round(n * 100) / 100;
+    setSettled({
+      amountCash: cash,
+      amountUpi: account,
+      discount,
+      remaining,
+      clearedGaming: r2(dueSplit.gaming - after.gaming),
+      clearedCanteen: r2(dueSplit.canteen - after.canteen),
+    });
   }
 
   if (settled) {
@@ -837,6 +852,11 @@ export function SettleCreditModal({ customer, onClose }: { customer: Customer; o
                 {formatMoney(settled.discount, currency)} written off
               </p>
             )}
+            {settled.clearedGaming + settled.clearedCanteen > 0.005 && (
+              <p className="text-sm text-[var(--color-text-dim)] mt-2">
+                Isse chuka: {businessText(settled.clearedGaming, settled.clearedCanteen, currency)}
+              </p>
+            )}
             <p className="text-sm text-[var(--color-text-dim)] mt-2">
               {settled.remaining > 0
                 ? `${formatMoney(settled.remaining, currency)} still due`
@@ -862,6 +882,18 @@ export function SettleCreditModal({ customer, onClose }: { customer: Customer; o
             <span className="text-[var(--color-text-dim)]">Total due</span>
             <span className="font-semibold">{formatMoney(customerDue, currency)}</span>
           </div>
+          {dueSplit.gaming + dueSplit.canteen > 0.005 && (
+            <div className="grid grid-cols-2 gap-2 mt-2 text-center">
+              <div className="rounded-lg bg-[var(--color-surface-2)] py-1.5">
+                <p className="text-[11px] text-[var(--color-text-dim)]">Gaming ka</p>
+                <p className="text-sm font-semibold">{formatMoney(dueSplit.gaming, currency)}</p>
+              </div>
+              <div className="rounded-lg bg-[var(--color-surface-2)] py-1.5">
+                <p className="text-[11px] text-[var(--color-text-dim)]">Canteen ka</p>
+                <p className="text-sm font-semibold">{formatMoney(dueSplit.canteen, currency)}</p>
+              </div>
+            </div>
+          )}
         </Card>
 
         <div className="flex items-center justify-between">
