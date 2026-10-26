@@ -20,12 +20,21 @@ const { check, sleep, clickText, setNumber, text, waitFor, shot, unlock, go, sta
 const uuid = () => require("crypto").randomUUID();
 const today = new Date(Date.now() + 19800000).toISOString().slice(0, 10);
 
+const billButton = `[...document.querySelectorAll("button")].some((b) => b.textContent.trim() === "Bill")`;
+async function toBillStep(c, label) {
+  await waitFor(c, billButton, "Bill button for " + label);
+  await sleep(200);
+  await clickText(c, "Bill", { exact: true, tag: "button" });
+  await waitFor(c, "document.body.innerText.includes('PAYMENT KAISE HUA')", "payment choices for " + label);
+  await sleep(300);
+}
 async function openBill(c, who) {
   await go(c, "/", PIN);
   await waitFor(c, `document.body.innerText.includes(${JSON.stringify(who)})`, who + " on Home");
   await sleep(500);
   await clickText(c, who, { tag: "p" });
-  await waitFor(c, "document.body.innerText.includes('PAYMENT KAISE HUA')", "checkout open for " + who);
+  await waitFor(c, billButton, "session screen for " + who);
+  await sleep(300);
 }
 const confirmButton = (c) =>
   c.eval(`(() => { const b = [...document.querySelectorAll("button")].find((x) => /^Confirm/.test(x.textContent.trim())); return b ? { text: b.textContent.trim(), disabled: b.disabled } : null; })()`);
@@ -87,17 +96,20 @@ let PIN = "0000";
   await unlock(c, PIN);
   await openBill(c, "Test Regular");
   let t = await text(c);
-  check("checkout shows Gaming and Canteen on their own", /Gaming/.test(t) && /Canteen/.test(t) && /Customer Bill/.test(t), JSON.stringify(t.slice(-700)));
-  check("...each with its own Cash / Account / Credit", (t.match(/Credit \(baaki\)/g) || []).length === 2);
+  check("session screen: when it started, when it ended, how long, Gaming and Canteen, total", /SHURU/.test(t) && /KHATAM/.test(t) && /TIME/.test(t) && /1 ghanta/.test(t) && /Gaming/.test(t) && /Canteen/.test(t) && /Total/.test(t), JSON.stringify(t.slice(-700)));
+  check("...and no payment choices yet - just one Bill button", !/PAYMENT KAISE HUA/.test(t) && !/Credit \(baaki\)/.test(t) && !/Sab Cash/.test(t));
   await shot(c, "1-checkout");
 
-  await clickText(c, "Customer Bill (customer ko dikhao)", { exact: false });
-  await sleep(500);
+  await toBillStep(c, "Test Regular");
   t = await text(c);
+  check("Customer Bill screen: start, end, time of the session", /Shuru .* Khatam .* Time 1 ghanta/.test(t), t.slice(0, 600));
+  check("Customer Bill screen: three ways to pay - Cash, Account, Credit", /PAYMENT KAISE HUA/.test(t) && (await c.eval(`["Cash","Account","Credit"].every((n) => [...document.querySelectorAll("button")].some((b) => b.textContent.trim() === n))`)));
   check("Customer Bill slip: GAMING and CANTEEN sections and the total", /GAMING/.test(t) && /CANTEEN/.test(t) && /Kul bill/.test(t) && /190/.test(t) && /Maggi/.test(t));
   check("Customer Bill slip: gaming 100 and canteen 90 shown apart", /Gaming total\s*₹100/.test(t) && /Canteen total\s*₹90/.test(t), t.slice(-400));
   await shot(c, "2-customer-bill");
   await clickText(c, "PDF / Print", { exact: false, tag: "button" });
+  await waitFor(c, "!!document.querySelector('.print-slip')", "full-screen Customer Bill");
+  await c.eval(`[...document.querySelectorAll(".print-slip button")].find((b) => /PDF/.test(b.textContent)).click()`);
   await sleep(2500);
   const slipPdf = H.newest(H.DL, ".pdf");
   check("Customer Bill saves as a PDF file", !!slipPdf && fs.statSync(slipPdf).size > 2000, String(slipPdf));
@@ -106,6 +118,10 @@ let PIN = "0000";
   await sleep(400);
 
   // gaming all cash (100), canteen: 40 by account, the other 50 stays credit
+  await clickText(c, "Kuch cash, kuch credit? Amount alag-alag daalo", { exact: false, tag: "summary" });
+  await sleep(300);
+  t = await text(c);
+  check("amount boxes (opened on request): Gaming and Canteen each with Cash / Account / Credit", (t.match(/Credit \(baaki\)/g) || []).length === 2);
   await setNumber(c, 0, 100);
   await setNumber(c, 3, 40);
   await sleep(300);
@@ -132,13 +148,16 @@ let PIN = "0000";
   // ---------- 2. one-time customer: no credit ----------
   console.log("\n== 2. One-time customer cannot take credit ==");
   await openBill(c, "Test OneTime");
-  await clickText(c, "Sab Credit", { exact: true, tag: "button" });
+  await toBillStep(c, "Test OneTime");
+  btn = await confirmButton(c);
+  check("nothing is chosen yet: confirm waits until Cash, Account or Credit is picked", !!btn && btn.disabled, JSON.stringify(btn));
+  await clickText(c, "Credit", { exact: true, tag: "button" });
   await sleep(400);
   t = await text(c);
   btn = await confirmButton(c);
   check("one-time customer: credit is blocked with a clear message", /regular customer nahi hai/.test(t) && !!btn && btn.disabled, JSON.stringify(btn));
   await shot(c, "3-not-regular");
-  await clickText(c, "Sab Cash", { exact: true, tag: "button" });
+  await clickText(c, "Cash", { exact: true, tag: "button" });
   await sleep(300);
   btn = await confirmButton(c);
   check("...but paying in cash works", !!btn && !btn.disabled && /^Confirm payment/.test(btn.text), JSON.stringify(btn));
@@ -156,9 +175,8 @@ let PIN = "0000";
   await waitFor(c, "document.body.innerText.includes('Cold coffee x1')", "walk-in order on the Canteen page");
   await sleep(500);
   await clickText(c, "Cold coffee x1", { tag: "p" });
-  await waitFor(c, "document.body.innerText.includes('PAYMENT KAISE HUA')", "checkout open for the canteen bill");
-  await sleep(300);
-  await clickText(c, "Sab Credit", { exact: true, tag: "button" });
+  await toBillStep(c, "the canteen bill");
+  await clickText(c, "Credit", { exact: true, tag: "button" });
   await sleep(400);
   t = await text(c);
   btn = await confirmButton(c);

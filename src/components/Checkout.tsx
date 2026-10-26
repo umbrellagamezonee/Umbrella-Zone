@@ -4,15 +4,18 @@ import { Card } from "./ui/Card";
 import { useBillsStore } from "../store/useBillsStore";
 import { useCustomersStore } from "../store/useCustomersStore";
 import { CustomerNameInput } from "./ui/CustomerNameInput";
-import { CustomerBillModal } from "./CustomerBill";
+import { BillSlipBody, CustomerBillModal } from "./CustomerBill";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { businessTotals, isRegularCustomer } from "../lib/billing";
 import { normalizeName } from "../lib/customerName";
-import { formatMoney } from "../lib/format";
+import { formatMoney, formatSessionLength, formatTime } from "../lib/format";
 import type { Bill, PartPayment } from "../types";
-import { Check, ArrowLeft, Repeat, Receipt, Gamepad2, UtensilsCrossed, Star } from "lucide-react";
+import { Check, ArrowLeft, Repeat, Receipt, Gamepad2, UtensilsCrossed, Star, Printer, Banknote, Smartphone, BookUser } from "lucide-react";
 
-type CheckoutStep = "select" | "success";
+// Two steps before payment is recorded:
+//   1. the session at a glance - when it started, when it ended, how long, the bill - and one button: Bill
+//   2. the Customer Bill (Gaming and Canteen apart) with the three ways to pay it: Cash, Account, Credit
+type CheckoutStep = "select" | "bill" | "success";
 
 interface CheckoutProps {
   bill: Bill;
@@ -72,13 +75,15 @@ export function Checkout({ bill, onDone, onCancel, onSettled, onRestart }: Check
 
   const [step, setStep] = useState<CheckoutStep>("select");
   // All start at zero rather than pre-filled — nothing is assumed paid until
-  // the cashier says so (the quick buttons below fill them in one tap).
+  // the cashier picks Cash, Account or Credit (or types an amount).
   const [gCash, setGCash] = useState("0");
   const [gUpi, setGUpi] = useState("0");
   const [cCash, setCCash] = useState("0");
   const [cUpi, setCUpi] = useState("0");
+  const [choice, setChoice] = useState<"cash" | "upi" | "credit" | null>(null);
+  const [touched, setTouched] = useState(false);
   const [creditName, setCreditName] = useState("");
-  const [showBill, setShowBill] = useState(false);
+  const [showSlip, setShowSlip] = useState(false);
   const [settled, setSettled] = useState<{
     gaming: PartPayment;
     canteen: PartPayment;
@@ -100,18 +105,32 @@ export function Checkout({ bill, onDone, onCancel, onSettled, onRestart }: Check
   const creditTarget = isRegistered ? billCustomer : typedCustomer;
   const targetIsRegular = isRegularCustomer(creditTarget, bills);
   const needsCredit = creditTotal > 0.005;
-  const canConfirm = !needsCredit || (!!creditTarget && targetIsRegular);
+  const canConfirm = touched && (!needsCredit || (!!creditTarget && targetIsRegular));
 
   function quick(kind: "cash" | "upi" | "credit") {
     setGCash(kind === "cash" ? String(totals.gaming) : "0");
     setGUpi(kind === "upi" ? String(totals.gaming) : "0");
     setCCash(kind === "cash" ? String(totals.canteen) : "0");
     setCUpi(kind === "upi" ? String(totals.canteen) : "0");
+    setChoice(kind);
+    setTouched(true);
     setError("");
+  }
+  // typing an amount by hand is its own choice
+  function typedAmount(set: (v: string) => void) {
+    return (v: string) => {
+      set(v);
+      setChoice(null);
+      setTouched(true);
+    };
   }
 
   function handleConfirm() {
-    if (step !== "select") return;
+    if (step !== "bill") return;
+    if (!touched) {
+      setError("Pehle Cash, Account ya Credit chuno.");
+      return;
+    }
     if (needsCredit && !creditTarget) {
       setError("Credit ke liye regular customer ka naam chuno.");
       return;
@@ -180,7 +199,7 @@ export function Checkout({ bill, onDone, onCancel, onSettled, onRestart }: Check
           Done
         </button>
         <button
-          onClick={() => setShowBill(true)}
+          onClick={() => setShowSlip(true)}
           className="w-full flex items-center justify-center gap-2 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] font-semibold py-3"
         >
           <Receipt size={15} /> Customer Bill
@@ -193,60 +212,189 @@ export function Checkout({ bill, onDone, onCancel, onSettled, onRestart }: Check
             <Repeat size={15} /> Restart same session
           </button>
         )}
-        {showBill && <CustomerBillModal bill={bill} onClose={() => setShowBill(false)} />}
+        {showSlip && <CustomerBillModal bill={bill} onClose={() => setShowSlip(false)} />}
       </div>
     );
   }
 
-  const panel = (
-    label: string,
-    Icon: typeof Gamepad2,
-    p: PartPayment,
-    cash: string,
-    setCash: (v: string) => void,
-    upi: string,
-    setUpi: (v: string) => void
-  ) => (
-    <Card>
-      <div className="flex items-center justify-between mb-2">
-        <span className="flex items-center gap-1.5 text-sm font-semibold">
-          <Icon size={14} className="text-[var(--color-primary)]" /> {label}
-        </span>
-        <span className="text-sm font-semibold">{m(p.total)}</span>
-      </div>
-      <div className="grid grid-cols-2 gap-2">
-        <label className="text-[11px] text-[var(--color-text-dim)]">
-          Cash
-          <input
-            type="number"
-            min={0}
-            max={p.total}
-            value={cash}
-            onChange={(e) => setCash(e.target.value)}
-            className="mt-1 w-full text-right bg-[var(--color-surface-2)] rounded-lg px-2 py-1.5 text-sm outline-none"
-          />
-        </label>
-        <label className="text-[11px] text-[var(--color-text-dim)]">
-          Account (UPI)
-          <input
-            type="number"
-            min={0}
-            max={Math.max(0, p.total - p.cash)}
-            value={upi}
-            onChange={(e) => setUpi(e.target.value)}
-            className="mt-1 w-full text-right bg-[var(--color-surface-2)] rounded-lg px-2 py-1.5 text-sm outline-none"
-          />
-        </label>
-      </div>
-      <div className="flex justify-between text-xs mt-2">
-        <span className="text-[var(--color-text-dim)]">Credit (baaki)</span>
-        <span className={p.due > 0.005 ? "font-semibold text-[var(--color-warning)]" : "text-[var(--color-text-faint)]"}>
-          {m(p.due)}
-        </span>
-      </div>
-    </Card>
-  );
+  // ---------------- step 2: the Customer Bill, and how it was paid ----------------
+  if (step === "bill") {
+    const panel = (
+      label: string,
+      Icon: typeof Gamepad2,
+      p: PartPayment,
+      cash: string,
+      setCash: (v: string) => void,
+      upi: string,
+      setUpi: (v: string) => void
+    ) => (
+      <Card>
+        <div className="flex items-center justify-between mb-2">
+          <span className="flex items-center gap-1.5 text-sm font-semibold">
+            <Icon size={14} className="text-[var(--color-primary)]" /> {label}
+          </span>
+          <span className="text-sm font-semibold">{m(p.total)}</span>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <label className="text-[11px] text-[var(--color-text-dim)]">
+            Cash
+            <input
+              type="number"
+              min={0}
+              max={p.total}
+              value={cash}
+              onChange={(e) => typedAmount(setCash)(e.target.value)}
+              className="mt-1 w-full text-right bg-[var(--color-surface-2)] rounded-lg px-2 py-1.5 text-sm outline-none"
+            />
+          </label>
+          <label className="text-[11px] text-[var(--color-text-dim)]">
+            Account (UPI)
+            <input
+              type="number"
+              min={0}
+              max={Math.max(0, p.total - p.cash)}
+              value={upi}
+              onChange={(e) => typedAmount(setUpi)(e.target.value)}
+              className="mt-1 w-full text-right bg-[var(--color-surface-2)] rounded-lg px-2 py-1.5 text-sm outline-none"
+            />
+          </label>
+        </div>
+        <div className="flex justify-between text-xs mt-2">
+          <span className="text-[var(--color-text-dim)]">Credit (baaki)</span>
+          <span className={p.due > 0.005 ? "font-semibold text-[var(--color-warning)]" : "text-[var(--color-text-faint)]"}>
+            {m(p.due)}
+          </span>
+        </div>
+      </Card>
+    );
 
+    const option = (kind: "cash" | "upi" | "credit", label: string, Icon: typeof Banknote, tone: string) => (
+      <button
+        onClick={() => quick(kind)}
+        className={
+          "flex flex-col items-center justify-center gap-1.5 rounded-2xl border-2 py-4 font-semibold active:scale-95 transition-transform " +
+          (choice === kind ? "border-[var(--color-primary)] " : "border-transparent ") +
+          tone
+        }
+      >
+        <Icon size={22} />
+        <span className="text-sm">{label}</span>
+      </button>
+    );
+
+    return (
+      <div className="space-y-4">
+        <button
+          onClick={() => setStep("select")}
+          className="flex items-center gap-1.5 text-sm text-[var(--color-text-dim)]"
+        >
+          <ArrowLeft size={14} /> Wapas
+        </button>
+
+        <BillSlipBody bill={bill} />
+
+        <button
+          onClick={() => setShowSlip(true)}
+          className="w-full flex items-center justify-center gap-2 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] font-semibold py-2.5 text-sm"
+        >
+          <Printer size={15} /> PDF / Print
+        </button>
+
+        <div>
+          <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-2">PAYMENT KAISE HUA?</p>
+          <div className="grid grid-cols-3 gap-2">
+            {option("cash", "Cash", Banknote, "bg-[var(--color-success)]/15 text-[var(--color-success)]")}
+            {option("upi", "Account", Smartphone, "bg-[var(--color-primary)]/15 text-[var(--color-primary)]")}
+            {option("credit", "Credit", BookUser, "bg-[var(--color-warning)]/15 text-[var(--color-warning)]")}
+          </div>
+        </div>
+
+        <details className="rounded-xl border border-[var(--color-border)] px-3 py-2">
+          <summary className="cursor-pointer text-xs font-semibold text-[var(--color-text-dim)]">
+            Kuch cash, kuch credit? Amount alag-alag daalo
+          </summary>
+          <div className="space-y-3 pt-3">
+            {hasGaming && panel("Gaming", Gamepad2, g, gCash, setGCash, gUpi, setGUpi)}
+            {hasCanteen && panel("Canteen", UtensilsCrossed, c, cCash, setCCash, cUpi, setCUpi)}
+            <p className="text-xs text-[var(--color-text-faint)]">
+              Jo cash / account mein nahi diya wo credit mein jayega (sirf regular customer ko).
+            </p>
+          </div>
+        </details>
+
+        <div className="rounded-xl bg-[var(--color-surface-2)] px-3 py-2 text-xs flex flex-wrap justify-between gap-x-3 gap-y-1">
+          <span>
+            Cash <b>{m(cashTotal)}</b>
+          </span>
+          <span>
+            Account <b>{m(upiTotal)}</b>
+          </span>
+          <span className={needsCredit ? "text-[var(--color-warning)]" : ""}>
+            Credit <b>{m(creditTotal)}</b>
+          </span>
+        </div>
+
+        {needsCredit && (
+          <div className="space-y-2">
+            {isRegistered ? (
+              <p className="text-xs text-[var(--color-warning)]">
+                {m(creditTotal)} {billCustomer?.name} ke credit mein jayega.
+              </p>
+            ) : (
+              <>
+                <p className="text-xs text-[var(--color-warning)]">
+                  {m(creditTotal)} credit mein jayega — kis regular customer par?
+                </p>
+                <CustomerNameInput value={creditName} onChange={setCreditName} placeholder="Regular customer ka naam" />
+                {typed && !typedCustomer && (
+                  <button
+                    onClick={() => {
+                      const created = findOrCreateCustomer({ name: creditName.trim(), phone: "" });
+                      setRegular(created.id, true);
+                    }}
+                    className="w-full flex items-center justify-center gap-2 rounded-xl bg-[var(--color-primary)]/15 text-[var(--color-primary)] text-sm font-medium py-2"
+                  >
+                    <Star size={14} /> "{creditName.trim()}" ko naya regular customer banao
+                  </button>
+                )}
+              </>
+            )}
+            {creditTarget && !targetIsRegular && (
+              <div className="rounded-xl bg-[var(--color-warning)]/10 p-3 space-y-2">
+                <p className="text-xs">
+                  <b>{creditTarget.name}</b> regular customer nahi hai. Credit sirf regular customer ko milta hai —
+                  kabhi-kabhar aane wala customer paisa de kar jaata hai.
+                </p>
+                <button
+                  onClick={() => setRegular(creditTarget.id, true)}
+                  className="w-full flex items-center justify-center gap-2 rounded-xl bg-[var(--color-primary)] text-white text-sm font-semibold py-2"
+                >
+                  <Star size={14} /> {creditTarget.name} ko regular banao
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {error && <p className="text-xs text-[var(--color-danger)]">{error}</p>}
+        {!touched && <p className="text-xs text-[var(--color-text-faint)]">Upar se Cash, Account ya Credit chuno.</p>}
+
+        <button
+          onClick={handleConfirm}
+          disabled={!canConfirm}
+          className="w-full rounded-xl bg-[var(--color-primary)] disabled:opacity-40 text-white font-semibold py-3"
+        >
+          {needsCredit ? `Confirm — ${m(creditTotal)} credit mein` : "Confirm payment"}
+        </button>
+
+        {showSlip && <CustomerBillModal bill={bill} onClose={() => setShowSlip(false)} />}
+      </div>
+    );
+  }
+
+  // ---------------- step 1: the session at a glance ----------------
+  const minutes = Math.round(bill.tableChargeMinutes);
+  const startedAt = bill.createdAt - bill.tableChargeMinutes * 60000;
   return (
     <div className="space-y-4">
       {onCancel && (
@@ -260,12 +408,32 @@ export function Checkout({ bill, onDone, onCancel, onSettled, onRestart }: Check
 
       <Card>
         {bill.tableCharge > 0 && (
-          <div className="flex justify-between text-sm py-1">
-            <span className="flex items-center gap-1.5 text-[var(--color-text-dim)]">
-              <Gamepad2 size={13} /> Gaming
-            </span>
-            <span>{m(bill.tableCharge)}</span>
-          </div>
+          <>
+            {minutes > 0 ? (
+              <div className="grid grid-cols-3 gap-2 text-center mb-3">
+                <div className="rounded-xl bg-[var(--color-surface-2)] py-2">
+                  <p className="text-[10px] text-[var(--color-text-dim)]">SHURU</p>
+                  <p className="text-sm font-bold">{formatTime(startedAt)}</p>
+                </div>
+                <div className="rounded-xl bg-[var(--color-surface-2)] py-2">
+                  <p className="text-[10px] text-[var(--color-text-dim)]">KHATAM</p>
+                  <p className="text-sm font-bold">{formatTime(bill.createdAt)}</p>
+                </div>
+                <div className="rounded-xl bg-[var(--color-surface-2)] py-2">
+                  <p className="text-[10px] text-[var(--color-text-dim)]">TIME</p>
+                  <p className="text-sm font-bold">{formatSessionLength(minutes)}</p>
+                </div>
+              </div>
+            ) : (
+              <p className="text-xs text-[var(--color-text-faint)] mb-2">Time record nahi hua</p>
+            )}
+            <div className="flex justify-between text-sm py-1">
+              <span className="flex items-center gap-1.5 text-[var(--color-text-dim)]">
+                <Gamepad2 size={13} /> Gaming
+              </span>
+              <span>{m(bill.tableCharge)}</span>
+            </div>
+          </>
         )}
         {(bill.canteenCharge > 0 || bill.canteenItems.length > 0) && (
           <div className="flex justify-between text-sm py-1">
@@ -300,107 +468,11 @@ export function Checkout({ bill, onDone, onCancel, onSettled, onRestart }: Check
       </Card>
 
       <button
-        onClick={() => setShowBill(true)}
-        className="w-full flex items-center justify-center gap-2 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] font-semibold py-2.5 text-sm"
+        onClick={() => setStep("bill")}
+        className="w-full flex items-center justify-center gap-2 rounded-xl bg-[var(--color-primary)] text-white font-semibold py-3.5 text-base"
       >
-        <Receipt size={15} /> Customer Bill (customer ko dikhao)
+        <Receipt size={18} /> Bill
       </button>
-
-      <div>
-        <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-2">PAYMENT KAISE HUA?</p>
-        <div className="grid grid-cols-3 gap-1.5">
-          <button
-            onClick={() => quick("cash")}
-            className="rounded-lg bg-[var(--color-success)]/15 text-[var(--color-success)] font-medium py-2 text-xs active:scale-95 transition-transform"
-          >
-            Sab Cash
-          </button>
-          <button
-            onClick={() => quick("upi")}
-            className="rounded-lg bg-[var(--color-primary)]/15 text-[var(--color-primary)] font-medium py-2 text-xs active:scale-95 transition-transform"
-          >
-            Sab Account
-          </button>
-          <button
-            onClick={() => quick("credit")}
-            className="rounded-lg bg-[var(--color-warning)]/15 text-[var(--color-warning)] font-medium py-2 text-xs active:scale-95 transition-transform"
-          >
-            Sab Credit
-          </button>
-        </div>
-        <p className="text-xs text-[var(--color-text-faint)] mt-2">
-          Ya neeche khud daalo — jo cash / account mein nahi diya, wo credit mein jayega (sirf regular customer ko).
-        </p>
-      </div>
-
-      {hasGaming && panel("Gaming", Gamepad2, g, gCash, setGCash, gUpi, setGUpi)}
-      {hasCanteen && panel("Canteen", UtensilsCrossed, c, cCash, setCCash, cUpi, setCUpi)}
-
-      <div className="rounded-xl bg-[var(--color-surface-2)] px-3 py-2 text-xs flex flex-wrap justify-between gap-x-3 gap-y-1">
-        <span>
-          Cash <b>{m(cashTotal)}</b>
-        </span>
-        <span>
-          Account <b>{m(upiTotal)}</b>
-        </span>
-        <span className={needsCredit ? "text-[var(--color-warning)]" : ""}>
-          Credit <b>{m(creditTotal)}</b>
-        </span>
-      </div>
-
-      {needsCredit && (
-        <div className="space-y-2">
-          {isRegistered ? (
-            <p className="text-xs text-[var(--color-warning)]">
-              {m(creditTotal)} {billCustomer?.name} ke credit mein jayega.
-            </p>
-          ) : (
-            <>
-              <p className="text-xs text-[var(--color-warning)]">
-                {m(creditTotal)} credit mein jayega — kis regular customer par?
-              </p>
-              <CustomerNameInput value={creditName} onChange={setCreditName} placeholder="Regular customer ka naam" />
-              {typed && !typedCustomer && (
-                <button
-                  onClick={() => {
-                    const created = findOrCreateCustomer({ name: creditName.trim(), phone: "" });
-                    setRegular(created.id, true);
-                  }}
-                  className="w-full flex items-center justify-center gap-2 rounded-xl bg-[var(--color-primary)]/15 text-[var(--color-primary)] text-sm font-medium py-2"
-                >
-                  <Star size={14} /> "{creditName.trim()}" ko naya regular customer banao
-                </button>
-              )}
-            </>
-          )}
-          {creditTarget && !targetIsRegular && (
-            <div className="rounded-xl bg-[var(--color-warning)]/10 p-3 space-y-2">
-              <p className="text-xs">
-                <b>{creditTarget.name}</b> regular customer nahi hai. Credit sirf regular customer ko milta hai —
-                kabhi-kabhar aane wala customer paisa de kar jaata hai.
-              </p>
-              <button
-                onClick={() => setRegular(creditTarget.id, true)}
-                className="w-full flex items-center justify-center gap-2 rounded-xl bg-[var(--color-primary)] text-white text-sm font-semibold py-2"
-              >
-                <Star size={14} /> {creditTarget.name} ko regular banao
-              </button>
-            </div>
-          )}
-        </div>
-      )}
-
-      {error && <p className="text-xs text-[var(--color-danger)]">{error}</p>}
-
-      <button
-        onClick={handleConfirm}
-        disabled={!canConfirm}
-        className="w-full rounded-xl bg-[var(--color-primary)] disabled:opacity-40 text-white font-semibold py-3"
-      >
-        {needsCredit ? `Confirm — ${m(creditTotal)} credit mein` : "Confirm payment"}
-      </button>
-
-      {showBill && <CustomerBillModal bill={bill} onClose={() => setShowBill(false)} />}
     </div>
   );
 }

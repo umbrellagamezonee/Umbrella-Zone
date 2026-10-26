@@ -107,3 +107,12 @@ export function formatDateKey(dateKey: string, opts: Intl.DateTimeFormatOptions)
   const [y, m, day] = dateKey.split("-").map(Number);
   return new Date(Date.UTC(y, m - 1, day)).toLocaleDateString([], { ...opts, timeZone: "UTC" });
 }
+
+// How long a session ran, in plain words: "45 min", "1 ghanta", "2 ghante 15 min".
+export function formatSessionLength(minutes: number) {
+  const total = Math.round(minutes);
+  if (total < 60) return `${total} min`;
+  const h = Math.floor(total / 60);
+  const m = total % 60;
+  return `${h} ${h === 1 ? "ghanta" : "ghante"}${m ? ` ${m} min` : ""}`;
+}
