@@ -15,7 +15,7 @@ import { useGamesStore } from "../store/useGamesStore";
 import { useBillsStore } from "../store/useBillsStore";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { formatMoney, toDateInputValue, formatTime } from "../lib/format";
-import { billCollected } from "../lib/billing";
+import { billMoneyByBusiness } from "../lib/billing";
 import { billPersonName, billPlace } from "../lib/billLabel";
 import { useNow } from "../lib/useNow";
 import type { Bill } from "../types";
@@ -58,9 +58,17 @@ export function Home() {
   const dateBills = bills
     .filter((b) => b.tableId != null && toDateInputValue(b.createdAt) === selectedDate)
     .sort((a, b) => b.createdAt - a.createdAt);
-  const collectedForDate = dateBills
+  // Gaming only (the canteen part of a bill is the Canteen page's), Cash and
+  // Account kept apart.
+  const gamingForDate = dateBills
     .filter((b) => b.status !== "cancelled")
-    .reduce((sum, b) => sum + billCollected(b), 0);
+    .reduce(
+      (t, b) => {
+        const g = billMoneyByBusiness(b).gaming;
+        return { cash: t.cash + g.cash, upi: t.upi + g.upi };
+      },
+      { cash: 0, upi: 0 }
+    );
   const runningCount = tables.filter((t) => t.status !== "available").length;
   const sessionCount = (isToday ? runningCount : 0) + dateBills.length;
 
@@ -93,9 +101,12 @@ export function Home() {
           <p className="text-xl font-bold mt-1">{sessionCount}</p>
         </Card>
         <Card>
-          <p className="text-xs text-[var(--color-text-dim)]">COLLECTED</p>
-          <p className="text-xl font-bold text-[var(--color-success)] mt-1">
-            {formatMoney(collectedForDate, currency)}
+          <p className="text-xs text-[var(--color-text-dim)]">GAMING AAYA</p>
+          <p className="text-sm font-bold text-[var(--color-success)] mt-1">
+            Cash {formatMoney(gamingForDate.cash, currency)}
+          </p>
+          <p className="text-sm font-bold text-[var(--color-success)]">
+            Account {formatMoney(gamingForDate.upi, currency)}
           </p>
         </Card>
       </div>

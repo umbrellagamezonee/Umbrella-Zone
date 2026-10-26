@@ -122,10 +122,10 @@ export function TableDetailModal({
     const tableAfterDiscount = Math.max(0, tableCharge - effectiveDiscount);
     const discountSpillover = Math.max(0, effectiveDiscount - tableCharge);
     const foodAfterDiscount = Math.max(0, canteenTotal - discountSpillover);
-    // A shares-based bill is needed whenever there's more than one payer, OR
-    // there's food alongside the table charge to keep separate — a
-    // table-only single-payer bill keeps the simple customerId path.
-    const needsShares = payers.length > 1 || canteenTotal > 0;
+    // Only a table split between several people needs a bill with shares. One
+    // payer gets one ordinary bill, even with food on it — its checkout asks
+    // how the gaming part and how the canteen part were paid, each on its own.
+    const needsShares = payers.length > 1;
     const shares =
       needsShares && payers.length > 0
         ? [

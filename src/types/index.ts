@@ -37,6 +37,11 @@ export interface Customer {
   // creditBalanceFor in lib/billing.ts), never cached here.
   lastReminderAt: number | null;
   createdAt: number;
+  // A regular customer — someone the shop gives credit to. Everyone else pays
+  // at once (cash or account). Anyone who already has credit on record counts
+  // as a regular too (see isRegularCustomer in lib/billing.ts), so nothing
+  // that was already on credit is ever locked out.
+  isRegular?: boolean;
 }
 
 export interface MenuCategory {
@@ -132,6 +137,24 @@ export interface Bill {
   deletedAt: number | null; // set when moved to the trash (Settings → Deleted Bills); null while live
   matchParticipants: string[] | null; // everyone who played this session, snapshotted for history
   matchLosers: string[] | null; // whoever lost, if recorded — split equally when there's more than one
+  // How each of the two businesses on this bill was paid: gaming (table time)
+  // and canteen (food / drinks / cigarettes) each with its own cash, account
+  // and credit. Set when the bill is settled at checkout; absent on every bill
+  // made before that — those are split between the two by their face values
+  // instead (see billParts in lib/billing.ts).
+  parts?: BillParts;
+}
+
+export interface PartPayment {
+  total: number; // what this business billed, after its share of any discount
+  cash: number;
+  upi: number;
+  due: number; // went on the customer's credit
+}
+
+export interface BillParts {
+  gaming: PartPayment;
+  canteen: PartPayment;
 }
 
 export interface Expense {

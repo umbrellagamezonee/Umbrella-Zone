@@ -12,6 +12,8 @@ is kept as files in `C:\CueBill-Data` (see `storage.js`); nothing leaves the PC.
 | `prepare-pack.js` | Copies the old data + old-data PDF from `../offline-pack` (git-ignored, real shop data) into the installer |
 | `test-storage.js` | `node test-storage.js` - checks the data files logic |
 | `test-app.js` | `node test-app.js [--exe path\CueBill.exe]` - starts the real app on a scratch data folder and checks data load, no network, Excel/PDF, write survival after close and kill, repair, Restore |
+| `test-billing.js` | `node test-billing.js [--exe ...]` - the new billing end to end: Gaming and Canteen on one bill paid separately, Customer Bill, credit only for regulars, Credits / ledger split, business-wise reports and Excel |
+| `e2e-lib.js` | helpers the two app tests share (start the app, drive it through its debug port) |
 
 ## Rebuild the installer
 
@@ -26,3 +28,11 @@ Notes from the first build on this PC:
 - `icon.ico` is checked in because electron-builder's own icon converter needs more memory than that PC had.
 - The installer is not code-signed, so Windows SmartScreen shows "Windows protected your PC" -> More info -> Run anyway.
 - Do not test-install on a PC that has the Chrome "CueBill" app shortcut on the Desktop: the installer's Desktop shortcut has the same name and replaces it (the uninstaller then deletes it).
+
+## Checks on the old data (tools/credit-report)
+
+Run from `tools/credit-report` against `offline-pack/cuebill-data-backup.json`:
+
+- `npx tsx regress.ts snapshot out.json` once (before changing any report code), then `npx tsx regress.ts compare out.json` after: every old-data number must be exactly the same (new fields may appear).
+- `npx tsx business-check.ts`: Gaming + Canteen add up to the galla on every old day, per bill, and the new-bill rules (discount, trimming, ledger split, regular customers) behave.
+- `npx tsx archive.ts`: the whole old data as one PDF (goes into the installer).

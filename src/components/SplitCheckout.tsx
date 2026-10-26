@@ -6,6 +6,8 @@ import { useTablesStore } from "../store/useTablesStore";
 import { useGamesStore } from "../store/useGamesStore";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { formatMoney } from "../lib/format";
+import { isRegularCustomer } from "../lib/billing";
+import { normalizeName } from "../lib/customerName";
 import type { Bill, BillShare, PaymentMethod } from "../types";
 import { QRCodeSVG } from "qrcode.react";
 import { Check, ArrowLeft, Repeat, Gamepad2, UtensilsCrossed, Wallet } from "lucide-react";
@@ -28,6 +30,9 @@ export function SplitCheckout({ bill: initialBill, onDone }: { bill: Bill; onDon
   const upiId = useSettingsStore((s) => s.upiId);
   const settleShare = useBillsStore((s) => s.settleShare);
   const findOrCreateCustomer = useCustomersStore((s) => s.findOrCreateCustomer);
+  const setRegular = useCustomersStore((s) => s.setRegular);
+  const customers = useCustomersStore((s) => s.customers);
+  const allBills = useBillsStore((s) => s.bills);
   const tables = useTablesStore((s) => s.tables);
   const startSession = useTablesStore((s) => s.startSession);
   const games = useGamesStore((s) => s.games);
@@ -39,6 +44,8 @@ export function SplitCheckout({ bill: initialBill, onDone }: { bill: Bill; onDon
     initialBill;
 
   const [steps, setSteps] = useState<Record<string, RowStep>>({});
+  // a payer who is not a regular customer asked for credit — needs a decision first
+  const [blockedCredit, setBlockedCredit] = useState<BillShare | null>(null);
 
   const shares = bill.shares ?? [];
   const allPaid = shares.length > 0 && shares.every((s) => s.status === "paid");
@@ -106,9 +113,44 @@ export function SplitCheckout({ bill: initialBill, onDone }: { bill: Bill; onDon
     setStep(share.id, "idle");
   }
 
+  // Credit is for regular customers only; anyone else pays now.
+  function askCredit(share: BillShare) {
+    const key = normalizeName(share.payerName);
+    const person = customers.find((c) => !c.isWalkIn && normalizeName(c.name) === key);
+    if (person && isRegularCustomer(person, allBills)) settle(share, "credit");
+    else setBlockedCredit(share);
+  }
+
   return (
     <Modal title="Split bill" onClose={onDone}>
       <div className="space-y-4">
+        {blockedCredit && (
+          <div className="rounded-xl bg-[var(--color-warning)]/10 p-3 space-y-2">
+            <p className="text-xs">
+              <b>{blockedCredit.payerName}</b> regular customer nahi hai. Credit sirf regular customer ko milta hai — kabhi-kabhar aane wala
+              customer paisa de kar jaata hai. Cash / Account lo, ya inhe regular bana do.
+            </p>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                onClick={() => setBlockedCredit(null)}
+                className="rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] text-sm font-medium py-2"
+              >
+                Theek hai
+              </button>
+              <button
+                onClick={() => {
+                  const person = findOrCreateCustomer({ name: blockedCredit.payerName, phone: "" });
+                  setRegular(person.id, true);
+                  settle(blockedCredit, "credit");
+                  setBlockedCredit(null);
+                }}
+                className="rounded-xl bg-[var(--color-primary)] text-white text-sm font-semibold py-2"
+              >
+                Regular banao + credit do
+              </button>
+            </div>
+          </div>
+        )}
         <div className="flex items-center justify-between rounded-xl bg-[var(--color-surface-2)] px-4 py-3">
           <span className="text-sm text-[var(--color-text-dim)]">Total</span>
           <span className="text-lg font-bold">{formatMoney(bill.total, currency)}</span>
@@ -231,7 +273,7 @@ export function SplitCheckout({ bill: initialBill, onDone }: { bill: Bill; onDon
                           Account
                         </button>
                         <button
-                          onClick={() => settle(share, "credit")}
+                          onClick={() => askCredit(share)}
                           className="rounded-lg bg-[var(--color-warning)]/15 text-[var(--color-warning)] font-medium py-2 text-xs active:scale-95 transition-transform"
                         >
                           Credit

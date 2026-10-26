@@ -76,9 +76,11 @@ interface PendingMerge {
 interface CustomersState {
   customers: Customer[];
   pendingMerges: Record<string, PendingMerge>;
-  addCustomer: (data: { name: string; phone: string; email: string }) => Customer;
+  addCustomer: (data: { name: string; phone: string; email: string; isRegular?: boolean }) => Customer;
   findOrCreateCustomer: (data: { name: string; phone: string }) => Customer;
   updateCustomer: (id: string, patch: { name?: string; phone?: string; email?: string }) => void;
+  // Marks someone as a regular (gets credit) or back to a one-time customer.
+  setRegular: (id: string, isRegular: boolean) => void;
   markReminded: (id: string) => void;
   removeCustomer: (id: string) => void;
   // Deletes the source profile — what it's owed moves to the target
@@ -114,6 +116,7 @@ export const useCustomersStore = create<CustomersState>()(
           isWalkIn: false,
           lastReminderAt: null,
           createdAt: Date.now(),
+          ...(data.isRegular ? { isRegular: true } : {}),
         };
         set((state) => ({ customers: [...state.customers, customer] }));
         pushInsert(TABLE, toRow(customer));
@@ -135,6 +138,12 @@ export const useCustomersStore = create<CustomersState>()(
         }));
         const c = get().customers.find((x) => x.id === id);
         if (c && c.id !== "walk-in") pushUpsert(TABLE, toRow(c));
+      },
+
+      setRegular: (id, isRegular) => {
+        set((state) => ({
+          customers: state.customers.map((c) => (c.id === id && !c.isWalkIn ? { ...c, isRegular } : c)),
+        }));
       },
 
       // Phone is optional. If given and it matches an existing customer, that

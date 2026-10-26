@@ -21,13 +21,22 @@ import {
   creditBalanceFor,
   customerOpenBills,
   customerPendingOrders,
+  isRegularCustomer,
   orderTotal,
 } from "../lib/billing";
 import { billPendingToCredit } from "../lib/creditHelpers";
-import { buildLedger, ledgerPeriodRange } from "../lib/ledger";
+import { buildLedger, customerCreditByBusiness, ledgerPeriodRange } from "../lib/ledger";
 import { cleanName, customerLabel, findCustomerByName, normalizeName } from "../lib/customerName";
 import type { Customer, Bill } from "../types";
-import { Search, Footprints, Check, ChevronRight, Wallet, Users, Trash2 } from "lucide-react";
+import { Search, Footprints, Check, ChevronRight, Wallet, Users, Trash2, Star } from "lucide-react";
+
+// "Gaming ₹120 · Canteen ₹40" — only the parts that are not zero.
+function businessText(gaming: number, canteen: number, currency: string): string {
+  const parts: string[] = [];
+  if (gaming > 0.005) parts.push("Gaming " + formatMoney(gaming, currency));
+  if (canteen > 0.005) parts.push("Canteen " + formatMoney(canteen, currency));
+  return parts.join(" · ");
+}
 
 // Plain day-to-day directory — look someone up, add a new profile, open
 // their history. Credit chasing (who's due, reminders, settling) lives on
@@ -44,9 +53,17 @@ export function Customers() {
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
+  const [newIsRegular, setNewIsRegular] = useState(false);
   const [detailCustomer, setDetailCustomer] = useState<Customer | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [blockedDelete, setBlockedDelete] = useState<{ name: string; owed: number } | null>(null);
+
+  // Who counts as a regular (gets credit) — worked out once for the whole list
+  const regularIds = useMemo(() => {
+    const set = new Set<string>();
+    for (const c of customers) if (isRegularCustomer(c, bills)) set.add(c.id);
+    return set;
+  }, [customers, bills]);
 
   // One pass over every bill for the whole list, not one pass per row —
   // this directory can have well over a hundred customers.
@@ -99,11 +116,12 @@ export function Customers() {
     if (existing) {
       setDetailCustomer(existing);
     } else {
-      addCustomer({ name: name.trim(), phone, email });
+      addCustomer({ name: name.trim(), phone, email, isRegular: newIsRegular });
     }
     setName("");
     setPhone("");
     setEmail("");
+    setNewIsRegular(false);
     setShowAdd(false);
   }
 
@@ -147,7 +165,14 @@ export function Customers() {
                 )}
               </div>
               <div>
-                <p className="text-sm font-medium">{customerLabel(c, customers)}</p>
+                <p className="text-sm font-medium flex items-center gap-1.5">
+                  {customerLabel(c, customers)}
+                  {regularIds.has(c.id) && (
+                    <span className="inline-flex items-center gap-0.5 rounded-full bg-[var(--color-primary)]/15 text-[var(--color-primary)] px-1.5 py-0.5 text-[10px] font-semibold">
+                      <Star size={9} /> Regular
+                    </span>
+                  )}
+                </p>
                 <p className="text-xs text-[var(--color-text-dim)]">
                   {c.phone || (c.isWalkIn ? "System" : "No phone")}
                 </p>
@@ -225,6 +250,20 @@ export function Customers() {
               placeholder="Email (optional)"
               className="w-full rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] px-3 py-2.5 text-sm outline-none"
             />
+            <label className="flex items-start gap-2.5 rounded-xl bg-[var(--color-surface-2)] px-3 py-2.5 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={newIsRegular}
+                onChange={(e) => setNewIsRegular(e.target.checked)}
+                className="mt-0.5 h-4 w-4"
+              />
+              <span className="text-sm">
+                Regular customer
+                <span className="block text-xs text-[var(--color-text-faint)]">
+                  Isko credit milega. Baaki customers ko payment dena hoga (cash / account).
+                </span>
+              </span>
+            </label>
             <button
               onClick={handleAdd}
               className="w-full rounded-xl bg-[var(--color-primary)] text-white font-semibold py-3"
@@ -252,6 +291,7 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
   const allCustomers = useCustomersStore((s) => s.customers);
   const mergeCustomerSafely = useCustomersStore((s) => s.mergeCustomerSafely);
   const updateCustomer = useCustomersStore((s) => s.updateCustomer);
+  const setRegular = useCustomersStore((s) => s.setRegular);
   const [detailBill, setDetailBill] = useState<Bill | null>(null);
   const [checkoutBill, setCheckoutBill] = useState<Bill | null>(null);
   const [showSettle, setShowSettle] = useState(false);
@@ -377,6 +417,8 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
   // correctly, then shown newest-first (each row keeps the balance as it
   // stood right after that entry).
   const ledgerEntries = buildLedger(customerBills, pendingOrders, nameKey, orders);
+  // what is still owed, Gaming and Canteen apart (adds up to TOTAL OWED)
+  const owedSplit = customerCreditByBusiness(customer, bills, orders);
 
   // Month-wise (or date-to-date) view of the same ledger. Every row keeps the
   // running balance it had in the full history, so a month's figures add up:
@@ -392,6 +434,16 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
   const periodAdded = visibleEntries.reduce((s, e) => s + e.debit, 0);
   const periodPaid = visibleEntries.reduce((s, e) => s + e.credit, 0);
   const periodClosing = visibleEntries.length > 0 ? visibleEntries[0].balanceAfter : periodOpening;
+  // the same figures for each business on its own
+  const beforePeriod = periodRange ? ledgerEntries.find((e) => e.date < periodRange.startMs) : undefined;
+  const periodOpeningGaming = beforePeriod?.gamingAfter ?? 0;
+  const periodOpeningCanteen = beforePeriod?.canteenAfter ?? 0;
+  const periodAddedGaming = visibleEntries.reduce((s, e) => s + e.debitGaming, 0);
+  const periodAddedCanteen = visibleEntries.reduce((s, e) => s + e.debitCanteen, 0);
+  const periodPaidGaming = visibleEntries.reduce((s, e) => s + e.creditGaming, 0);
+  const periodPaidCanteen = visibleEntries.reduce((s, e) => s + e.creditCanteen, 0);
+  const periodClosingGaming = visibleEntries.length > 0 ? visibleEntries[0].gamingAfter : periodOpeningGaming;
+  const periodClosingCanteen = visibleEntries.length > 0 ? visibleEntries[0].canteenAfter : periodOpeningCanteen;
   const monthLabel = (key: string) => formatDateKey(`${key}-01`, { month: "long", year: "numeric" });
 
   return (
@@ -406,6 +458,24 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
             className="flex-1 min-w-0 text-right bg-[var(--color-surface-2)] rounded-lg px-2 py-1.5 text-sm outline-none"
           />
         </div>
+
+        <label className="flex items-start gap-2.5 rounded-xl bg-[var(--color-surface-2)] px-3 py-2.5 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={isRegularCustomer(customer, bills)}
+            disabled={!customer.isRegular && isRegularCustomer(customer, bills)}
+            onChange={(e) => setRegular(customer.id, e.target.checked)}
+            className="mt-0.5 h-4 w-4"
+          />
+          <span className="text-sm">
+            Regular customer (credit milega)
+            <span className="block text-xs text-[var(--color-text-faint)]">
+              {!customer.isRegular && isRegularCustomer(customer, bills)
+                ? "Isne pehle credit liya hai, isliye ye regular hai."
+                : "Regular ko credit milta hai. Baaki customers payment kar ke jaate hain."}
+            </span>
+          </span>
+        </label>
 
         <div className="grid grid-cols-2 gap-3">
           <Card>
@@ -426,6 +496,18 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
             <p className="text-lg font-bold text-[var(--color-warning)] mt-1">
               {formatMoney(totalOwed, currency)}
             </p>
+            {ledgerEntries.length > 0 && (
+              <div className="grid grid-cols-2 gap-2 mt-2 text-center">
+                <div className="rounded-lg bg-[var(--color-surface-2)] py-1.5">
+                  <p className="text-[11px] text-[var(--color-text-dim)]">Gaming ka baaki</p>
+                  <p className="text-sm font-semibold">{formatMoney(owedSplit.gaming, currency)}</p>
+                </div>
+                <div className="rounded-lg bg-[var(--color-surface-2)] py-1.5">
+                  <p className="text-[11px] text-[var(--color-text-dim)]">Canteen ka baaki</p>
+                  <p className="text-sm font-semibold">{formatMoney(owedSplit.canteen, currency)}</p>
+                </div>
+              </div>
+            )}
             <button
               onClick={handleSettleClick}
               className="mt-3 w-full flex items-center justify-center gap-2 rounded-xl bg-[var(--color-success)]/15 text-[var(--color-success)] text-sm font-medium py-2.5"
@@ -479,27 +561,31 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
               )}
               {periodRange && (
                 <Card>
-                  <div className="space-y-1.5 text-sm">
-                    <div className="flex justify-between">
-                      <span className="text-[var(--color-text-dim)]">Shuru mein baaki</span>
-                      <span className="font-medium">{formatMoney(periodOpening, currency)}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-[var(--color-text-dim)]">+ Is period mein credit liya</span>
-                      <span className="font-medium text-[var(--color-warning)]">
-                        {formatMoney(periodAdded, currency)}
-                      </span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-[var(--color-text-dim)]">− Is period mein chukaya</span>
-                      <span className="font-medium text-[var(--color-success)]">
-                        {formatMoney(periodPaid, currency)}
-                      </span>
-                    </div>
-                    <div className="flex justify-between border-t border-[var(--color-border)] pt-1.5 font-semibold">
-                      <span>End mein baaki</span>
-                      <span>{formatMoney(periodClosing, currency)}</span>
-                    </div>
+                  <div className="grid grid-cols-[1fr_64px_64px_72px] gap-x-2 gap-y-1.5 text-sm items-baseline">
+                    <span />
+                    <span className="text-[10px] font-semibold text-[var(--color-text-dim)] text-right">GAMING</span>
+                    <span className="text-[10px] font-semibold text-[var(--color-text-dim)] text-right">CANTEEN</span>
+                    <span className="text-[10px] font-semibold text-[var(--color-text-dim)] text-right">KUL</span>
+
+                    <span className="text-[var(--color-text-dim)]">Shuru mein baaki</span>
+                    <span className="text-right">{formatMoney(periodOpeningGaming, currency)}</span>
+                    <span className="text-right">{formatMoney(periodOpeningCanteen, currency)}</span>
+                    <span className="text-right font-medium">{formatMoney(periodOpening, currency)}</span>
+
+                    <span className="text-[var(--color-text-dim)]">+ Credit liya</span>
+                    <span className="text-right text-[var(--color-warning)]">{formatMoney(periodAddedGaming, currency)}</span>
+                    <span className="text-right text-[var(--color-warning)]">{formatMoney(periodAddedCanteen, currency)}</span>
+                    <span className="text-right font-medium text-[var(--color-warning)]">{formatMoney(periodAdded, currency)}</span>
+
+                    <span className="text-[var(--color-text-dim)]">− Chukaya</span>
+                    <span className="text-right text-[var(--color-success)]">{formatMoney(periodPaidGaming, currency)}</span>
+                    <span className="text-right text-[var(--color-success)]">{formatMoney(periodPaidCanteen, currency)}</span>
+                    <span className="text-right font-medium text-[var(--color-success)]">{formatMoney(periodPaid, currency)}</span>
+
+                    <span className="font-semibold border-t border-[var(--color-border)] pt-1.5">End mein baaki</span>
+                    <span className="text-right font-semibold border-t border-[var(--color-border)] pt-1.5">{formatMoney(periodClosingGaming, currency)}</span>
+                    <span className="text-right font-semibold border-t border-[var(--color-border)] pt-1.5">{formatMoney(periodClosingCanteen, currency)}</span>
+                    <span className="text-right font-semibold border-t border-[var(--color-border)] pt-1.5">{formatMoney(periodClosing, currency)}</span>
                   </div>
                 </Card>
               )}
@@ -551,6 +637,18 @@ export function CustomerDetailModal({ customer: initialCustomer, onClose }: { cu
                           <span className="text-[var(--color-warning)] font-medium"> · {entry.orderedNote}</span>
                         )}
                       </p>
+                      {(entry.debit > 0 || entry.credit > 0) && (
+                        <p className="text-[11px] text-[var(--color-text-faint)] mt-0.5">
+                          <span className={entry.debit > 0 ? "text-[var(--color-warning)]" : "text-[var(--color-success)]"}>
+                            {entry.debit > 0
+                              ? businessText(entry.debitGaming, entry.debitCanteen, currency)
+                              : "Chukaya: " + businessText(entry.creditGaming, entry.creditCanteen, currency)}
+                          </span>
+                          {(entry.gamingAfter > 0.005 || entry.canteenAfter > 0.005) && (
+                            <span> · Baaki: {businessText(entry.gamingAfter, entry.canteenAfter, currency)}</span>
+                          )}
+                        </p>
+                      )}
                     </div>
                     <div className="text-right shrink-0">
                       {entry.debit > 0 ? (

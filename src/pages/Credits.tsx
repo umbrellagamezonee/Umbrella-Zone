@@ -5,30 +5,26 @@ import { useCustomersStore } from "../store/useCustomersStore";
 import { useOrdersStore } from "../store/useOrdersStore";
 import { useBillsStore } from "../store/useBillsStore";
 import { useSettingsStore } from "../store/useSettingsStore";
-import { formatMoney, timeAgo, toDateInputValue } from "../lib/format";
+import { formatMoney, toDateInputValue } from "../lib/format";
 import { creditBalanceFor, customerOpenBills, customerPendingOrders, orderTotal } from "../lib/billing";
-import { sendCreditReminder } from "../lib/reminderApi";
+import { customerCreditByBusiness } from "../lib/ledger";
 import { customerLabel, normalizeName } from "../lib/customerName";
 import { CustomerDetailModal, SettleCreditModal } from "./Customers";
 import { HisaabReport } from "../components/HisaabReport";
 import type { Customer } from "../types";
-import { BellRing, Wallet, Search, CalendarDays } from "lucide-react";
+import { Wallet, Search, CalendarDays } from "lucide-react";
 
-// Everyone who owes money and the tools to chase it down — kept separate
-// from the plain Customers directory so day-to-day lookups aren't buried
-// under a wall of due-payment cards. "Owed" here is credit already on the
-// books PLUS any served-but-not-yet-billed canteen orders, so this matches
-// what that customer's own profile shows as their total (not just the
-// narrower credit ledger, which only updates once an order is actually billed).
+// Everyone who owes money. Credit is only ever added when a bill is made (at
+// checkout), so the one thing to do from here is Settle — take a payment
+// against what they owe. "Owed" here is credit already on the books PLUS any
+// served-but-not-yet-billed canteen orders, so this matches what that
+// customer's own profile shows as their total. Each customer's amount is shown
+// split into gaming and canteen, like a proper ledger.
 export function Credits() {
   const customers = useCustomersStore((s) => s.customers);
-  const markReminded = useCustomersStore((s) => s.markReminded);
   const orders = useOrdersStore((s) => s.orders);
   const bills = useBillsStore((s) => s.bills);
   const currency = useSettingsStore((s) => s.currencySymbol);
-  const storeName = useSettingsStore((s) => s.storeName);
-  const [sendingId, setSendingId] = useState<string | null>(null);
-  const [notice, setNotice] = useState<{ id: string; ok: boolean } | null>(null);
   const [settleCustomer, setSettleCustomer] = useState<Customer | null>(null);
   const [detailCustomer, setDetailCustomer] = useState<Customer | null>(null);
   const [search, setSearch] = useState("");
@@ -63,33 +59,18 @@ export function Credits() {
           pendingTotal: pendingTotalFor(c.id),
         }))
         .filter(({ creditBalance, pendingTotal }) => creditBalance > 0 || pendingTotal > 0)
+        .map((row) => ({ ...row, split: customerCreditByBusiness(row.customer, bills, orders) }))
         .sort((a, b) => (b.creditBalance + b.pendingTotal) - (a.creditBalance + a.pendingTotal)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [customers, bills, orders]
   );
   const totalDue = dueCustomers.reduce((sum, { creditBalance, pendingTotal }) => sum + creditBalance + pendingTotal, 0);
+  const totalGaming = dueCustomers.reduce((sum, { split }) => sum + split.gaming, 0);
+  const totalCanteen = dueCustomers.reduce((sum, { split }) => sum + split.canteen, 0);
   const visibleDueCustomers = dueCustomers.filter(
     ({ customer: c }) =>
       c.name.toLowerCase().includes(search.toLowerCase()) || c.phone.includes(search)
   );
-
-  async function handleRemindNow(id: string) {
-    const c = customers.find((x) => x.id === id);
-    if (!c) return;
-    setSendingId(id);
-    setNotice(null);
-    const sent = await sendCreditReminder({
-      customerId: c.id,
-      name: c.name,
-      phone: c.phone,
-      amountDue: creditBalanceFor(bills, c.id, normalizeName(c.name)),
-      storeName,
-      currencySymbol: currency,
-    });
-    if (sent) markReminded(id);
-    setSendingId(null);
-    setNotice({ id, ok: sent });
-  }
 
   return (
     <AppShell title="Credits">
@@ -100,6 +81,19 @@ export function Credits() {
           {formatMoney(totalDue, currency)} total
         </p>
       </div>
+
+      {dueCustomers.length > 0 && (
+        <div className="grid grid-cols-2 gap-3">
+          <Card>
+            <p className="text-xs text-[var(--color-text-dim)]">GAMING KA BAAKI</p>
+            <p className="text-lg font-bold text-[var(--color-warning)] mt-1">{formatMoney(totalGaming, currency)}</p>
+          </Card>
+          <Card>
+            <p className="text-xs text-[var(--color-text-dim)]">CANTEEN KA BAAKI</p>
+            <p className="text-lg font-bold text-[var(--color-warning)] mt-1">{formatMoney(totalCanteen, currency)}</p>
+          </Card>
+        </div>
+      )}
 
       <button
         onClick={() => setShowMonthly(true)}
@@ -133,7 +127,7 @@ export function Credits() {
         </p>
       ) : (
         <div className="space-y-2">
-          {visibleDueCustomers.map(({ customer: c, creditBalance, pendingTotal }) => (
+          {visibleDueCustomers.map(({ customer: c, creditBalance, pendingTotal, split }) => (
             <Card
               key={c.id}
               onClick={() => setDetailCustomer(c)}
@@ -142,13 +136,21 @@ export function Credits() {
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-sm font-medium">{customerLabel(c, customers)}</p>
-                  <p className="text-xs text-[var(--color-text-dim)]">
-                    {c.phone || "No phone"} · {timeAgo(c.lastReminderAt)}
-                  </p>
+                  <p className="text-xs text-[var(--color-text-dim)]">{c.phone || "No phone"}</p>
                 </div>
                 <span className="text-sm font-semibold text-[var(--color-warning)]">
                   {formatMoney(creditBalance + pendingTotal, currency)}
                 </span>
+              </div>
+              <div className="grid grid-cols-2 gap-2 mt-2 text-center">
+                <div className="rounded-lg bg-[var(--color-surface-2)] py-1">
+                  <p className="text-[11px] text-[var(--color-text-dim)]">Gaming</p>
+                  <p className="text-sm font-semibold">{formatMoney(split.gaming, currency)}</p>
+                </div>
+                <div className="rounded-lg bg-[var(--color-surface-2)] py-1">
+                  <p className="text-[11px] text-[var(--color-text-dim)]">Canteen</p>
+                  <p className="text-sm font-semibold">{formatMoney(split.canteen, currency)}</p>
+                </div>
               </div>
               {pendingTotal > 0 && (
                 <p className="text-xs text-[var(--color-text-faint)] mt-1">
@@ -156,56 +158,20 @@ export function Credits() {
                   billed yet
                 </p>
               )}
-              <div className="mt-2 grid grid-cols-2 gap-2">
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleSettleClick(c);
-                  }}
-                  disabled={creditBalance === 0 && pendingTotal === 0}
-                  className="flex items-center justify-center gap-2 rounded-xl bg-[var(--color-success)]/15 text-[var(--color-success)] text-sm font-medium py-2 disabled:opacity-40"
-                >
-                  <Wallet size={14} /> Settle
-                </button>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleRemindNow(c.id);
-                  }}
-                  disabled={sendingId === c.id}
-                  className="flex items-center justify-center gap-2 rounded-xl bg-[var(--color-warning)]/15 text-[var(--color-warning)] text-sm font-medium py-2 disabled:opacity-50"
-                >
-                  {sendingId === c.id ? (
-                    <>Sending…</>
-                  ) : (
-                    <>
-                      <BellRing size={14} /> Remind
-                    </>
-                  )}
-                </button>
-              </div>
-              {notice?.id === c.id && (
-                <p
-                  className={
-                    "text-xs text-center mt-1.5 " +
-                    (notice.ok ? "text-[var(--color-success)]" : "text-[var(--color-text-faint)]")
-                  }
-                >
-                  {notice.ok
-                    ? "Message sent."
-                    : "Not sent — reminder server isn't running/configured (see server/README.md)."}
-                </p>
-              )}
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleSettleClick(c);
+                }}
+                disabled={creditBalance === 0 && pendingTotal === 0}
+                className="mt-2 w-full flex items-center justify-center gap-2 rounded-xl bg-[var(--color-success)]/15 text-[var(--color-success)] text-sm font-medium py-2 disabled:opacity-40"
+              >
+                <Wallet size={14} /> Settle
+              </button>
             </Card>
           ))}
         </div>
       )}
-
-      <p className="text-xs text-[var(--color-text-faint)]">
-        Auto-reminded every 24 hours while the app is open. Real WhatsApp/SMS sending needs the
-        reminder server running with Twilio credentials — see server/README.md. Unpaid bills/orders
-        left untouched for 24 hours land here on their own too.
-      </p>
 
       {settleCustomer && (
         <SettleCreditModal customer={settleCustomer} onClose={() => setSettleCustomer(null)} />

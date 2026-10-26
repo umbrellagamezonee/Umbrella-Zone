@@ -15,6 +15,7 @@ import { useSettingsStore } from "../store/useSettingsStore";
 import { markRestoreInProgress } from "../lib/cloudSync";
 import { formatMoney, formatDateTime, IST_TIME_ZONE } from "../lib/format";
 import {
+  billMoneyByBusiness,
   creditBalanceFor,
   dailyCollectionRows,
   categoryStockProfit,
@@ -1124,6 +1125,8 @@ function ExportExcelModal({ onClose }: { onClose: () => void }) {
         .sort((a, b) => a.createdAt - b.createdAt)
         .map((b) => {
           const customer = customers.find((c) => c.id === b.customerId);
+          const biz = billMoneyByBusiness(b);
+          const r2 = (n: number) => Math.round(n * 100) / 100;
           return {
             Date: new Date(b.createdAt).toLocaleDateString([], { timeZone: IST_TIME_ZONE }),
             "Started At": b.tableId
@@ -1149,6 +1152,12 @@ function ExportExcelModal({ onClose }: { onClose: () => void }) {
             Cash: b.amountCash,
             Account: b.amountUpi,
             "Amount on Credit": b.amountDue,
+            "Gaming Cash": r2(biz.gaming.cash),
+            "Gaming Account": r2(biz.gaming.upi),
+            "Gaming Credit": r2(biz.gaming.credit),
+            "Canteen Cash": r2(biz.canteen.cash),
+            "Canteen Account": r2(biz.canteen.upi),
+            "Canteen Credit": r2(biz.canteen.credit),
           };
         });
       if (billRows.length > 0) {
@@ -1172,6 +1181,42 @@ function ExportExcelModal({ onClose }: { onClose: () => void }) {
           Cash: sum(activeRows, "Cash"),
           Account: sum(activeRows, "Account"),
           "Amount on Credit": sum(activeRows, "Amount on Credit"),
+          "Gaming Cash": sum(activeRows, "Gaming Cash"),
+          "Gaming Account": sum(activeRows, "Gaming Account"),
+          "Gaming Credit": sum(activeRows, "Gaming Credit"),
+          "Canteen Cash": sum(activeRows, "Canteen Cash"),
+          "Canteen Account": sum(activeRows, "Canteen Account"),
+          "Canteen Credit": sum(activeRows, "Canteen Credit"),
+        });
+        // Cash / Account above also holds the money from people paying off old credit
+        // (those rows are not a sale, so they have no Gaming / Canteen figures) —
+        // say so, so the columns can be reconciled.
+        const settled = activeRows.filter((r) => r.Table === "Credit settlement");
+        billRows.push({
+          Date: "Isme purane credit chukane ka paisa (Gaming / Canteen columns mein nahi)",
+          "Started At": "",
+          "Ended At": "",
+          Table: "",
+          Game: "",
+          Customer: "",
+          "Who Played": "",
+          "Who Lost": "",
+          "Table Charge": "",
+          "Canteen Charge": "",
+          Discount: "",
+          Total: "",
+          Status: "",
+          "Payment Method": "",
+          "Amount Paid": sum(settled, "Amount Paid"),
+          Cash: sum(settled, "Cash"),
+          Account: sum(settled, "Account"),
+          "Amount on Credit": "",
+          "Gaming Cash": "",
+          "Gaming Account": "",
+          "Gaming Credit": "",
+          "Canteen Cash": "",
+          "Canteen Account": "",
+          "Canteen Credit": "",
         });
       }
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(billRows), "Bills");

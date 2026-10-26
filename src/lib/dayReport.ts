@@ -10,6 +10,109 @@ import {
 import { isCreditSettlement, settlementPersonName } from "./billLabel";
 import { dateInputValueToIstMidnight, formatDateKey, formatTime, toDateInputValue } from "./format";
 
+// Gaming (the tables) and Canteen (food, drinks, cigarettes, chocolate) are two
+// separate businesses. For each row — a table, or a canteen category — and for
+// each business as a whole:
+//   billed   what was billed that day
+//   cash/upi the Cash / Account that CAME IN that day for it (this is what is in
+//            the galla), of which oldCash/oldUpi was an old credit being paid
+//   issued   credit given that day (udhaar), pending = how much of that is
+//            still unpaid
+export interface BusinessRow {
+  item: string;
+  billed: number;
+  cash: number;
+  upi: number;
+  oldCash: number;
+  oldUpi: number;
+  issued: number;
+  pending: number;
+}
+
+export interface BusinessSum {
+  billed: number;
+  cash: number;
+  upi: number;
+  oldCash: number;
+  oldUpi: number;
+  issued: number;
+  pending: number;
+}
+
+export interface BusinessDay {
+  gaming: BusinessRow[];
+  canteen: BusinessRow[];
+  gamingTotal: BusinessSum;
+  canteenTotal: BusinessSum;
+  // Money that came in but could not be matched to any table or category (an
+  // old credit with no record, or an advance) — still in the galla.
+  other: { cash: number; upi: number };
+}
+
+const r2 = (n: number) => Math.round(n * 100) / 100;
+
+// One day, split into the two businesses. Both the day screen and the month view
+// read this, so their figures can never differ.
+export function businessOfDay(d: CreditHisaabDay): BusinessDay {
+  const rows = new Map<string, BusinessRow>();
+  const key = (kind: string, item: string) => kind + ":" + item;
+  const rowFor = (kind: "table" | "canteen", item: string): BusinessRow => {
+    const k = key(kind, item);
+    let r = rows.get(k);
+    if (!r) {
+      r = { item, billed: 0, cash: 0, upi: 0, oldCash: 0, oldUpi: 0, issued: 0, pending: 0 };
+      rows.set(k, r);
+    }
+    return r;
+  };
+  const order: { kind: "table" | "canteen"; item: string }[] = [];
+  for (const it of d.items) {
+    if (it.kind === "other") continue;
+    const r = rowFor(it.kind, it.item);
+    r.billed += it.billed;
+    r.issued += it.issued;
+    r.pending += it.pending;
+    order.push({ kind: it.kind, item: it.item });
+  }
+  const other = { cash: 0, upi: 0 };
+  for (const x of d.received) {
+    if (x.kind === "other") {
+      other.cash += x.cash;
+      other.upi += x.upi;
+      continue;
+    }
+    if (!rows.has(key(x.kind, x.item))) order.push({ kind: x.kind, item: x.item });
+    const r = rowFor(x.kind, x.item);
+    r.cash += x.cash;
+    r.upi += x.upi;
+    r.oldCash += x.oldCash ?? 0;
+    r.oldUpi += x.oldUpi ?? 0;
+  }
+  const pick = (kind: "table" | "canteen") => order.filter((o) => o.kind === kind).map((o) => rows.get(key(kind, o.item))!);
+  const clean = (r: BusinessRow): BusinessRow => ({
+    item: r.item,
+    billed: r2(r.billed),
+    cash: r2(r.cash),
+    upi: r2(r.upi),
+    oldCash: r2(r.oldCash),
+    oldUpi: r2(r.oldUpi),
+    issued: r2(r.issued),
+    pending: r2(r.pending),
+  });
+  const sum = (list: BusinessRow[]): BusinessSum => ({
+    billed: r2(list.reduce((s, r) => s + r.billed, 0)),
+    cash: r2(list.reduce((s, r) => s + r.cash, 0)),
+    upi: r2(list.reduce((s, r) => s + r.upi, 0)),
+    oldCash: r2(list.reduce((s, r) => s + r.oldCash, 0)),
+    oldUpi: r2(list.reduce((s, r) => s + r.oldUpi, 0)),
+    issued: r2(list.reduce((s, r) => s + r.issued, 0)),
+    pending: r2(list.reduce((s, r) => s + r.pending, 0)),
+  });
+  const gaming = pick("table").map(clean);
+  const canteen = pick("canteen").map(clean);
+  return { gaming, canteen, gamingTotal: sum(gaming), canteenTotal: sum(canteen), other: { cash: r2(other.cash), upi: r2(other.upi) } };
+}
+
 export interface DayReportItem {
   name: string;
   price: number;
@@ -79,6 +182,8 @@ export interface DayReport {
   // drawer.
   receivedRows: { item: string; kind: "table" | "canteen" | "other" | "total"; cash: number; upi: number }[];
   canteen: DayReportCategory[];
+  // The same day split into the two businesses, Cash and Account each on their own.
+  business: BusinessDay;
   // Canteen sale on order lines whose menu item has since been deleted.
   orphanSale: number;
   ordersCount: number;
@@ -301,6 +406,7 @@ export function buildDayReport(input: {
     dailyRows,
     receivedRows,
     canteen,
+    business: businessOfDay(day),
     orphanSale: round(orphanSale),
     ordersCount: dayOrders.length,
   };
@@ -326,82 +432,74 @@ export function dayReportSheets(r: DayReport): SheetSpec[] {
   const spent = r.expenses.reduce((s, e) => s + e.amount, 0);
   const galla = round(g.freshCash + g.freshUpi + g.settledCash + g.settledUpi);
 
+  const biz = r.business;
+  const gt = biz.gamingTotal;
+  const ct = biz.canteenTotal;
   const blank = { Cheez: "", Cash: "", Account: "", Rakam: "" };
   const sheets: SheetSpec[] = [];
 
+  // Gaming and Canteen each on their own: what was billed, Cash and Account that
+  // came in (kept apart), and the credit given.
+  const bizBlock = (title: string, t: typeof gt) => [
+    { ...blank, Cheez: title },
+    { ...blank, Cheez: "Kul bill (us din)", Rakam: t.billed },
+    { Cheez: "Paisa aaya (galla mein)", Cash: t.cash, Account: t.upi, Rakam: round(t.cash + t.upi) },
+    { Cheez: "   isme purane credit ka paisa", Cash: t.oldCash, Account: t.oldUpi, Rakam: round(t.oldCash + t.oldUpi) },
+    { ...blank, Cheez: "Credit diya (udhaar)", Rakam: t.issued },
+    { ...blank },
+  ];
+  const other = biz.other;
   sheets.push({
     name: "Din ka hisaab",
-    widths: [78, 14, 14, 14],
+    widths: [70, 14, 14, 14],
     rows: [
-      { ...blank, Cheez: "1) US DIN KITNA PAISA AAYA - GALLA (Galla Summary jaisa)" },
-      { Cheez: "Din ke naye bills", Cash: g.freshCash, Account: g.freshUpi, Rakam: round(g.freshCash + g.freshUpi) },
-      {
-        Cheez: `Purana credit settle (${g.settledCount} logon ne)`,
-        Cash: g.settledCash,
-        Account: g.settledUpi,
-        Rakam: round(g.settledCash + g.settledUpi),
-      },
+      ...bizBlock("1) GAMING", gt),
+      ...bizBlock("2) CANTEEN", ct),
+      { ...blank, Cheez: "3) KUL GALLA - Gaming + Canteen" },
+      { Cheez: "Gaming", Cash: gt.cash, Account: gt.upi, Rakam: round(gt.cash + gt.upi) },
+      { Cheez: "Canteen", Cash: ct.cash, Account: ct.upi, Rakam: round(ct.cash + ct.upi) },
+      ...(Math.abs(other.cash) + Math.abs(other.upi) > 0.005
+        ? [{ Cheez: "Purana credit / advance (kisi table ya category se match nahi)", Cash: other.cash, Account: other.upi, Rakam: round(other.cash + other.upi) }]
+        : []),
       { Cheez: "TOTAL galla", Cash: round(g.freshCash + g.settledCash), Account: round(g.freshUpi + g.settledUpi), Rakam: galla },
       { ...blank, Cheez: "Kharcha (expenses)", Rakam: -spent },
       { ...blank, Cheez: "Kharcha ke baad bacha", Rakam: round(galla - spent) },
-      { ...blank },
-      { ...blank, Cheez: "2) US DIN KA CREDIT" },
-      { ...blank, Cheez: "Naya credit diya", Rakam: d.issued },
-      { ...blank, Cheez: "Isme se ab tak chuka (Cash + Account + maaf)", Rakam: d.settled },
-      { ...blank, Cheez: "CREDIT BAAKI (diya - chuka)", Rakam: d.pending },
-      { ...blank },
-      { ...blank, Cheez: "3) US DIN KE BILLS KA HISAAB - GALLA SE KAISE MILTA HAI" },
-      { Cheez: "Galla - us din asal mein aaya", Cash: round(d.gallaCash), Account: round(d.gallaUpi), Rakam: round(d.gallaCash + d.gallaUpi) },
-      {
-        Cheez: "- Us din aaya, par dusre din ke credit ka tha (wahan gina gaya)",
-        Cash: -d.movedOutCash,
-        Account: -d.movedOutUpi,
-        Rakam: -round(d.movedOutCash + d.movedOutUpi),
-      },
-      {
-        Cheez: "+ Dusre din aaya, par is din ke credit ka tha",
-        Cash: d.movedInCash,
-        Account: d.movedInUpi,
-        Rakam: round(d.movedInCash + d.movedInUpi),
-      },
-      { Cheez: "= Us din ke bills ka hisaab", Cash: d.cash, Account: d.upi, Rakam: round(d.cash + d.upi) },
     ],
   });
 
-  sheets.push({
-    name: "Paisa aaya (table-wise)",
-    widths: [44, 14, 14, 16],
-    rows: r.receivedRows.map((row) => ({
-      Item:
-        row.kind === "total"
-          ? "TOTAL (= galla)"
-          : row.item === "Credit settlement"
-            ? "Purane credit / advance (kisi se match nahi)"
-            : row.item,
-      "Cash aaya": row.cash,
-      "Account aaya": row.upi,
-      "Cash + Account": round(row.cash + row.upi),
-    })),
+  const bizSheet = (name: string, firstCol: string, rows: typeof biz.gaming, t: typeof gt): SheetSpec => ({
+    name,
+    widths: [30, 12, 14, 14, 22, 14],
+    rows: [
+      ...rows.map((x) => ({
+        [firstCol]: x.item,
+        "Kul bill": x.billed,
+        "Cash aaya": x.cash,
+        "Account aaya": x.upi,
+        "Isme purane credit ka": round(x.oldCash + x.oldUpi),
+        "Credit diya": x.issued,
+      })),
+      {
+        [firstCol]: "TOTAL",
+        "Kul bill": t.billed,
+        "Cash aaya": t.cash,
+        "Account aaya": t.upi,
+        "Isme purane credit ka": round(t.oldCash + t.oldUpi),
+        "Credit diya": t.issued,
+      },
+    ],
   });
+  sheets.push(bizSheet("Gaming (table-wise)", "Table", biz.gaming, gt));
+  sheets.push(bizSheet("Canteen (category-wise)", "Category", biz.canteen, ct));
 
   sheets.push({
-    name: "Table aur Canteen",
-    widths: [44, 12, 12, 12, 16, 13, 15, 14],
-    rows: r.dailyRows.map((row) => ({
-      Item:
-        row.kind === "total"
-          ? "TOTAL"
-          : row.item === "Credit settlement"
-            ? "Purane credit / advance (kisi din se match nahi)"
-            : row.item,
-      "Kul bill": row.kind === "other" ? "" : row.billed,
-      Cash: row.cash,
-      Account: row.upi,
-      "Cash + Account": round(row.cash + row.upi),
-      "Credit diya": row.issued,
-      "Isme se chuka": row.settled,
-      "Credit baaki": row.credit,
-    })),
+    name: "Credit (Gaming-Canteen)",
+    widths: [50, 14, 14, 14],
+    rows: [
+      { Cheez: "Naya credit diya", Gaming: gt.issued, Canteen: ct.issued, Kul: d.issued },
+      { Cheez: "Isme se ab tak chuka (Cash + Account + maaf)", Gaming: round(gt.issued - gt.pending), Canteen: round(ct.issued - ct.pending), Kul: d.settled },
+      { Cheez: "CREDIT BAAKI (diya - chuka)", Gaming: gt.pending, Canteen: ct.pending, Kul: d.pending },
+    ],
   });
 
   const people = d.people.map((p) => ({
@@ -472,5 +570,15 @@ export function dayReportSheets(r: DayReport): SheetSpec[] {
     });
     sheets.push({ name: c.name, widths: [34, 10, 12, 12, 16, 12], rows });
   }
+  sheets.push({
+    name: "Milaan (accountant)",
+    widths: [72, 14, 14],
+    rows: [
+      { Cheez: "Galla - us din asal mein aaya", Cash: round(d.gallaCash), Account: round(d.gallaUpi) },
+      { Cheez: "- Us din aaya, par dusre din ke credit ka tha (wahan gina gaya)", Cash: -d.movedOutCash, Account: -d.movedOutUpi },
+      { Cheez: "+ Dusre din aaya, par is din ke credit ka tha", Cash: d.movedInCash, Account: d.movedInUpi },
+      { Cheez: "= Us din ke bills ka hisaab", Cash: d.cash, Account: d.upi },
+    ],
+  });
   return sheets;
 }

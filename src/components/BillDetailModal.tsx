@@ -5,10 +5,11 @@ import { useCustomersStore } from "../store/useCustomersStore";
 import { useBillsStore } from "../store/useBillsStore";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { formatMoney, formatDateTime, formatTime } from "../lib/format";
-import { billMoney } from "../lib/billing";
+import { billMoney, billParts } from "../lib/billing";
+import { CustomerBillModal } from "./CustomerBill";
 import { billPersonName, billPlace, isCreditSettlement } from "../lib/billLabel";
 import type { Bill } from "../types";
-import { Check, X, Trophy, Frown, Pencil } from "lucide-react";
+import { Check, X, Trophy, Frown, Pencil, Receipt } from "lucide-react";
 
 // Full read-only breakdown of one session/bill as a single numbered table:
 // row 1 is the table charge with its start/end time, then every food/drink
@@ -28,6 +29,7 @@ export function BillDetailModal({ bill: initialBill, onClose }: { bill: Bill; on
   const money = billMoney(bill);
 
   const [pickingLoser, setPickingLoser] = useState(false);
+  const [showSlip, setShowSlip] = useState(false);
   const [confirmName, setConfirmName] = useState<string | null>(null);
   // Only the simple, common case: one recorded loser, not split between
   // several payers — a split bill's shares would need per-share handling
@@ -316,6 +318,48 @@ export function BillDetailModal({ bill: initialBill, onClose }: { bill: Bill; on
                   </span>
                 </div>
               ))
+            ) : bill.status === "paid" && !isCreditSettlement(bill) && bill.tableCharge > 0 && bill.canteenCharge > 0 ? (
+              // gaming and canteen each with their own cash / account / credit
+              <>
+                {(
+                  [
+                    ["Gaming", billParts(bill).gaming],
+                    ["Canteen", billParts(bill).canteen],
+                  ] as const
+                )
+                  .filter(([, p]) => p.total > 0.005)
+                  .map(([label, p]) => (
+                    <div key={label} className="space-y-0.5">
+                      <div className="flex justify-between font-medium">
+                        <span>{label}</span>
+                        <span>{money0(p.total)}</span>
+                      </div>
+                      {p.cash > 0.005 && (
+                        <div className="flex justify-between text-[var(--color-success)] pl-3">
+                          <span>Cash</span>
+                          <span>{money0(p.cash)}</span>
+                        </div>
+                      )}
+                      {p.upi > 0.005 && (
+                        <div className="flex justify-between text-[var(--color-success)] pl-3">
+                          <span>Account</span>
+                          <span>{money0(p.upi)}</span>
+                        </div>
+                      )}
+                      {p.due > 0.005 && (
+                        <div className="flex justify-between text-[var(--color-warning)] pl-3">
+                          <span>Credit</span>
+                          <span>{money0(p.due)}</span>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                {!bill.parts && (
+                  <p className="text-xs text-[var(--color-text-faint)]">
+                    Purana bill — gaming aur canteen ka hissa bill ki rakam ke hisaab se baanta gaya hai.
+                  </p>
+                )}
+              </>
             ) : bill.status === "paid" ? (
               <>
                 {money.cash > 0 && (
@@ -359,6 +403,16 @@ export function BillDetailModal({ bill: initialBill, onClose }: { bill: Bill; on
             )}
           </div>
         </Card>
+
+        {!isCreditSettlement(bill) && bill.status !== "cancelled" && (
+          <button
+            onClick={() => setShowSlip(true)}
+            className="w-full flex items-center justify-center gap-2 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] font-semibold py-2.5 text-sm"
+          >
+            <Receipt size={15} /> Customer Bill
+          </button>
+        )}
+        {showSlip && <CustomerBillModal bill={bill} onClose={() => setShowSlip(false)} />}
       </div>
     </Modal>
   );

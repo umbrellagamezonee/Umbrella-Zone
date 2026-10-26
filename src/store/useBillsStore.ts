@@ -5,6 +5,7 @@ import { setupSync, pushUpsert, pushDelete, pushDeleteAll, keepLocalOnly } from 
 import { useOrdersStore } from "./useOrdersStore";
 import { useCustomersStore } from "./useCustomersStore";
 import { isToday } from "../lib/format";
+import { settleParts, type PartInput } from "../lib/billing";
 
 interface ShareInput {
   label: string;
@@ -40,6 +41,11 @@ interface SettleInput {
   // from bills by matching customerId, that attribution has to happen on
   // the bill itself, not just wherever the caller keeps a separate number.
   customerId?: string;
+  // How each business on the bill was paid. When given, the cash / account /
+  // credit totals above are worked out from it (and amountCash / amountUpi are
+  // ignored) so the bill remembers exactly which part of the money was gaming
+  // and which was canteen.
+  parts?: { gaming: PartInput; canteen: PartInput };
 }
 
 function paymentMethodFor(amountCash: number, amountUpi: number, amountDue: number): PaymentMethod | null {
@@ -369,6 +375,25 @@ export const useBillsStore = create<BillsState>()(
         set((state) => ({
           bills: state.bills.map((b) => {
             if (b.id !== id) return b;
+            if (input.parts) {
+              const parts = settleParts(b, input.parts);
+              const cash = Math.round((parts.gaming.cash + parts.canteen.cash) * 100) / 100;
+              const upi = Math.round((parts.gaming.upi + parts.canteen.upi) * 100) / 100;
+              const due = Math.round((parts.gaming.due + parts.canteen.due) * 100) / 100;
+              updated = {
+                ...b,
+                customerId: input.customerId ?? b.customerId,
+                status: "paid",
+                paymentMethod: paymentMethodFor(cash, upi, due),
+                amountPaid: Math.round((cash + upi) * 100) / 100,
+                amountCash: cash,
+                amountUpi: upi,
+                amountDue: due,
+                parts,
+                paidAt: Date.now(),
+              };
+              return updated;
+            }
             const rawCash = Math.max(0, input.amountCash);
             const rawUpi = Math.max(0, input.amountUpi);
             // Clamp the combined total against what's actually owed, trimming

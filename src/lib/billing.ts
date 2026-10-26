@@ -1,4 +1,4 @@
-import type { Bill, CanteenOrder, Customer, Expense, MenuCategory, MenuItem, PaymentMethod } from "../types";
+import type { Bill, BillParts, CanteenOrder, Customer, Expense, MenuCategory, MenuItem, PartPayment, PaymentMethod } from "../types";
 import { normalizeName } from "./customerName";
 import { isCreditSettlement, settlementPersonName } from "./billLabel";
 import { toDateInputValue, formatDateKey, dateInputValueToIstMidnight } from "./format";
@@ -122,6 +122,132 @@ export function creditBalanceFor(bills: Bill[], customerId: string, nameKey: str
   return Math.round(balance * 100) / 100;
 }
 
+// ---- Gaming and Canteen are two separate businesses on one bill ----
+//
+// Gaming = the table time. Canteen = food, drinks, cigarettes, chocolate.
+// Cash, account and credit are tracked for each of them on its own, so no
+// report ever has to guess how a payment was shared between the two.
+
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
+// What each business billed, after the discount. The discount comes off the
+// table time first and only what is left over comes off the canteen — the same
+// rule the split-bill screen has always used.
+export function businessTotals(bill: Pick<Bill, "tableCharge" | "canteenCharge" | "discount">): { gaming: number; canteen: number } {
+  const gross = bill.tableCharge + bill.canteenCharge;
+  const discount = Math.min(Math.max(0, bill.discount), gross);
+  return {
+    gaming: round2(Math.max(0, bill.tableCharge - discount)),
+    canteen: round2(Math.max(0, bill.canteenCharge - Math.max(0, discount - bill.tableCharge))),
+  };
+}
+
+export interface PartInput {
+  cash: number;
+  upi: number;
+}
+
+// Works out the saved split from what the cashier entered for each business:
+// whatever is not paid in cash or account goes on credit. Too much entered is
+// trimmed (account first, then cash) so a business never takes in more than it
+// billed.
+export function settleParts(
+  bill: Pick<Bill, "tableCharge" | "canteenCharge" | "discount">,
+  input: { gaming: PartInput; canteen: PartInput }
+): BillParts {
+  const totals = businessTotals(bill);
+  const one = (total: number, i: PartInput): PartPayment => {
+    const rawCash = Math.max(0, i.cash);
+    const rawUpi = Math.max(0, i.upi);
+    const overshoot = Math.max(0, rawCash + rawUpi - total);
+    const upi = Math.max(0, rawUpi - overshoot);
+    const cash = Math.max(0, rawCash - Math.max(0, overshoot - rawUpi));
+    return { total, cash: round2(cash), upi: round2(upi), due: round2(total - cash - upi) };
+  };
+  return { gaming: one(totals.gaming, input.gaming), canteen: one(totals.canteen, input.canteen) };
+}
+
+// How a (non-split) bill was paid, business by business. A bill settled at the
+// new checkout carries it exactly. An older bill has only one cash / account /
+// credit figure for the whole bill, so it is divided between the two by their
+// face values — exact for a table-only or a canteen-only bill (most of them),
+// and the same rule every report always used for the rest. Nothing old is
+// rewritten; this is only ever worked out when a report reads the bill.
+export function billParts(bill: Bill): BillParts {
+  if (bill.parts) return bill.parts;
+  const raw = bill.tableCharge + bill.canteenCharge;
+  const totals = businessTotals(bill);
+  const gf = raw > 0 ? bill.tableCharge / raw : 0;
+  const cf = raw > 0 ? bill.canteenCharge / raw : 0;
+  return {
+    gaming: { total: totals.gaming, cash: bill.amountCash * gf, upi: bill.amountUpi * gf, due: bill.amountDue * gf },
+    canteen: { total: totals.canteen, cash: bill.amountCash * cf, upi: bill.amountUpi * cf, due: bill.amountDue * cf },
+  };
+}
+
+// Cash, account and credit of ONE bill, Gaming and Canteen apart — what the Bills
+// sheet of the Excel export lists. A split bill reads each paid share by what it
+// was for; a normal bill reads its saved split (billParts); a credit settlement is
+// not a sale, so it has none.
+export function billMoneyByBusiness(bill: Bill): { gaming: BillMoney; canteen: BillMoney } {
+  const zero = (): BillMoney => ({ cash: 0, upi: 0, credit: 0 });
+  const out = { gaming: zero(), canteen: zero() };
+  if (isCreditSettlement(bill)) return out;
+  if (bill.shares) {
+    const raw = bill.tableCharge + bill.canteenCharge;
+    for (const s of bill.shares) {
+      if (s.status !== "paid" || !s.paymentMethod) continue;
+      const toGaming = s.label === "Table charge" ? 1 : /^share$/i.test(s.label.trim()) && raw > 0 ? bill.tableCharge / raw : 0;
+      addByMethod(out.gaming, s.paymentMethod, s.amount * toGaming);
+      addByMethod(out.canteen, s.paymentMethod, s.amount * (1 - toGaming));
+    }
+    return out;
+  }
+  if (bill.status !== "paid") return out;
+  const p = billParts(bill);
+  out.gaming = { cash: p.gaming.cash, upi: p.gaming.upi, credit: p.gaming.due };
+  out.canteen = { cash: p.canteen.cash, upi: p.canteen.upi, credit: p.canteen.due };
+  return out;
+}
+
+// Credit is for regular customers; a one-time customer pays at once. A regular
+// is someone marked so by hand, or anyone who already has credit on record —
+// so every customer who has ever been given credit stays a regular.
+export function isRegularCustomer(customer: Customer | undefined | null, bills: Bill[]): boolean {
+  if (!customer || customer.isWalkIn) return false;
+  if (customer.isRegular) return true;
+  const nameKey = normalizeName(customer.name);
+  return bills.some((b) => {
+    if (b.status === "cancelled") return false;
+    if (b.shares) return b.shares.some((s) => s.status === "paid" && s.paymentMethod === "credit" && normalizeName(s.payerName) === nameKey);
+    // only credit that was really given — a bill still open has nothing paid or on credit yet
+    return b.status === "paid" && b.customerId === customer.id && b.amountDue > 0 && !isCreditSettlement(b);
+  });
+}
+
+// How much of what ONE person put on credit through this bill was gaming and
+// how much canteen. A split bill's shares say which part each one was for; a
+// normal bill reads its saved split (billParts).
+export function creditByBusiness(bill: Bill, payerNameKey: string): { gaming: number; canteen: number } {
+  const out = { gaming: 0, canteen: 0 };
+  if (bill.shares) {
+    const raw = bill.tableCharge + bill.canteenCharge;
+    for (const s of bill.shares) {
+      if (s.status !== "paid" || s.paymentMethod !== "credit" || normalizeName(s.payerName) !== payerNameKey) continue;
+      if (s.label === "Table charge") out.gaming += s.amount;
+      else if (/^share$/i.test(s.label.trim()) && raw > 0) {
+        // an older generic share covers table and food together
+        out.gaming += (s.amount * bill.tableCharge) / raw;
+        out.canteen += (s.amount * bill.canteenCharge) / raw;
+      } else out.canteen += s.amount;
+    }
+    return out;
+  }
+  if (bill.status !== "paid") return out;
+  const p = billParts(bill);
+  return { gaming: p.gaming.due, canteen: p.canteen.due };
+}
+
 // Splits a bill's collected (cash+upi) total between its table and canteen
 // portions, for the POS/Canteen "today's amount" widgets. A split bill's
 // "Table charge" and "Food" shares (see TableDetailModal's handleStopAndBill)
@@ -140,6 +266,9 @@ export function billCollectedByPart(bill: Bill): { table: number; canteen: numbe
       else canteen += s.amount;
     }
     return { table, canteen };
+  }
+  if (bill.parts && bill.status === "paid") {
+    return { table: bill.parts.gaming.cash + bill.parts.gaming.upi, canteen: bill.parts.canteen.cash + bill.parts.canteen.upi };
   }
   if (bill.total <= 0) return { table: 0, canteen: 0 };
   const paidFraction = billCollected(bill) / bill.total;
@@ -306,7 +435,9 @@ interface DailyTotals {
   billed: number;
   // Cash / account RECEIVED that day by the table or category it was paid
   // for (see addReceived) — adds up to the galla's cash / account that day.
-  received: { item: string; kind: "table" | "canteen" | "other"; cash: number; upi: number }[];
+  // oldCash / oldUpi = the part of that which was an old credit being paid off
+  // (the rest was paid at the time of billing).
+  received: { item: string; kind: "table" | "canteen" | "other"; cash: number; upi: number; oldCash: number; oldUpi: number }[];
 }
 
 // Day-by-day cash/account/credit breakdown, one block per date — what the
@@ -450,6 +581,18 @@ function buildDailyCollection(
     cur.upi += upi;
     day.set(name, cur);
   };
+  // The part of "received" that was an old credit being paid off (as opposed to
+  // paid when the bill was made) — so a report can say which of a business's
+  // money was today's sale and which was old credit coming back.
+  const receivedOld = new Map<string, Map<string, { cash: number; upi: number }>>();
+  const addReceivedOld = (dateKey: string, name: string, cash: number, upi: number) => {
+    if (!receivedOld.has(dateKey)) receivedOld.set(dateKey, new Map());
+    const day = receivedOld.get(dateKey)!;
+    const cur = day.get(name) ?? { cash: 0, upi: 0 };
+    cur.cash += cash;
+    cur.upi += upi;
+    day.set(name, cur);
+  };
   const bucketInfo = new Map<Bucket, { dateKey: string; name: string; kind: Received["kind"] }>();
   const addTo = (b: Bucket, cash: number, upi: number, credit: number, customerName?: string) => {
     b.cash += cash;
@@ -551,7 +694,10 @@ function buildDailyCollection(
         part.bucket.total += (takeCash + takeUpi) * partFrac;
         part.bucket.forgiven += Math.max(0, take - takeCash - takeUpi) * partFrac;
         const info = bucketInfo.get(part.bucket);
-        if (info) addReceived(adv.dateKey, info.name, info.kind, takeCash * partFrac, takeUpi * partFrac);
+        if (info) {
+          addReceived(adv.dateKey, info.name, info.kind, takeCash * partFrac, takeUpi * partFrac);
+          addReceivedOld(adv.dateKey, info.name, takeCash * partFrac, takeUpi * partFrac);
+        }
       }
       addReceived(adv.dateKey, "Credit settlement", "other", -takeCash, -takeUpi);
       adv.bucket.cash -= takeCash;
@@ -606,7 +752,10 @@ function buildDailyCollection(
           part.bucket.total += (takeCash + takeUpi) * partFrac;
           part.bucket.forgiven += Math.max(0, take - takeCash - takeUpi) * partFrac;
           const info = bucketInfo.get(part.bucket);
-          if (info) addReceived(dateKey, info.name, info.kind, takeCash * partFrac, takeUpi * partFrac);
+          if (info) {
+            addReceived(dateKey, info.name, info.kind, takeCash * partFrac, takeUpi * partFrac);
+            addReceivedOld(dateKey, info.name, takeCash * partFrac, takeUpi * partFrac);
+          }
         }
         chunk.remaining -= take;
         left -= take;
@@ -700,20 +849,23 @@ function buildDailyCollection(
     // forgiven so a row's billed total still equals its bills' totals.
     const writtenOff = Math.max(0, bill.total - bill.amountCash - bill.amountUpi - bill.amountDue);
 
+    // each business's own cash / account / credit (exact on a new bill, face-value share on an old one)
+    const parts = billParts(bill);
+
     if (bill.tableId && bill.tableName && bill.tableCharge > 0) {
       const tBucket = bucketFor(dailyTables, dateKey, bill.tableName);
       const frac = bill.tableCharge / rawSum;
-      const credit = bill.amountDue * frac;
-      addTo(tBucket, bill.amountCash * frac, bill.amountUpi * frac, credit, customerName);
+      const credit = parts.gaming.due;
+      addTo(tBucket, parts.gaming.cash, parts.gaming.upi, credit, customerName);
       tBucket.forgiven += writtenOff * frac;
       if (credit > 0.005) chunkParts.push({ bucket: tBucket, amount: credit, customerName });
     }
 
     if (bill.canteenCharge > 0 && bill.canteenItems.length > 0) {
       const canteenFrac = bill.canteenCharge / rawSum;
-      const canteenCash = bill.amountCash * canteenFrac;
-      const canteenUpi = bill.amountUpi * canteenFrac;
-      const canteenCredit = bill.amountDue * canteenFrac;
+      const canteenCash = parts.canteen.cash;
+      const canteenUpi = parts.canteen.upi;
+      const canteenCredit = parts.canteen.due;
       for (const item of bill.canteenItems) {
         const revenue = item.price * item.qty;
         if (revenue <= 0) continue;
@@ -760,7 +912,8 @@ function buildDailyCollection(
       const r = day.get(name);
       if (r && !used.has(name)) {
         used.add(name);
-        out.push({ item: name, kind: r.kind, cash: r.cash, upi: r.upi });
+        const old = receivedOld.get(dateKey)?.get(name);
+        out.push({ item: name, kind: r.kind, cash: r.cash, upi: r.upi, oldCash: old?.cash ?? 0, oldUpi: old?.upi ?? 0 });
       }
     };
     for (const t of uniqueTables) take(t.name);
@@ -954,7 +1107,7 @@ export interface CreditHisaabDay {
   // Sum of that day's bill totals (table + canteen) — see DailyTotals.billed.
   billed: number;
   // Cash / account that came in that day, by table / canteen category.
-  received: { item: string; kind: "table" | "canteen" | "other"; cash: number; upi: number }[];
+  received: { item: string; kind: "table" | "canteen" | "other"; cash: number; upi: number; oldCash: number; oldUpi: number }[];
 }
 
 export interface CreditHisaab {
@@ -1027,7 +1180,7 @@ export function creditHisaab(
       billed: round(x.billed),
     })),
     billed: round(d.billed),
-    received: d.received.map((x) => ({ item: x.item, kind: x.kind, cash: round(x.cash), upi: round(x.upi) })),
+    received: d.received.map((x) => ({ item: x.item, kind: x.kind, cash: round(x.cash), upi: round(x.upi), oldCash: round(x.oldCash), oldUpi: round(x.oldUpi) })),
   }));
   const sum = (f: (d: CreditHisaabDay) => number) => round(out.reduce((s, d) => s + f(d), 0));
   return {

@@ -53,7 +53,8 @@ body {
   body > #root {
     display: none !important;
   }
-  .hisaab-overlay {
+  .hisaab-overlay,
+  .print-slip {
     position: static !important;
     inset: auto !important;
     overflow: visible !important;
@@ -75,7 +76,8 @@ body {
     print-color-adjust: exact;
   }
   .hisaab-overlay section,
-  .hisaab-overlay tr {
+  .hisaab-overlay tr,
+  .print-slip section {
     break-inside: avoid;
   }
 }

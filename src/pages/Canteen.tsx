@@ -13,7 +13,7 @@ import { useTablesStore } from "../store/useTablesStore";
 import { useBillsStore } from "../store/useBillsStore";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { formatMoney, toDateInputValue, formatTime } from "../lib/format";
-import { billCollectedByPart } from "../lib/billing";
+import { billMoneyByBusiness } from "../lib/billing";
 import { findCustomerByName } from "../lib/customerName";
 import type { Bill, CanteenOrder } from "../types";
 import {
@@ -99,7 +99,15 @@ export function Canteen() {
   const dateBills = bills.filter(
     (b) => toDateInputValue(b.createdAt) === selectedDate && b.status !== "cancelled"
   );
-  const dateCanteenRevenue = dateBills.reduce((sum, b) => sum + billCollectedByPart(b).canteen, 0);
+  // Canteen only (a table bill's gaming part is not counted here), Cash and
+  // Account kept apart.
+  const dateCanteen = dateBills.reduce(
+    (t, b) => {
+      const c = billMoneyByBusiness(b).canteen;
+      return { cash: t.cash + c.cash, upi: t.upi + c.upi };
+    },
+    { cash: 0, upi: 0 }
+  );
 
   function orderLabel(order: (typeof orders)[number]) {
     if (order.tableId) {
@@ -137,9 +145,12 @@ export function Canteen() {
           <p className="text-xl font-bold mt-1">{ordersForDate.length}</p>
         </Card>
         <Card>
-          <p className="text-xs text-[var(--color-text-dim)]">COLLECTED</p>
-          <p className="text-xl font-bold text-[var(--color-success)] mt-1">
-            {formatMoney(dateCanteenRevenue, currency)}
+          <p className="text-xs text-[var(--color-text-dim)]">CANTEEN AAYA</p>
+          <p className="text-sm font-bold text-[var(--color-success)] mt-1">
+            Cash {formatMoney(dateCanteen.cash, currency)}
+          </p>
+          <p className="text-sm font-bold text-[var(--color-success)]">
+            Account {formatMoney(dateCanteen.upi, currency)}
           </p>
         </Card>
       </div>

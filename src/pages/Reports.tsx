@@ -41,6 +41,7 @@ import { useCustomersStore } from "../store/useCustomersStore";
 import { orderedTables } from "../store/useTablesStore";
 import { BillDetailModal } from "../components/BillDetailModal";
 import { HisaabReport } from "../components/HisaabReport";
+import { businessOfDay, type BusinessSum } from "../lib/dayReport";
 import type { Bill, Expense } from "../types";
 import {
   Wallet,
@@ -63,7 +64,6 @@ export function Reports() {
   const bills = useBillsStore((s) => s.bills);
   const tables = useTablesStore((s) => s.tables);
   const customers = useCustomersStore((s) => s.customers);
-  const monthBills = useMemo(() => bills.filter((b) => isThisMonth(b.createdAt)), [bills]);
   const expenses = useExpensesStore((s) => s.expenses);
   const addExpense = useExpensesStore((s) => s.addExpense);
   const categories = useExpensesStore((s) => s.categories);
@@ -89,23 +89,41 @@ export function Reports() {
     () => bills.filter((b) => toDateInputValue(b.createdAt) === checkDate),
     [bills, checkDate]
   );
-  const nonCancelledBills = checkDateBills.filter((b) => b.status !== "cancelled");
   const cancelledBills = checkDateBills.filter((b) => b.status === "cancelled");
   const checkDateExpenses = useMemo(
     () => expenses.filter((e) => toDateInputValue(e.createdAt) === checkDate),
     [expenses, checkDate]
   );
 
-  const totals = useMemo(() => {
-    let collected = 0;
-    let billedOnCredit = 0;
-    for (const b of nonCancelledBills) {
-      const m = billMoney(b);
-      collected += m.cash + m.upi;
-      billedOnCredit += m.credit;
+  // Gaming and Canteen each on their own, Cash and Account never added together:
+  // what came into the galla on a day (or in a month), for each business, and the
+  // credit given. One pass over every day, shared by the three boxes below.
+  const menuItemsAll = useMenuStore((s) => s.items);
+  const menuCategoriesAll = useMenuStore((s) => s.categories);
+  const bizDays = useMemo(() => {
+    const live = bills.filter((b) => b.status !== "cancelled");
+    const h = creditHisaab(live, menuItemsAll, menuCategoriesAll, orderedTables(tables), customers);
+    return new Map(h.days.map((d) => [d.dateKey, businessOfDay(d)]));
+  }, [bills, menuItemsAll, menuCategoriesAll, tables, customers]);
+  const sumBiz = (match: (dateKey: string) => boolean) => {
+    const zero = (): BusinessSum => ({ billed: 0, cash: 0, upi: 0, oldCash: 0, oldUpi: 0, issued: 0, pending: 0 });
+    const out = { gaming: zero(), canteen: zero(), other: { cash: 0, upi: 0 } };
+    for (const [k, b] of bizDays) {
+      if (!match(k)) continue;
+      for (const key of Object.keys(out.gaming) as (keyof BusinessSum)[]) {
+        out.gaming[key] += b.gamingTotal[key];
+        out.canteen[key] += b.canteenTotal[key];
+      }
+      out.other.cash += b.other.cash;
+      out.other.upi += b.other.upi;
     }
-    return { totalCollected: collected, collected, billedOnCredit };
-  }, [nonCancelledBills]);
+    return out;
+  };
+  const todayKey = toDateInputValue(Date.now());
+  const monthPrefix = todayKey.slice(0, 7);
+  const bizToday = useMemo(() => sumBiz((k) => k === todayKey), [bizDays, todayKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const bizMonth = useMemo(() => sumBiz((k) => k.startsWith(monthPrefix)), [bizDays, monthPrefix]); // eslint-disable-line react-hooks/exhaustive-deps
+  const bizCheck = useMemo(() => sumBiz((k) => k === checkDate), [bizDays, checkDate]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const collectedToday = useMemo(
     () =>
@@ -114,45 +132,22 @@ export function Reports() {
         .reduce((sum, b) => sum + billCollected(b), 0),
     [bills]
   );
-  // Cash/account collected today already includes money from someone settling
-  // an older debt today — it's real cash in hand regardless of which day the
-  // original charge was billed on. This is just the part of that total that
-  // came from settling old credit, purely so "collected today" doesn't read
-  // as a mystery number bigger than what actually got billed today.
-  const settledTodayCashUpi = useMemo(
+  // The drawer holds only CASH. Account (UPI) money never goes in it, so it is
+  // not added here — it is shown on its own right below.
+  const cashToday = useMemo(
     () =>
       bills
-        .filter((b) => isToday(b.createdAt) && b.status === "paid" && isCreditSettlement(b))
-        .reduce((sum, b) => sum + billCollected(b), 0),
+        .filter((b) => isToday(b.createdAt) && b.status !== "cancelled")
+        .reduce((sum, b) => sum + billMoney(b).cash, 0),
     [bills]
   );
-
-  const collectedThisMonth = useMemo(
-    () =>
-      monthBills
-        .filter((b) => b.status !== "cancelled")
-        .reduce((sum, b) => sum + billCollected(b), 0),
-    [monthBills]
-  );
-  const settledThisMonthCashUpi = useMemo(
-    () =>
-      monthBills
-        .filter((b) => b.status === "paid" && isCreditSettlement(b))
-        .reduce((sum, b) => sum + billCollected(b), 0),
-    [monthBills]
-  );
-
-  const collectedOnCheckDate = useMemo(
-    () => nonCancelledBills.reduce((sum, b) => sum + billCollected(b), 0),
-    [nonCancelledBills]
-  );
-
+  const upiToday = collectedToday - cashToday;
   const cashInDrawer = useMemo(() => {
     const todaysExpenses = expenses
       .filter((e) => isToday(e.createdAt))
       .reduce((sum, e) => sum + e.amount, 0);
-    return collectedToday - todaysExpenses;
-  }, [collectedToday, expenses]);
+    return cashToday - todaysExpenses;
+  }, [cashToday, expenses]);
 
   const running = tables.filter((t) => t.status === "running").length;
   const paused = tables.filter((t) => t.status === "paused").length;
@@ -177,34 +172,12 @@ export function Reports() {
           {formatMoney(cashInDrawer, currency)}
         </p>
         <p className="text-xs text-[var(--color-text-dim)] mt-1">
-          Cash in drawer · today's collection minus expenses
+          Cash in drawer · aaj ka cash minus kharcha (Account ({formatMoney(upiToday, currency)} aaj) drawer mein nahi hota)
         </p>
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
-        <Card>
-          <p className="text-xs text-[var(--color-text-dim)]">COLLECTED TODAY</p>
-          <p className="text-xl font-bold text-[var(--color-success)] mt-1">
-            {formatMoney(collectedToday, currency)}
-          </p>
-          {settledTodayCashUpi > 0 && (
-            <p className="text-[10px] text-[var(--color-text-faint)] mt-1">
-              incl. {formatMoney(settledTodayCashUpi, currency)} old credit settled today
-            </p>
-          )}
-        </Card>
-        <Card>
-          <p className="text-xs text-[var(--color-text-dim)]">THIS MONTH</p>
-          <p className="text-xl font-bold text-[var(--color-success)] mt-1">
-            {formatMoney(collectedThisMonth, currency)}
-          </p>
-          {settledThisMonthCashUpi > 0 && (
-            <p className="text-[10px] text-[var(--color-text-faint)] mt-1">
-              incl. {formatMoney(settledThisMonthCashUpi, currency)} old credit settled
-            </p>
-          )}
-        </Card>
-      </div>
+      <BusinessBox title="AAJ" gaming={bizToday.gaming} canteen={bizToday.canteen} other={bizToday.other} currency={currency} />
+      <BusinessBox title="IS MAHINE" gaming={bizMonth.gaming} canteen={bizMonth.canteen} other={bizMonth.other} currency={currency} />
 
       <Card>
         <div className="flex items-center gap-2 mb-2">
@@ -219,9 +192,6 @@ export function Reports() {
             onChange={(e) => setCheckDate(e.target.value)}
             className="flex-1 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] px-3 py-2 text-sm outline-none"
           />
-          <p className="text-lg font-bold text-[var(--color-success)] whitespace-nowrap">
-            {formatMoney(collectedOnCheckDate, currency)}
-          </p>
         </div>
         {!isCheckingToday && (
           <p className="text-xs text-[var(--color-text-faint)] mt-2">
@@ -229,6 +199,14 @@ export function Reports() {
           </p>
         )}
       </Card>
+
+      <BusinessBox
+        title={isCheckingToday ? "AAJ (is date ka)" : formatDateKey(checkDate, { day: "numeric", month: "short", year: "numeric" }).toUpperCase()}
+        gaming={bizCheck.gaming}
+        canteen={bizCheck.canteen}
+        other={bizCheck.other}
+        currency={currency}
+      />
 
       <div>
         <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-2">
@@ -348,35 +326,6 @@ export function Reports() {
         </Card>
       </div>
 
-      <div>
-        <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-2">
-          TOTAL COLLECTED
-        </p>
-        <p className="text-3xl font-bold text-[var(--color-success)]">
-          {formatMoney(totals.totalCollected, currency)}
-        </p>
-        <p className="text-xs text-[var(--color-text-dim)] mt-1">
-          Bills + credit repayments + advances
-        </p>
-      </div>
-
-      <div className="grid grid-cols-2 gap-3">
-        <Card>
-          <p className="text-xs text-[var(--color-text-dim)]">COLLECTED</p>
-          <p className="text-lg font-bold text-[var(--color-success)] mt-1">
-            {formatMoney(totals.collected, currency)}
-          </p>
-          <p className="text-xs text-[var(--color-text-faint)]">cash / account</p>
-        </Card>
-        <Card>
-          <p className="text-xs text-[var(--color-text-dim)]">BILLED ON CREDIT</p>
-          <p className="text-lg font-bold text-[var(--color-warning)] mt-1">
-            {formatMoney(totals.billedOnCredit, currency)}
-          </p>
-          <p className="text-xs text-[var(--color-text-faint)]">on credit</p>
-        </Card>
-      </div>
-
       <div className="relative">
         <Search
           size={16}
@@ -469,6 +418,67 @@ export function Reports() {
       {showMonthlyReport && <MonthlyReportModal onClose={() => setShowMonthlyReport(false)} />}
       {detailBill && <BillDetailModal bill={detailBill} onClose={() => setDetailBill(null)} />}
     </AppShell>
+  );
+}
+
+// Gaming and Canteen side by side, Cash and Account each in their own column —
+// what came into the galla for each business, and the credit given. Nothing in
+// here is added across Cash and Account, or across the two businesses, except the
+// last row, which says so.
+function BusinessBox({
+  title,
+  gaming,
+  canteen,
+  other,
+  currency,
+}: {
+  title: string;
+  gaming: BusinessSum;
+  canteen: BusinessSum;
+  other: { cash: number; upi: number };
+  currency: string;
+}) {
+  const m = (n: number) => (Math.abs(n) < 0.005 ? "-" : formatMoney(n, currency));
+  const hasOther = Math.abs(other.cash) + Math.abs(other.upi) > 0.005;
+  const row = (label: string, t: { cash: number; upi: number; issued?: number }, bold?: boolean) => (
+    <tr className={"border-t border-[var(--color-border)] " + (bold ? "font-bold" : "")}>
+      <td className="py-1.5 pr-2 text-left">{label}</td>
+      <td className="py-1.5 px-1 text-right text-[var(--color-success)]">{m(t.cash)}</td>
+      <td className="py-1.5 px-1 text-right text-[var(--color-success)]">{m(t.upi)}</td>
+      <td className="py-1.5 pl-1 text-right text-[var(--color-warning)]">{t.issued == null ? "" : m(t.issued)}</td>
+    </tr>
+  );
+  return (
+    <Card>
+      <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-2">{title}</p>
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="text-[11px] text-[var(--color-text-dim)]">
+            <th className="font-semibold text-left" />
+            <th className="font-semibold text-right">Cash</th>
+            <th className="font-semibold text-right">Account</th>
+            <th className="font-semibold text-right">Credit diya</th>
+          </tr>
+        </thead>
+        <tbody>
+          {row("Gaming", gaming)}
+          {row("Canteen", canteen)}
+          {hasOther && row("Purana credit / advance", { cash: other.cash, upi: other.upi })}
+          {row(
+            "Kul",
+            {
+              cash: gaming.cash + canteen.cash + other.cash,
+              upi: gaming.upi + canteen.upi + other.upi,
+              issued: gaming.issued + canteen.issued,
+            },
+            true
+          )}
+        </tbody>
+      </table>
+      <p className="text-[10px] text-[var(--color-text-faint)] mt-1.5">
+        Cash / Account = jo paisa aaya (purane credit ka bhi, us business mein jiska wo credit tha). Credit diya = udhaar.
+      </p>
+    </Card>
   );
 }
 
