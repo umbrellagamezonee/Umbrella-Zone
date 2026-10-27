@@ -34,9 +34,11 @@ interface CheckoutProps {
   // "pay" opens straight on the Cash / Account / Credit choice — that is how it is opened from a
   // customer's page. Otherwise Bill sends the entry to that customer's page instead.
   mode?: "send" | "pay";
+  // Opened by pressing Bill on an order (Canteen): the entry goes straight to the customer's page.
+  autoSend?: boolean;
 }
 
-export function CheckoutModal({ bill, onDone, onCancel, onSettled, onRestart, mode }: CheckoutProps) {
+export function CheckoutModal({ bill, onDone, onCancel, onSettled, onRestart, mode, autoSend }: CheckoutProps) {
   return (
     <Modal title={bill.tableName ?? "Checkout"} onClose={onCancel ?? onDone}>
       <Checkout
@@ -46,6 +48,7 @@ export function CheckoutModal({ bill, onDone, onCancel, onSettled, onRestart, mo
         onSettled={onSettled}
         onRestart={onRestart}
         mode={mode}
+        autoSend={autoSend}
       />
     </Modal>
   );
@@ -61,7 +64,7 @@ function settleOne(total: number, cashInput: string, upiInput: string): PartPaym
   return { total, cash, upi, due: round2(total - cash - upi) };
 }
 
-export function Checkout({ bill, onDone, onCancel, onSettled, onRestart, mode = "send" }: CheckoutProps) {
+export function Checkout({ bill, onDone, onCancel, onSettled, onRestart, mode = "send", autoSend = false }: CheckoutProps) {
   const currency = useSettingsStore((s) => s.currencySymbol);
   const settlePayment = useBillsStore((s) => s.settlePayment);
   const bills = useBillsStore((s) => s.bills);
@@ -78,9 +81,11 @@ export function Checkout({ bill, onDone, onCancel, onSettled, onRestart, mode = 
   const hasGaming = totals.gaming > 0.005;
   const hasCanteen = totals.canteen > 0.005;
 
-  const [step, setStep] = useState<CheckoutStep>(mode === "pay" ? "pay" : "select");
+  const [step, setStep] = useState<CheckoutStep>(
+    mode === "pay" ? "pay" : autoSend ? (isRegistered ? "sent" : "bill") : "select"
+  );
   const [sendName, setSendName] = useState("");
-  const [sentTo, setSentTo] = useState("");
+  const [sentTo, setSentTo] = useState(autoSend && isRegistered ? billCustomer!.name : "");
   // All start at zero rather than pre-filled — nothing is assumed paid until
   // the cashier picks Cash, Account or Credit (or types an amount).
   const [gCash, setGCash] = useState("0");

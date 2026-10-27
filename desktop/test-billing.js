@@ -19,6 +19,10 @@ const { check, sleep, clickText, setNumber, text, waitFor, shot, unlock, go, sta
 
 const uuid = () => require("crypto").randomUUID();
 const today = new Date(Date.now() + 19800000).toISOString().slice(0, 10);
+// today in the words the screens use ("October 27" / "Oct 27") - the date is never assumed
+const todayLong = new Date(today + "T00:00:00Z").toLocaleDateString("en-US", { month: "long", day: "numeric", timeZone: "UTC" });
+const todayShort = new Date(today + "T00:00:00Z").toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+const daysBackTo21Oct = Math.round((Date.parse(today) - Date.parse("2026-10-21")) / 86400000);
 
 const billButton = `[...document.querySelectorAll("button")].some((b) => b.textContent.trim() === "Bill")`;
 async function toBillStep(c, label) {
@@ -93,7 +97,11 @@ let PIN = "0000";
     matchParticipants: ["Split A", "Split B"],
     shares: [share("Table charge", "Split A", 50), share("Table charge", "Split B", 50), share("Food", "Split A", 20), share("Food", "Split B", 20)],
   });
+  const guy2 = { id: uuid(), name: "Canteen Guy", phone: "", email: "", isWalkIn: false, lastReminderAt: null, createdAt: Date.now(), isRegular: true };
+  custDoc.state.customers.push(guy2);
+  const O5 = { id: uuid(), tableId: null, customerId: guy2.id, guestName: null, items: [{ id: uuid(), qty: 2, name: "Samosa", price: 15, menuItemId: parse("cuebill-menu").state.items[1].id }], note: "", status: "pending", createdAt: Date.now() };
   const ordersDoc = parse("cuebill-orders");
+  ordersDoc.state.orders.unshift(O5);
   ordersDoc.state.orders.unshift(O3);
   billsDoc.state.bills.unshift(B4, B3, B2, B1);
   store.apply({ "cuebill-bills": JSON.stringify(billsDoc), "cuebill-customers": JSON.stringify(custDoc), "cuebill-orders": JSON.stringify(ordersDoc) });
@@ -194,8 +202,6 @@ let PIN = "0000";
   await waitFor(c, "document.body.innerText.includes('Cold coffee x1')", "walk-in order on the Canteen page");
   await sleep(500);
   await clickText(c, "Cold coffee x1", { tag: "p" });
-  await waitFor(c, billButton, "session screen for the canteen bill");
-  await clickText(c, "Bill", { exact: true, tag: "button" });
   await waitFor(c, "document.body.innerText.includes('kis customer ke khate mein')", "asks whose page");
   await H.typeInto(c, 'input[placeholder="Customer ka naam"]', "Test Regular");
   await sleep(300);
@@ -249,7 +255,7 @@ let PIN = "0000";
   await waitFor(c, "document.body.innerText.includes('GAMING KA BILL')", "Customers opens on today");
   await sleep(500);
   t = await text(c);
-  check("Customers opens on Aaj with today's date", /Aaj\s*—\s*October 26/.test(t) || /Aaj\s*—\s*Oct(ober)? 26/.test(t), t.slice(0, 300));
+  check("Customers opens on Aaj with today's date", new RegExp("Aaj\\s*—\\s*" + todayLong).test(t), t.slice(0, 300));
   const flat = t.replace(/₹/g, "").replace(/\s+/g, " ");
   check("today: Gaming bill 160, Canteen bill 210, Cash 200, Account 40, Credit liya 130, purana credit chukaya 60",
     /GAMING KA BILL 160/.test(flat) && /CANTEEN KA BILL 210/.test(flat) && /CASH DIYA 200/.test(flat) && /ACCOUNT DIYA 40/.test(flat) && /CREDIT LIYA 130/.test(flat) && /PURANA CREDIT CHUKAYA 60/.test(flat), flat.slice(0, 500));
@@ -264,18 +270,18 @@ let PIN = "0000";
   t = await text(c);
   const flat7 = t.replace(/₹/g, "").replace(/\s+/g, " ");
   check("7 din is a separate view: its own heading and a day-by-day table", /Pichhle 7 din/.test(t) && /Din Gaming Canteen Cash Account Credit liya Chukaya/.test(flat7), flat7.slice(0, 400));
-  check("7 din: today's row of the table is 160 / 210 / 200 / 40 / 130 / 60", /Oct 26 160 210 200 40 130 60/.test(flat7), flat7.slice(0, 700));
+  check("7 din: today's row of the table is 160 / 210 / 200 / 40 / 130 / 60", new RegExp(todayShort + " 160 210 200 40 130 60").test(flat7), flat7.slice(0, 700));
   await shot(c, "4c-customers-7days");
 
   await clickText(c, "Ek din", { exact: true, tag: "button" });
   await sleep(500);
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < daysBackTo21Oct; i++) {
     await c.eval(`document.querySelector('button[aria-label="Pichla din"]').click()`);
     await sleep(150);
   }
   await sleep(700);
   t = await text(c);
-  check("Ek din: stepping back 5 days shows 21 October with the customers of that day", /October 21, 2026/.test(t) && /\d+ CUSTOMERS/.test(t) && !/0 CUSTOMERS/.test(t), t.slice(0, 400));
+  check("Ek din: stepping back to 21 October with the customers of that day", /October 21, 2026/.test(t) && /\d+ CUSTOMERS/.test(t) && !/0 CUSTOMERS/.test(t), t.slice(0, 400));
   await shot(c, "4d-customers-oneday");
 
   await clickText(c, "Sab customers", { exact: true, tag: "button" });
@@ -300,8 +306,8 @@ let PIN = "0000";
   const box = await c.eval(`(() => { const p = [...document.querySelectorAll("p")].find((x) => x.textContent.trim() === "AAJ"); return p ? p.parentElement.innerText : null; })()`);
   // gaming: cash 160 | canteen: cash 40, account 40, credit 130 | total: cash 200, account 40, credit 130
   const nums = (box || "").replace(/₹/g, "").split(/\s+/);
-  check("home: Gaming cash 160 and Canteen cash 100 (40 + 60 old credit) / account 40 / credit 130 for today", /Gaming\s+160/.test((box || "").replace(/₹/g, "")) && /Canteen\s+100\s+40\s+130/.test((box || "").replace(/₹/g, "")), String(box));
-  check("home: total row Cash 260, Account 40, Credit 130", /Kul\s+260\s+40\s+130/.test((box || "").replace(/₹/g, "")), nums.join(" "));
+  check("home: Galla table - Gaming cash 160, Canteen cash 100 (40 + 60 old credit) / account 40; Credit table - Canteen 130", /Gaming\s+160\s+-\s+Canteen\s+100\s+40/.test((box || "").replace(/₹/g, "").replace(/\s+/g, " ")) && /CREDIT[^G]*Gaming\s+-\s+Canteen\s+130/.test((box || "").replace(/₹/g, "").replace(/\s+/g, " ")), String(box));
+  check("home: Galla total Cash 260, Account 40; Credit total 130", /Kul\s+260\s+40/.test((box || "").replace(/₹/g, "")) && /Kul\s+130/.test((box || "").replace(/₹/g, "")), nums.join(" "));
   check("home: Cash in drawer counts only cash (260), account shown separately", /₹260/.test(t) && /Account \(₹40 aaj\)/.test(t), t.slice(0, 300));
   check("home: the old mixed 'TOTAL COLLECTED' box is gone", !/TOTAL COLLECTED/.test(t));
   await shot(c, "6-reports");
@@ -310,30 +316,41 @@ let PIN = "0000";
   await waitFor(c, "!!document.querySelector('.hisaab-overlay')", "Hisaab Report open");
   await sleep(1000);
   t = await text(c);
-  check("day report: GAMING, CANTEEN and Kul galla sections", /1\) GAMING/.test(t) && /2\) CANTEEN/.test(t) && /3\) Kul galla/.test(t) && /4\).*ka credit/.test(t));
+  check("Galla tab: GAMING, CANTEEN and Kul galla - and no credit in it", /1\) GAMING/.test(t) && /2\) CANTEEN/.test(t) && /3\) Kul galla/.test(t) && !/Credit diya/.test(t.slice(0, t.indexOf("Accountant ke liye") > 0 ? t.indexOf("Accountant ke liye") : t.length)), t.slice(0, 900));
   const tiles = await c.eval(`document.querySelector(".hisaab-overlay").innerText`);
   check("day report: Gaming Cash 160, Canteen Account 40", /Cash aaya\s*₹160/.test(tiles) && /Account aaya\s*₹40/.test(tiles), tiles.slice(0, 700));
   check("day report: total galla Cash 260, Account 40", /TOTAL galla\s*260\s*40\s*300/.test(tiles.replace(/₹/g, "")), tiles.replace(/₹/g, "").slice(600, 1500));
   await shot(c, "7-day-report");
   await clickText(c, "Excel", { exact: true, tag: "button" });
   await sleep(3000);
-  const dayX = path.join(H.DL, `Din-Hisaab-${today}.xlsx`);
+  const dayX = path.join(H.DL, `Galla-Din-${today}.xlsx`);
   const XLSX = require(path.join(__dirname, "..", "node_modules", "xlsx"));
-  check("day Excel downloaded", fs.existsSync(dayX));
+  check("Galla Excel downloaded (Galla-Din-...)", fs.existsSync(dayX));
   if (fs.existsSync(dayX)) {
     const wb = XLSX.readFile(dayX);
     const names = wb.SheetNames;
-    check("day Excel sheets: Gaming, Canteen, Credit, Milaan", ["Din ka hisaab", "Gaming (table-wise)", "Canteen (category-wise)", "Credit (Gaming-Canteen)", "Milaan (accountant)"].every((n) => names.includes(n)), names.join(" | "));
+    check("Galla Excel sheets: Din ka hisaab, Gaming, Canteen, Milaan - and no credit sheet", ["Din ka hisaab", "Gaming (table-wise)", "Canteen (category-wise)", "Milaan (accountant)"].every((n) => names.includes(n)) && !names.some((n) => /^Credit|Purana credit/.test(n)), names.join(" | "));
     const rows = XLSX.utils.sheet_to_json(wb.Sheets["Din ka hisaab"]);
     const total = rows.find((r) => r.Cheez === "TOTAL galla");
     check("day Excel: TOTAL galla Cash 260 / Account 40", !!total && total.Cash === 260 && total.Account === 40, JSON.stringify(total));
     const g = XLSX.utils.sheet_to_json(wb.Sheets["Gaming (table-wise)"]);
-    check("day Excel: Gaming TOTAL row cash 160, no credit", g[g.length - 1]["Cash aaya"] === 160 && g[g.length - 1]["Credit diya"] === 0, JSON.stringify(g[g.length - 1]));
+    check("Galla Excel: Gaming TOTAL row cash 160, account 0", g[g.length - 1]["Cash aaya"] === 160 && g[g.length - 1]["Account aaya"] === 0 && g[g.length - 1]["Credit diya"] === undefined, JSON.stringify(g[g.length - 1]));
   }
-  await clickText(c, "Mahine ka hisaab", { exact: true, tag: "button" });
+  // the credit of the day, as its own tab and its own file
+  await clickText(c, "Credit: ek din (udhaar)", { exact: true, tag: "button" });
+  await sleep(1200);
+  t = await text(c);
+  check("Credit tab: today's credit - Gaming 50 / Canteen 150, where it was given, and no Cash / Account galla in it", /ka credit \(udhaar\)/.test(t) && /Credit kahan se diya gaya/.test(t) && /Naya credit diya/.test(t) && !/3\) Kul galla/.test(t), t.slice(0, 600));
+  await clickText(c, "Excel", { exact: true, tag: "button" });
+  await sleep(2500);
+  const creditX = path.join(H.DL, `Credit-Din-${today}.xlsx`);
+  check("Credit Excel downloaded (Credit-Din-...) with only credit sheets", fs.existsSync(creditX) && (() => { const n = XLSX.readFile(creditX).SheetNames; return ["Credit (Gaming-Canteen)", "Credit kahan se", "Credit (us din ka)", "Purana credit settle"].every((x) => n.includes(x)) && !n.includes("Din ka hisaab"); })());
+  await clickText(c, "Galla: ek din (Cash + Account)", { exact: true, tag: "button" });
+  await sleep(600);
+  await clickText(c, "Galla: mahina", { exact: true, tag: "button" });
   await sleep(1500);
   t = await text(c);
-  check("month view: Gaming, Canteen, galla and day-by-day table", /1\) GAMING/.test(t) && /2\) CANTEEN/.test(t) && /Din ke hisaab se/.test(t) && /Gaming Cash/.test(t));
+  check("month view (Galla): Gaming, Canteen, galla and day-by-day table", /1\) GAMING/.test(t) && /2\) CANTEEN/.test(t) && /Din ke hisaab se/.test(t) && /Gaming Cash/.test(t) && !/Gaming Credit/.test(t));
   await shot(c, "8-month-report");
   await clickText(c, "Excel", { exact: true, tag: "button" });
   await sleep(3000);
@@ -345,9 +362,9 @@ let PIN = "0000";
     const days = rows.filter((r) => r.Din !== "TOTAL");
     const tot = rows.find((r) => r.Din === "TOTAL");
     const sum = (k) => Math.round(days.reduce((s, r) => s + (Number(r[k]) || 0), 0) * 100) / 100;
-    check("month Excel: TOTAL row equals the sum of the days (Gaming Cash, Canteen Account, Credit)", tot["Gaming Cash"] === sum("Gaming Cash") && tot["Canteen Account"] === sum("Canteen Account") && tot["Canteen Credit diya"] === sum("Canteen Credit diya"), JSON.stringify(tot));
+    check("month Excel: TOTAL row equals the sum of the days (Gaming Cash, Canteen Cash, Canteen Account) - galla only", tot["Gaming Cash"] === sum("Gaming Cash") && tot["Canteen Cash"] === sum("Canteen Cash") && tot["Canteen Account"] === sum("Canteen Account") && tot["Canteen Credit diya"] === undefined, JSON.stringify(tot));
     const last = days[days.length - 1];
-    check("month Excel: today's row has Gaming Cash 160 and Canteen Credit 130", last["Gaming Cash"] === 160 && last["Canteen Credit diya"] === 130, JSON.stringify(last));
+    check("month Excel: today's row has Gaming Cash 160, Canteen Cash 100, Canteen Account 40", last["Gaming Cash"] === 160 && last["Canteen Cash"] === 100 && last["Canteen Account"] === 40, JSON.stringify(last));
   }
   await clickText(c, "Customer-wise mahina", { exact: true, tag: "button" });
   await sleep(1500);
@@ -405,7 +422,7 @@ let PIN = "0000";
   await go(c, "/reports", PIN);
   const box2 = (await c.eval(`(() => { const p = [...document.querySelectorAll("p")].find((x) => x.textContent.trim() === "AAJ"); return p ? p.parentElement.innerText : null; })()`) || "").replace(/₹/g, "");
   // before: Gaming cash 160 | Canteen cash 100, account 40, credit 130.  Split adds: Gaming cash 50, credit 50 | Canteen cash 20, credit 20
-  check("Reports: today now Gaming cash 210 / credit 50, Canteen cash 120 / account 40 / credit 150, total cash 330 / credit 200", /Gaming\s+210\s+-?\s*50/.test(box2.replace(/\s+-\s+/g, " - ")) && /Canteen\s+120\s+40\s+150/.test(box2) && /Kul\s+330\s+40\s+200/.test(box2), box2);
+  check("Reports: Galla - Gaming cash 210, Canteen cash 120 / account 40, total 330 / 40; Credit - Gaming 50, Canteen 150, total 200", /Gaming\s+210\s+-\s+Canteen\s+120\s+40/.test(box2.replace(/\s+/g, " ")) && /Gaming\s+50\s+Canteen\s+150\s+Kul\s+200/.test(box2.replace(/\s+/g, " ")) && /Kul\s+330\s+40/.test(box2), box2);
 
   // ---------- 7. the other laptop's data ----------
   console.log("\n== 7. Joining another laptop's data ==");
@@ -460,6 +477,29 @@ let PIN = "0000";
   await sleep(500);
   const cardT = await c.eval(`(() => { const p = [...document.querySelectorAll("p")].find((x) => x.textContent.trim() === "Test Regular"); return p ? p.closest("[class*=border]").innerText : null; })()`);
   check("Credits page: Test Regular now owes 70 + 30 = 100", !!cardT && /100/.test(cardT) && /Canteen\s*₹100/.test(cardT), String(cardT));
+
+  // ---------- 7b. canteen: Bill replaces Served ----------
+  console.log("\n== 7b. Canteen: the Bill button ==");
+  await go(c, "/canteen", PIN);
+  await waitFor(c, "document.body.innerText.includes('Samosa x2')", "pending canteen order");
+  await sleep(400);
+  t = await text(c);
+  check("canteen order card has a Bill button and no Served button", !(await c.eval(`[...document.querySelectorAll("button")].some((b) => /Served/.test(b.textContent))`)) && (await c.eval(`[...document.querySelectorAll("button")].some((b) => b.textContent.trim() === "Bill")`)));
+  await clickText(c, "Bill", { exact: true, tag: "button" });
+  await waitFor(c, "document.body.innerText.includes('Customers khate mein chali gayi')", "canteen bill sent to Customers");
+  t = await text(c);
+  check("Bill on a canteen order: straight to Canteen Guy's Customers page, nothing paid yet", /Canteen Guy ke Customers khate mein chali gayi/.test(t) && /Samosa/.test(t) && !/PAYMENT KAISE HUA/.test(t), t.slice(0, 400));
+  await clickText(c, "Done", { exact: true, tag: "button" });
+  const o5 = await c.eval(`(() => { const st = ${stateOf("cuebill-orders")}; const bl = ${stateOf("cuebill-bills")}; const b = bl.bills.find((x) => x.orderId === ${JSON.stringify(O5.id)}); return { order: st.orders.find((o) => o.id === ${JSON.stringify(O5.id)}).status, bill: b && b.status, cust: b && b.customerId }; })()`);
+  check("the order is billed, its bill is open and on Canteen Guy", o5.order === "billed" && o5.bill === "open" && o5.cust === guy2.id, JSON.stringify(o5));
+  await payFromCustomers(c, "Canteen Guy");
+  await clickText(c, "Cash", { exact: true, tag: "button" });
+  btn = await confirmButton(c);
+  await clickText(c, btn.text, { exact: true, tag: "button" });
+  await sleep(800);
+  const o5b = await c.eval(`${stateOf("cuebill-bills")}.bills.find((x) => x.orderId === ${JSON.stringify(O5.id)})`);
+  check("paid from Customers in cash: canteen cash 30, no credit", o5b.status === "paid" && JSON.stringify(o5b.parts.canteen) === JSON.stringify({ total: 30, cash: 30, upi: 0, due: 0 }), JSON.stringify(o5b && o5b.parts));
+  await clickText(c, "Done", { exact: true, tag: "button" });
 
   // ---------- 8. nothing lost after a hard kill ----------
   console.log("\n== 8. After the app is killed ==");

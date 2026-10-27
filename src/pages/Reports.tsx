@@ -440,43 +440,48 @@ function BusinessBox({
 }) {
   const m = (n: number) => (Math.abs(n) < 0.005 ? "-" : formatMoney(n, currency));
   const hasOther = Math.abs(other.cash) + Math.abs(other.upi) > 0.005;
-  const row = (label: string, t: { cash: number; upi: number; issued?: number }, bold?: boolean) => (
+  const galla = (label: string, t: { cash: number; upi: number }, bold?: boolean) => (
     <tr className={"border-t border-[var(--color-border)] " + (bold ? "font-bold" : "")}>
       <td className="py-1.5 pr-2 text-left">{label}</td>
       <td className="py-1.5 px-1 text-right text-[var(--color-success)]">{m(t.cash)}</td>
-      <td className="py-1.5 px-1 text-right text-[var(--color-success)]">{m(t.upi)}</td>
-      <td className="py-1.5 pl-1 text-right text-[var(--color-warning)]">{t.issued == null ? "" : m(t.issued)}</td>
+      <td className="py-1.5 pl-1 text-right text-[var(--color-success)]">{m(t.upi)}</td>
+    </tr>
+  );
+  const credit = (label: string, n: number, bold?: boolean) => (
+    <tr className={"border-t border-[var(--color-border)] " + (bold ? "font-bold" : "")}>
+      <td className="py-1.5 pr-2 text-left">{label}</td>
+      <td className="py-1.5 pl-1 text-right text-[var(--color-warning)]">{m(n)}</td>
     </tr>
   );
   return (
     <Card>
       <p className="text-xs font-semibold tracking-wide text-[var(--color-text-dim)] mb-2">{title}</p>
+      <p className="text-[11px] font-semibold text-[var(--color-text-dim)] mb-1">GALLA — jo payment aayi</p>
       <table className="w-full text-sm">
         <thead>
           <tr className="text-[11px] text-[var(--color-text-dim)]">
             <th className="font-semibold text-left" />
             <th className="font-semibold text-right">Cash</th>
             <th className="font-semibold text-right">Account</th>
-            <th className="font-semibold text-right">Credit diya</th>
           </tr>
         </thead>
         <tbody>
-          {row("Gaming", gaming)}
-          {row("Canteen", canteen)}
-          {hasOther && row("Purana credit / advance", { cash: other.cash, upi: other.upi })}
-          {row(
-            "Kul",
-            {
-              cash: gaming.cash + canteen.cash + other.cash,
-              upi: gaming.upi + canteen.upi + other.upi,
-              issued: gaming.issued + canteen.issued,
-            },
-            true
-          )}
+          {galla("Gaming", gaming)}
+          {galla("Canteen", canteen)}
+          {hasOther && galla("Purana credit / advance", { cash: other.cash, upi: other.upi })}
+          {galla("Kul", { cash: gaming.cash + canteen.cash + other.cash, upi: gaming.upi + canteen.upi + other.upi }, true)}
+        </tbody>
+      </table>
+      <p className="text-[11px] font-semibold text-[var(--color-text-dim)] mt-3 mb-1">CREDIT — udhaar diya</p>
+      <table className="w-full text-sm">
+        <tbody>
+          {credit("Gaming", gaming.issued)}
+          {credit("Canteen", canteen.issued)}
+          {credit("Kul", gaming.issued + canteen.issued, true)}
         </tbody>
       </table>
       <p className="text-[10px] text-[var(--color-text-faint)] mt-1.5">
-        Cash / Account = jo paisa aaya (purane credit ka bhi, us business mein jiska wo credit tha). Credit diya = udhaar.
+        Galla = jo paisa aaya (purane credit ka bhi, us business mein jiska wo credit tha). Credit = jo udhaar gaya — galla mein nahi ginta.
       </p>
     </Card>
   );

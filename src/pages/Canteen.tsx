@@ -21,7 +21,6 @@ import {
   Search,
   Plus,
   Minus,
-  Check,
   Gamepad2,
   UtensilsCrossed,
   Wallet,
@@ -32,7 +31,6 @@ import {
 
 export function Canteen() {
   const orders = useOrdersStore((s) => s.orders);
-  const markServed = useOrdersStore((s) => s.markServed);
   const markBilled = useOrdersStore((s) => s.markBilled);
   const removeOrder = useOrdersStore((s) => s.removeOrder);
   const bills = useBillsStore((s) => s.bills);
@@ -289,18 +287,7 @@ export function Canteen() {
                 <div className="flex items-center justify-between mt-3">
                   <p className="text-sm font-semibold">{formatMoney(total, currency)}</p>
                   <div className="flex items-center gap-2">
-                    {!billed && order.status === "pending" && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          markServed(order.id);
-                        }}
-                        className="flex items-center gap-1.5 rounded-full bg-[var(--color-success)]/15 text-[var(--color-success)] text-sm font-medium px-3 py-1.5"
-                      >
-                        <Check size={14} /> Served
-                      </button>
-                    )}
-                    {!billed && !order.tableId && order.customerId === "walk-in" && (
+                    {!billed && !order.tableId && (
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
@@ -319,7 +306,7 @@ export function Canteen() {
                         }}
                         className="flex items-center gap-1.5 rounded-full bg-[var(--color-primary)] text-white text-sm font-medium px-3 py-1.5"
                       >
-                        <Wallet size={14} /> Settle
+                        <Wallet size={14} /> Bill
                       </button>
                     )}
                     <button
@@ -339,11 +326,6 @@ export function Canteen() {
                     Billed together with the table when the session stops
                   </p>
                 )}
-                {!order.tableId && !billed && order.customerId !== "walk-in" && (
-                  <p className="text-xs text-[var(--color-text-faint)] mt-1">
-                    Pay from {label.name}'s profile on the Customers page
-                  </p>
-                )}
               </Card>
             );
           })}
@@ -352,7 +334,7 @@ export function Canteen() {
 
       {showNew && <NewOrderModal onClose={() => setShowNew(false)} />}
       {editOrder && <OrderEditModal order={editOrder} onClose={() => setEditOrder(null)} />}
-      {checkoutBill && <CheckoutModal bill={checkoutBill} onDone={() => setCheckoutBill(null)} />}
+      {checkoutBill && <CheckoutModal bill={checkoutBill} autoSend onDone={() => setCheckoutBill(null)} />}
       {detailBill && <BillDetailModal bill={detailBill} onClose={() => setDetailBill(null)} />}
       {confirmDeleteOrderId && (
         <AdminPinGate

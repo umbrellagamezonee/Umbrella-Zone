@@ -445,7 +445,6 @@ export function dayReportSheets(r: DayReport): SheetSpec[] {
     { ...blank, Cheez: "Kul bill (us din)", Rakam: t.billed },
     { Cheez: "Paisa aaya (galla mein)", Cash: t.cash, Account: t.upi, Rakam: round(t.cash + t.upi) },
     { Cheez: "   isme purane credit ka paisa", Cash: t.oldCash, Account: t.oldUpi, Rakam: round(t.oldCash + t.oldUpi) },
-    { ...blank, Cheez: "Credit diya (udhaar)", Rakam: t.issued },
     { ...blank },
   ];
   const other = biz.other;
@@ -469,7 +468,7 @@ export function dayReportSheets(r: DayReport): SheetSpec[] {
 
   const bizSheet = (name: string, firstCol: string, rows: typeof biz.gaming, t: typeof gt): SheetSpec => ({
     name,
-    widths: [30, 12, 14, 14, 22, 14],
+    widths: [30, 12, 14, 14, 22],
     rows: [
       ...rows.map((x) => ({
         [firstCol]: x.item,
@@ -477,7 +476,6 @@ export function dayReportSheets(r: DayReport): SheetSpec[] {
         "Cash aaya": x.cash,
         "Account aaya": x.upi,
         "Isme purane credit ka": round(x.oldCash + x.oldUpi),
-        "Credit diya": x.issued,
       })),
       {
         [firstCol]: "TOTAL",
@@ -485,7 +483,6 @@ export function dayReportSheets(r: DayReport): SheetSpec[] {
         "Cash aaya": t.cash,
         "Account aaya": t.upi,
         "Isme purane credit ka": round(t.oldCash + t.oldUpi),
-        "Credit diya": t.issued,
       },
     ],
   });
@@ -501,6 +498,14 @@ export function dayReportSheets(r: DayReport): SheetSpec[] {
       { Cheez: "CREDIT BAAKI (diya - chuka)", Gaming: gt.pending, Canteen: ct.pending, Kul: d.pending },
     ],
   });
+
+  // where the credit of the day was given: each table and canteen category
+  const where = [
+    ...biz.gaming.map((x) => ({ Kahan: "Gaming - " + x.item, "Credit diya": x.issued, "Isme se chuka": round(x.issued - x.pending), "Abhi baaki": x.pending })),
+    ...biz.canteen.map((x) => ({ Kahan: "Canteen - " + x.item, "Credit diya": x.issued, "Isme se chuka": round(x.issued - x.pending), "Abhi baaki": x.pending })),
+  ].filter((x) => Math.abs(x["Credit diya"]) > 0.005 || Math.abs(x["Abhi baaki"]) > 0.005);
+  where.push({ Kahan: "TOTAL", "Credit diya": d.issued, "Isme se chuka": d.settled, "Abhi baaki": d.pending });
+  sheets.push({ name: "Credit kahan se", widths: [34, 14, 16, 14], rows: where });
 
   const people = d.people.map((p) => ({
     Naam: p.name,
@@ -582,3 +587,8 @@ export function dayReportSheets(r: DayReport): SheetSpec[] {
   });
   return sheets;
 }
+
+// The day as TWO separate files: the galla (Cash + Account that came in) and the credit (udhaar).
+const CREDIT_SHEETS = ["Credit (Gaming-Canteen)", "Credit kahan se", "Credit (us din ka)", "Purana credit settle"];
+export const dayGallaSheets = (r: DayReport): SheetSpec[] => dayReportSheets(r).filter((s) => !CREDIT_SHEETS.includes(s.name));
+export const dayCreditSheets = (r: DayReport): SheetSpec[] => dayReportSheets(r).filter((s) => CREDIT_SHEETS.includes(s.name));

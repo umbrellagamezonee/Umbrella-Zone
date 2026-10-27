@@ -9,7 +9,7 @@ import { useTablesStore, orderedTables } from "../store/useTablesStore";
 import { useCustomersStore } from "../store/useCustomersStore";
 import { useSettingsStore } from "../store/useSettingsStore";
 import { creditHisaab, creditHisaabSheetRows, creditPendingReport, creditPendingSheetRows } from "../lib/billing";
-import { buildDayReport, businessOfDay, dayReportSheets, type BusinessSum, type SheetSpec } from "../lib/dayReport";
+import { buildDayReport, businessOfDay, dayCreditSheets, dayGallaSheets, type BusinessSum, type SheetSpec } from "../lib/dayReport";
 import { creditMonthKeys, monthlyCreditByCustomer } from "../lib/ledger";
 import { dateInputValueToIstMidnight, formatDateKey, formatDateTime, formatMoney, formatTime, toDateInputValue } from "../lib/format";
 
@@ -113,7 +113,7 @@ export function HisaabReport({
   onClose,
 }: {
   initialDate: string;
-  initialTab?: "day" | "month" | "credit" | "customer";
+  initialTab?: "day" | "month" | "daycredit" | "credit" | "customer";
   onClose: () => void;
 }) {
   const bills = useBillsStore((s) => s.bills);
@@ -127,7 +127,7 @@ export function HisaabReport({
   const storeName = useSettingsStore((s) => s.storeName);
   const money = (n: number) => formatMoney(n, currency);
 
-  const [tab, setTab] = useState<"day" | "month" | "credit" | "customer">(initialTab);
+  const [tab, setTab] = useState<"day" | "month" | "daycredit" | "credit" | "customer">(initialTab);
   const [monthSel, setMonth] = useState("");
   const [custMonth, setCustMonth] = useState("");
   const [custSearch, setCustSearch] = useState("");
@@ -257,18 +257,19 @@ export function HisaabReport({
         XLSX.utils.book_append_sheet(wb, ws, sheet.name.slice(0, 31));
       };
       if (tab === "day") {
-        dayReportSheets(day).forEach(add);
-        XLSX.writeFile(wb, `Din-Hisaab-${date}.xlsx`);
+        dayGallaSheets(day).forEach(add);
+        XLSX.writeFile(wb, `Galla-Din-${date}.xlsx`);
+      } else if (tab === "daycredit") {
+        dayCreditSheets(day).forEach(add);
+        XLSX.writeFile(wb, `Credit-Din-${date}.xlsx`);
       } else if (tab === "month" && month) {
         const r2 = (n: number) => Math.round(n * 100) / 100;
         const rows: Record<string, string | number>[] = month.days.map((r) => ({
           Din: r.label,
           "Gaming Cash": r2(r.gaming.cash),
           "Gaming Account": r2(r.gaming.upi),
-          "Gaming Credit diya": r2(r.gaming.issued),
           "Canteen Cash": r2(r.canteen.cash),
           "Canteen Account": r2(r.canteen.upi),
-          "Canteen Credit diya": r2(r.canteen.issued),
           "Kul galla (Cash + Account)": r2(r.gallaCash + r.gallaUpi),
           Kharcha: r2(r.spent),
         }));
@@ -276,14 +277,12 @@ export function HisaabReport({
           Din: "TOTAL",
           "Gaming Cash": r2(month.gaming.cash),
           "Gaming Account": r2(month.gaming.upi),
-          "Gaming Credit diya": r2(month.gaming.issued),
           "Canteen Cash": r2(month.canteen.cash),
           "Canteen Account": r2(month.canteen.upi),
-          "Canteen Credit diya": r2(month.canteen.issued),
           "Kul galla (Cash + Account)": r2(month.gallaCash + month.gallaUpi),
           Kharcha: r2(month.spent),
         });
-        add({ name: `Mahina ${monthLabel}`, rows, widths: [16, 13, 15, 17, 13, 15, 18, 22, 11] });
+        add({ name: `Mahina ${monthLabel}`, rows, widths: [16, 13, 15, 13, 15, 22, 11] });
         XLSX.writeFile(wb, `Mahine-Ka-Hisaab-${monthKey}.xlsx`);
       } else if (tab === "customer") {
         const rows = custShown.map((r) => ({
@@ -345,17 +344,16 @@ export function HisaabReport({
           { label: "Kul bill", value: money(t.billed) },
           { label: "Cash aaya", value: money(t.cash), tone: "good" },
           { label: "Account aaya", value: money(t.upi), tone: "good" },
-          { label: "Credit diya (udhaar)", value: money(t.issued), tone: "warn" },
         ]}
       />
       {rows.length === 0 ? (
         <Note>{emptyText}</Note>
       ) : (
         <Table
-          cols={[firstCol, "Kul bill", "Cash aaya", "Account aaya", "Credit diya"]}
+          cols={[firstCol, "Kul bill", "Cash aaya", "Account aaya"]}
           rows={[
-            ...rows.map((r) => ({ cells: [r.item, dash(r.billed), dash(r.cash), dash(r.upi), dash(r.issued)] })),
-            { bold: true, cells: ["TOTAL", fmt(t.billed), fmt(t.cash), fmt(t.upi), fmt(t.issued)] },
+            ...rows.map((r) => ({ cells: [r.item, dash(r.billed), dash(r.cash), dash(r.upi)] })),
+            { bold: true, cells: ["TOTAL", fmt(t.billed), fmt(t.cash), fmt(t.upi)] },
           ]}
         />
       )}
@@ -363,8 +361,7 @@ export function HisaabReport({
         Cash aaya / Account aaya = us din jo paisa is business ke liye gulle mein aaya.
         {t.oldCash + t.oldUpi > 0.005
           ? ` Isme purane credit ka paisa bhi hai: Cash ${money(t.oldCash)}, Account ${money(t.oldUpi)}.`
-          : ""}{" "}
-        Credit diya = jo us din udhaar gaya (abhi baaki: {money(t.pending)}).
+          : ""}
       </Note>
     </Section>
   );
@@ -408,43 +405,6 @@ export function HisaabReport({
           Galla = us din jo paisa gulle mein aaya, chahe wo kisi bhi din ke credit ka ho ({money(g.settledCash + g.settledUpi)} purane credit ka
           hai: Gaming {money(gt.oldCash + gt.oldUpi)}, Canteen {money(ct.oldCash + ct.oldUpi)}). Ye wahi hai jo Galla Summary mein dikhta hai.
         </Note>
-      </Section>
-
-      <Section title={`4) ${dateLabel} ka credit`}>
-        <Table
-          cols={["", "Gaming", "Canteen", "Kul"]}
-          rows={[
-            { cells: ["Naya credit diya", dash(gt.issued), dash(ct.issued), fmt(d.issued)] },
-            { cells: ["Isme se ab tak chuka (Cash + Account + maaf)", dash(gt.issued - gt.pending), dash(ct.issued - ct.pending), fmt(d.settled)] },
-            { bold: true, cells: ["CREDIT BAAKI", fmt(gt.pending), fmt(ct.pending), fmt(d.pending)] },
-          ]}
-        />
-        <Note>Credit diya − chuka = baaki. Jo credit baad mein chuka (cash / account / maaf) wo usi din ke credit mein ginta hai jis din ka wo credit tha.</Note>
-        {d.people.length === 0 ? (
-          <Note>Is din koi naya credit nahi diya gaya.</Note>
-        ) : (
-          <Table
-            cols={["Kisne liya", "Credit liya", "Isme se chuka", "Abhi baaki"]}
-            rows={[
-              ...d.people.map((p) => ({ cells: [p.name, dash(p.issued), dash(p.settled), dash(p.pending)] })),
-              { bold: true, cells: ["TOTAL", fmt(d.issued), fmt(d.settled), fmt(d.pending)] },
-            ]}
-          />
-        )}
-        <p className="text-xs font-semibold pt-2">
-          Is din purana credit kisne chukaya ({day.settlements.length})
-        </p>
-        {day.settlements.length === 0 ? (
-          <Note>Is din kisi ne purana credit settle nahi kiya.</Note>
-        ) : (
-          <Table
-            cols={["Time", "Naam", "Cash", "Account", "Maaf"]}
-            rows={[
-              ...day.settlements.map((s) => ({ cells: [formatTime(s.t), s.name, dash(s.cash), dash(s.upi), dash(s.disc)] })),
-              { bold: true, cells: ["", "TOTAL", fmt(g.settledCash), fmt(g.settledUpi), dash(g.forgiven)] },
-            ]}
-          />
-        )}
       </Section>
 
       <details className="print:hidden rounded-xl border border-[var(--color-border)] px-3 py-2">
@@ -573,6 +533,67 @@ export function HisaabReport({
     </div>
   );
 
+  const dayCreditView = (
+    <div className="space-y-6">
+      <Section title={`${dateLabel} ka credit (udhaar)`}>
+        <Table
+          cols={["", "Gaming", "Canteen", "Kul"]}
+          rows={[
+            { cells: ["Naya credit diya", dash(gt.issued), dash(ct.issued), fmt(d.issued)] },
+            { cells: ["Isme se ab tak chuka (Cash + Account + maaf)", dash(gt.issued - gt.pending), dash(ct.issued - ct.pending), fmt(d.settled)] },
+            { bold: true, cells: ["CREDIT BAAKI", fmt(gt.pending), fmt(ct.pending), fmt(d.pending)] },
+          ]}
+        />
+        <Note>Credit diya − chuka = baaki. Jo credit baad mein chuka (cash / account / maaf) wo usi din ke credit mein ginta hai jis din ka wo credit tha.</Note>
+        {d.people.length === 0 ? (
+          <Note>Is din koi naya credit nahi diya gaya.</Note>
+        ) : (
+          <Table
+            cols={["Kisne liya", "Credit liya", "Isme se chuka", "Abhi baaki"]}
+            rows={[
+              ...d.people.map((p) => ({ cells: [p.name, dash(p.issued), dash(p.settled), dash(p.pending)] })),
+              { bold: true, cells: ["TOTAL", fmt(d.issued), fmt(d.settled), fmt(d.pending)] },
+            ]}
+          />
+        )}
+        <p className="text-xs font-semibold pt-2">
+          Is din purana credit kisne chukaya ({day.settlements.length})
+        </p>
+        {day.settlements.length === 0 ? (
+          <Note>Is din kisi ne purana credit settle nahi kiya.</Note>
+        ) : (
+          <Table
+            cols={["Time", "Naam", "Cash", "Account", "Maaf"]}
+            rows={[
+              ...day.settlements.map((s) => ({ cells: [formatTime(s.t), s.name, dash(s.cash), dash(s.upi), dash(s.disc)] })),
+              { bold: true, cells: ["", "TOTAL", fmt(g.settledCash), fmt(g.settledUpi), dash(g.forgiven)] },
+            ]}
+          />
+        )}
+      </Section>
+
+      <Section title="Credit kahan se diya gaya (Gaming / Canteen)">
+        {biz.gaming.length + biz.canteen.length === 0 ? (
+          <Note>Is din koi bill nahi bana.</Note>
+        ) : (
+          <Table
+            cols={["", "Credit diya", "Isme se chuka", "Abhi baaki"]}
+            rows={[
+              ...biz.gaming
+                .filter((r) => r.issued > 0.005 || r.pending > 0.005)
+                .map((r) => ({ cells: ["Gaming — " + r.item, dash(r.issued), dash(r.issued - r.pending), dash(r.pending)] })),
+              ...biz.canteen
+                .filter((r) => r.issued > 0.005 || r.pending > 0.005)
+                .map((r) => ({ cells: ["Canteen — " + r.item, dash(r.issued), dash(r.issued - r.pending), dash(r.pending)] })),
+              { bold: true, cells: ["TOTAL", fmt(d.issued), fmt(d.settled), fmt(d.pending)] },
+            ]}
+          />
+        )}
+      </Section>
+
+    </div>
+  );
+
   // The same day-wise figures added up month by month (credit given in that
   // month, how much of it has been paid, what's still owed).
   const creditMonths = (() => {
@@ -618,7 +639,6 @@ export function HisaabReport({
             { label: "Kul bill", value: money(month.gaming.billed) },
             { label: "Cash aaya", value: money(month.gaming.cash), tone: "good" },
             { label: "Account aaya", value: money(month.gaming.upi), tone: "good" },
-            { label: "Credit diya (udhaar)", value: money(month.gaming.issued), tone: "warn" },
           ]}
         />
       </Section>
@@ -629,7 +649,6 @@ export function HisaabReport({
             { label: "Kul bill", value: money(month.canteen.billed) },
             { label: "Cash aaya", value: money(month.canteen.cash), tone: "good" },
             { label: "Account aaya", value: money(month.canteen.upi), tone: "good" },
-            { label: "Credit diya (udhaar)", value: money(month.canteen.issued), tone: "warn" },
           ]}
         />
       </Section>
@@ -655,17 +674,15 @@ export function HisaabReport({
 
       <Section title="4) Din ke hisaab se" breakBefore>
         <Table
-          cols={["Din", "Gaming Cash", "Gaming Account", "Gaming Credit", "Canteen Cash", "Canteen Account", "Canteen Credit", "Kul galla", "Kharcha"]}
+          cols={["Din", "Gaming Cash", "Gaming Account", "Canteen Cash", "Canteen Account", "Kul galla", "Kharcha"]}
           rows={[
             ...month.days.map((r) => ({
               cells: [
                 r.label,
                 dash(r.gaming.cash),
                 dash(r.gaming.upi),
-                dash(r.gaming.issued),
                 dash(r.canteen.cash),
                 dash(r.canteen.upi),
-                dash(r.canteen.issued),
                 dash(r.gallaCash + r.gallaUpi),
                 dash(r.spent),
               ],
@@ -676,17 +693,15 @@ export function HisaabReport({
                 "TOTAL",
                 fmt(month.gaming.cash),
                 fmt(month.gaming.upi),
-                fmt(month.gaming.issued),
                 fmt(month.canteen.cash),
                 fmt(month.canteen.upi),
-                fmt(month.canteen.issued),
                 fmt(month.gallaCash + month.gallaUpi),
                 fmt(month.spent),
               ],
             },
           ]}
         />
-        <Note>Credit = us din jo udhaar gaya. Kul galla = Gaming + Canteen (+ purana credit / advance jo kisi se match nahi hua).</Note>
+        <Note>Kul galla = Gaming + Canteen (+ purana credit / advance jo kisi se match nahi hua). Credit (udhaar) ka hisaab alag tab mein hai.</Note>
       </Section>
     </div>
   ) : null;
@@ -949,11 +964,12 @@ export function HisaabReport({
           </div>
         </div>
 
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 print:hidden">
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 print:hidden">
           {(
             [
-              { id: "day", label: "Ek din ka hisaab" },
-              { id: "month", label: "Mahine ka hisaab" },
+              { id: "day", label: "Galla: ek din (Cash + Account)" },
+              { id: "month", label: "Galla: mahina" },
+              { id: "daycredit", label: "Credit: ek din (udhaar)" },
               { id: "credit", label: "Credit baaki (sab din)" },
               { id: "customer", label: "Customer-wise mahina" },
             ] as const
@@ -973,7 +989,7 @@ export function HisaabReport({
           ))}
         </div>
 
-        {tab === "day" && (
+        {(tab === "day" || tab === "daycredit") && (
           <div className="flex items-center justify-center gap-2 print:hidden">
             <button
               onClick={() => shiftDay(-1)}
@@ -1003,8 +1019,10 @@ export function HisaabReport({
         <div className="text-center">
           <p className="text-lg font-bold">
             {tab === "day"
-              ? `${dateLabel} — Din ka hisaab`
-              : tab === "month"
+              ? `${dateLabel} — Galla (Cash + Account)`
+              : tab === "daycredit"
+                ? `${dateLabel} — Credit (udhaar)`
+                : tab === "month"
                 ? `${monthLabel} — Gaming aur Canteen`
                 : tab === "customer"
                 ? `Customer-wise credit — ${custMonthLabel}`
@@ -1015,7 +1033,7 @@ export function HisaabReport({
           </p>
         </div>
 
-        {tab === "day" ? dayView : tab === "month" ? monthView : tab === "customer" ? customerView : creditView}
+        {tab === "day" ? dayView : tab === "daycredit" ? dayCreditView : tab === "month" ? monthView : tab === "customer" ? customerView : creditView}
       </div>
     </div>,
     document.body
